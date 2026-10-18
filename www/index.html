@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>AICP Skill · 控制面板</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f6f9fc;color:#0a2540;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased;font-size:13px}
+
+.topbar{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:#fff;border-bottom:1px solid #e6ebf1;flex-shrink:0;z-index:10}
+.topbar .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px;letter-spacing:-0.01em}
+.topbar .brand .logo{background:linear-gradient(90deg,#635bff,#0a2540);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:700}
+.topbar .brand .sub{color:#8792a2;font-weight:400;font-size:12px}
+.topbar .actions{display:flex;gap:10px;align-items:center}
+.topbar .badge-row img{height:18px;display:inline-block}
+
+.local-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;background:#e6f7f0;color:#0e9f6e;border:1px solid #c8f0e0}
+.local-badge .dot{width:6px;height:6px;border-radius:50%;background:#0e9f6e;box-shadow:0 0 0 2px rgba(14,159,110,0.2)}
+
+.lang-toggle{display:flex;background:#f6f9fc;border:1px solid #e6ebf1;border-radius:7px;padding:2px;gap:2px}
+.lang-toggle button{border:none;background:transparent;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:500;color:#8792a2;cursor:pointer;font-family:inherit;transition:0.15s}
+.lang-toggle button.active{background:#fff;color:#0a2540;box-shadow:0 1px 3px rgba(10,37,64,0.08)}
+
+.layout{flex:1;display:flex;overflow:hidden}
+
+.sidebar{width:180px;background:#fff;border-right:1px solid #e6ebf1;display:flex;flex-direction:column;flex-shrink:0;padding-top:14px;overflow-y:auto}
+.sidebar .nav-group-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#8792a2;padding:7px 20px 5px}
+.sidebar-item{display:flex;align-items:center;gap:9px;padding:7px 20px;margin:2px 10px;border-radius:7px;cursor:pointer;font-size:13px;color:#425466;transition:0.15s;font-weight:500;white-space:nowrap}
+.sidebar-item:hover{background:#f6f9fc;color:#0a2540}
+.sidebar-item.active{background:#635bff10;color:#635bff;font-weight:600}
+.sidebar-item .icon{font-size:15px;width:18px;text-align:center;flex-shrink:0}
+
+.main{flex:1;overflow-y:auto;padding:24px 32px;min-width:0}
+.panel{display:none}
+.panel.active{display:block}
+h2{font-size:18px;font-weight:600;color:#0a2540;margin-bottom:18px;letter-spacing:-0.02em;display:flex;align-items:center;gap:8px}
+
+.card{background:#fff;border:1px solid #e6ebf1;border-radius:10px;padding:18px;margin-bottom:14px;box-shadow:0 1px 3px rgba(10,37,64,0.04)}
+.card-title{font-size:13px;font-weight:600;color:#0a2540;margin-bottom:14px;display:flex;align-items:center;gap:6px;justify-content:space-between}
+.card-title .left{display:flex;align-items:center;gap:6px}
+
+/* 提示条 */
+.notice{display:flex;align-items:flex-start;gap:9px;padding:11px 14px;margin-bottom:14px;border-radius:9px;font-size:12px;line-height:1.5;background:#eef0ff;color:#3b3f8c;border:1px solid #d8dcff}
+.notice .ico{flex-shrink:0;font-size:14px;line-height:1.35}
+.notice strong{font-weight:600}
+
+.app-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.app-card{background:#fff;border:1px solid #e6ebf1;border-radius:10px;padding:14px 15px;cursor:pointer;transition:0.18s;position:relative;box-shadow:0 1px 3px rgba(10,37,64,0.04)}
+.app-card:hover{border-color:#635bff;transform:translateY(-2px);box-shadow:0 6px 18px rgba(99,91,255,0.12)}
+.app-card .app-name{font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;color:#0a2540}
+.app-card .app-desc{font-size:11px;color:#8792a2;line-height:1.45;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.app-card .app-meta{display:flex;gap:5px;flex-wrap:wrap;align-items:center;font-size:10px;color:#8792a2}
+.app-card .app-meta span{background:#f6f9fc;padding:2px 8px;border-radius:5px}
+.app-card .app-actions{position:absolute;top:8px;right:8px;display:none;gap:3px}
+.app-card:hover .app-actions{display:flex}
+
+.btn{padding:6px 13px;border-radius:7px;border:1px solid #e6ebf1;cursor:pointer;font-size:12px;background:#fff;color:#425466;transition:all 0.15s;font-family:inherit;white-space:nowrap;font-weight:500}
+.btn:hover{border-color:#c1c9d2;color:#0a2540;background:#f6f9fc}
+.btn-primary{background:#635bff;color:#fff;border-color:#635bff}
+.btn-primary:hover{background:#5851e8;border-color:#5851e8;color:#fff}
+.btn-success{background:#fff;color:#0e9f6e;border-color:#c8f0e0}
+.btn-success:hover{background:#f0fdf8;border-color:#0e9f6e;color:#0e9f6e}
+.btn-warning{background:#fff;color:#b45309;border-color:#fde8c8}
+.btn-warning:hover{background:#fffbeb;border-color:#b45309;color:#b45309}
+.btn-danger{background:#fff;color:#df1b41;border-color:#fcd5dc}
+.btn-danger:hover{background:#fff5f6;border-color:#df1b41;color:#df1b41}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+input,select,textarea{padding:7px 11px;background:#fff;border:1px solid #e6ebf1;border-radius:7px;font-size:12px;font-family:inherit;outline:none;color:#0a2540;transition:0.15s}
+input:focus,select:focus,textarea:focus{border-color:#635bff;box-shadow:0 0 0 3px rgba(99,91,255,0.12)}
+input::placeholder,textarea::placeholder{color:#a3acb9}
+
+.form-row{display:flex;align-items:center;gap:10px;margin-bottom:11px;flex-wrap:wrap}
+.form-row label{font-size:12px;color:#425466;min-width:100px;flex-shrink:0;font-weight:500}
+.form-row input,.form-row select,.form-row textarea{flex:1;min-width:120px}
+.form-row .short{flex:0 0 120px;min-width:90px}
+
+.tabs{display:flex;gap:2px;margin-bottom:18px;flex-wrap:wrap;border-bottom:1px solid #e6ebf1}
+.tab-btn{padding:8px 15px;border:none;background:transparent;cursor:pointer;font-size:13px;border-radius:0;white-space:nowrap;color:#8792a2;transition:0.15s;font-family:inherit;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab-btn:hover{color:#0a2540}
+.tab-btn.active{color:#635bff;border-bottom-color:#635bff;font-weight:600}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600;letter-spacing:0.02em}
+.badge-env{background:#e6f7f0;color:#0e9f6e}
+.badge-plain{background:#fff7e6;color:#b45309}
+.badge-none{background:#f6f9fc;color:#8792a2}
+.badge-info{background:#eef0ff;color:#635bff}
+.badge-ok{background:#e6f7f0;color:#0e9f6e}
+.badge-err{background:#fff0f3;color:#df1b41}
+
+.provider-group{margin-bottom:12px;background:#fff;border:1px solid #e6ebf1;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(10,37,64,0.04)}
+.provider-header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;cursor:pointer;user-select:none;transition:0.15s}
+.provider-header:hover{background:#f6f9fc}
+.provider-body{padding:0 18px 18px;display:none;border-top:1px solid #e6ebf1}
+.provider-body.open{display:block;padding-top:13px}
+.model-item{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #f0f4f8;font-size:12px}
+.model-item:last-child{border-bottom:none}
+.code{font-family:'SF Mono',Monaco,monospace;font-size:11px;color:#635bff;background:#f6f9fc;padding:2px 7px;border-radius:5px}
+
+.role-badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:10px;margin:2px 3px 2px 0;font-weight:600}
+.role-default{background:#eef0ff;color:#635bff}
+.role-coding{background:#fff7e6;color:#b45309}
+.role-reasoning{background:#fce7f3;color:#be185d}
+.role-image{background:#e6f7f0;color:#0e9f6e}
+
+.mcp-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.mcp-box{background:#fff;border:1px solid #e6ebf1;border-radius:10px;padding:18px;margin-bottom:14px;box-shadow:0 1px 3px rgba(10,37,64,0.04)}
+.mcp-box pre{background:#0a2540;border:1px solid #0a2540;border-radius:7px;padding:13px;font-family:'SF Mono',Monaco,monospace;font-size:11px;color:#7dd3a0;overflow-x:auto;white-space:pre;margin-bottom:12px;line-height:1.55}
+.mcp-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.tool-item{display:flex;justify-content:space-between;align-items:flex-start;padding:11px 0;border-bottom:1px solid #f0f4f8;font-size:12px;gap:10px}
+.tool-item:last-child{border-bottom:none}
+.tool-name{color:#635bff;font-family:'SF Mono',Monaco,monospace;font-weight:600;font-size:11px}
+.tool-desc{font-size:11px;color:#8792a2;margin-top:3px;line-height:1.45}
+
+.test-area{display:flex;flex-direction:column;gap:10px}
+.test-area textarea{min-height:120px;font-family:'SF Mono',Monaco,monospace;font-size:11px;line-height:1.55}
+.test-result{background:#0a2540;border:1px solid #0a2540;border-radius:7px;padding:13px;font-family:'SF Mono',Monaco,monospace;font-size:11px;color:#7dd3a0;max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-all;line-height:1.55}
+
+.empty{text-align:center;padding:36px;color:#a3acb9;font-size:12px}
+.help-text{font-size:11px;color:#8792a2;margin-top:3px;line-height:1.45}
+.error-tag{color:#df1b41;font-size:11px;margin-left:6px}
+
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,37,64,0.4);backdrop-filter:blur(4px);justify-content:center;align-items:center;z-index:1000}
+.modal.show{display:flex}
+.modal-content{background:#fff;border:1px solid #e6ebf1;border-radius:14px;padding:22px;width:500px;max-width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(10,37,64,0.2)}
+.modal-content h3{color:#0a2540;font-size:15px;margin-bottom:16px;font-weight:600}
+
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d5dbe2;border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:#c1c9d2}
+
+@media(max-width:768px){
+    .topbar{padding:0 14px;height:52px}
+    .topbar .brand{font-size:13px}
+    .topbar .brand .sub{display:none}
+    .local-badge{display:none}
+    .sidebar{position:fixed;bottom:0;left:0;right:0;width:100%;height:54px;flex-direction:row;padding:0;border-right:none;border-top:1px solid #e6ebf1;background:#fff;z-index:20;justify-content:space-around;align-items:center;overflow-x:auto;box-shadow:0 -2px 12px rgba(10,37,64,0.06)}
+    .sidebar-item{flex-direction:column;padding:5px 6px;margin:0;font-size:9px;gap:1px;border-radius:7px;flex:1;justify-content:center;align-items:center;min-height:44px}
+    .sidebar-item .icon{font-size:16px;width:auto;margin:0}
+    .sidebar .divider,.sidebar .nav-group-label{display:none}
+    .main{padding:16px 12px 70px}
+    .form-row label{min-width:70px;font-size:11px}
+    .modal-content{width:95%;padding:18px}
+    .mcp-grid{grid-template-columns:1fr}
+    h2{font-size:16px}
+    .app-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+}
+</style>
+</head>
+<body>
+
+<!-- 顶部贯通 -->
+<div class="topbar">
+    <div class="brand">
+        <span class="logo">⚡ AICP Skill</span>
+        <span class="sub" data-i18n="brand.sub">自举、自进化的 AI-Agent 运行时</span>
+    </div>
+    <div class="actions">
+        <span class="local-badge" id="localBadge"><span class="dot"></span><span data-i18n="badge.local">本地版</span></span>
+        <div class="lang-toggle">
+            <button data-lang="zh" class="active">中文</button>
+            <button data-lang="en">EN</button>
+        </div>
+        <div class="badge-row"><img id="backendBadgeImg" src="" alt="" style="display:none;"></div>
+    </div>
+</div>
+
+<div class="layout">
+    <!-- 左侧 -->
+    <aside class="sidebar">
+        <div class="nav-group-label" data-i18n="nav.group">面板</div>
+        <div class="sidebar-item active" data-panel="apps">
+            <span class="icon">📦</span><span class="label" data-i18n="nav.apps">应用</span>
+        </div>
+        <div class="sidebar-item" data-panel="settings">
+            <span class="icon">⚙️</span><span class="label" data-i18n="nav.settings">配置</span>
+        </div>
+        <div class="sidebar-item" data-panel="mcp">
+            <span class="icon">🔌</span><span class="label" data-i18n="nav.mcp">MCP</span>
+        </div>
+    </aside>
+
+    <!-- 主区 -->
+    <main class="main">
+
+        <!-- ============ 应用 ============ -->
+        <div id="apps" class="panel active">
+            <h2><span data-i18n="apps.title">📦 应用列表</span></h2>
+            <div class="app-grid" id="appGrid">
+                <div class="empty" data-i18n="common.loading">加载中...</div>
+            </div>
+        </div>
+
+        <!-- ============ 配置 ============ -->
+        <div id="settings" class="panel">
+            <h2><span data-i18n="settings.title">⚙️ 系统配置</span></h2>
+            <div class="tabs">
+                <div class="tab-btn active" data-stab="engine" data-i18n="tab.engine">🌐 引擎</div>
+                <div class="tab-btn" data-stab="models" data-i18n="tab.models">🤖 模型</div>
+                <div class="tab-btn" data-stab="roles" data-i18n="tab.roles">🎯 角色</div>
+            </div>
+
+            <div id="engineTab" class="tab-content active">
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="engine.server">🌐 服务器</span></div>
+                    <div class="form-row">
+                        <label>host</label><input id="cfgHost" class="short" placeholder="0.0.0.0">
+                        <label>port</label><input id="cfgPort" type="number" class="short" placeholder="9000">
+                    </div>
+                    <div class="form-row"><label>static_dir</label><input id="cfgStaticDir" placeholder="www"></div>
+                    <div class="form-row"><label>data_dir</label><input id="cfgDataDir" placeholder="data"></div>
+                    <div class="form-row"><label>plugins_dir</label><input id="cfgPluginsDir" placeholder="plugins"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="engine.ws">🔌 WebSocket</span></div>
+                    <div class="form-row"><label>external_url</label><input id="cfgWsUrl" placeholder="ws://127.0.0.1:9001/ws"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="engine.upload">📤 上传</span></div>
+                    <div class="form-row"><label>external_url</label><input id="cfgUploadUrl" placeholder="http://127.0.0.1:9002/upload"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="engine.auth">🔐 认证</span></div>
+                    <div class="form-row">
+                        <label>enable_auth</label>
+                        <select id="cfgEnableAuth" class="short">
+                            <option value="false" data-i18n="common.off">关闭</option>
+                            <option value="true" data-i18n="common.on">开启</option>
+                        </select>
+                    </div>
+                    <div class="form-row"><label>tokens</label><textarea id="cfgTokens" rows="4" placeholder="每行一个 token" data-i18n-ph="engine.tokensPh"></textarea></div>
+                    <div class="form-row"><label>studio_token</label><input id="cfgStudioToken" placeholder="web_studio_token"></div>
+                    <div class="form-row"><label>session_id</label><input id="cfgSessionId" placeholder="testtoken"></div>
+                </div>
+                <button class="btn btn-primary" onclick="saveEngineConfig()" data-i18n="engine.save">💾 保存引擎配置</button>
+            </div>
+
+            <div id="modelsTab" class="tab-content">
+                <!-- 新增：模型配置提示 -->
+                <div class="notice">
+                    <span class="ico">💡</span>
+                    <span data-i18n="models.notice">仅当应用需要调用 LLM 时才需配置模型；不使用 LLM 的应用可跳过此项。</span>
+                </div>
+
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="models.global">📋 全局参数</span></div>
+                    <div class="form-row">
+                        <label>max_retries</label><input id="cfgMaxRetries" type="number" class="short" min="1" max="10">
+                        <label>request_timeout</label><input id="cfgReqTimeout" type="number" class="short" min="10" max="600">
+                    </div>
+                    <div class="form-row">
+                        <label>stream_timeout</label><input id="cfgStreamTimeout" type="number" class="short" min="10" max="600">
+                        <label>max_concurrent</label><input id="cfgMaxConcurrent" type="number" class="short" min="1" max="50">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="saveGlobalParams()" data-i18n="models.saveGlobal">保存全局参数</button>
+                </div>
+                <div style="margin-bottom:14px;display:flex;gap:8px">
+                    <button class="btn btn-success" onclick="showAddProviderModal()" data-i18n="models.addProvider">+ 新增 Provider</button>
+                    <button class="btn" onclick="loadModels()" data-i18n="common.refresh">🔄 刷新</button>
+                </div>
+                <div id="modelList"></div>
+            </div>
+
+            <div id="rolesTab" class="tab-content">
+                <div class="card">
+                    <div class="card-title"><span class="left" data-i18n="roles.title">🎯 角色映射</span></div>
+                    <p class="help-text" style="margin-bottom:13px" data-i18n="roles.desc">角色决定不同场景使用哪个模型。</p>
+                    <div class="form-row"><label>default</label><select id="roleDefault"></select><span class="help-text" data-i18n="roles.default">通用任务</span></div>
+                    <div class="form-row"><label>coding</label><select id="roleCoding"></select><span class="help-text" data-i18n="roles.coding">代码生成</span></div>
+                    <div class="form-row"><label>reasoning</label><select id="roleReasoning"></select><span class="help-text" data-i18n="roles.reasoning">复杂推理</span></div>
+                    <div class="form-row"><label>image</label><select id="roleImage"></select><span class="help-text" data-i18n="roles.image">多模态</span></div>
+                    <button class="btn btn-primary" onclick="saveRoles()" data-i18n="roles.save">💾 保存角色配置</button>
+                </div>
+                <div class="card" id="rolesPreview" style="font-family:'SF Mono',Monaco,monospace;font-size:11px;white-space:pre-wrap;max-height:180px;overflow-y:auto;color:#635bff;background:#f6f9fc"></div>
+            </div>
+        </div>
+
+        <!-- ============ MCP ============ -->
+        <div id="mcp" class="panel">
+            <h2><span data-i18n="mcp.title">🔌 MCP 配置</span></h2>
+
+            <div class="mcp-grid">
+                <!-- 左：端点配置 -->
+                <div class="mcp-box">
+                    <div class="card-title"><span class="left" data-i18n="mcp.endpoint">📡 端点配置</span></div>
+                    <pre id="mcpConfigJson">{
+  "mcpServers": {
+    "aicp": {
+      "url": "http://127.0.0.1:9100/mcp",
+      "headers": {
+        "Authorization": "Bearer testtoken"
+      }
+    }
+  }
+}</pre>
+                    <div class="mcp-actions">
+                        <button class="btn btn-primary" onclick="copyMcp()" data-i18n="mcp.copy">📋 复制配置</button>
+                        <button class="btn btn-success" id="testBtn" onclick="testMcp()" data-i18n="mcp.test">⚡ 测试连接</button>
+                        <span id="mcpStatus" style="font-size:11px;color:#8792a2;"></span>
+                    </div>
+                    <p class="help-text" style="margin-top:12px" data-i18n="mcp.hint">
+                        加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。
+                    </p>
+                </div>
+
+                <!-- 右：工具列表 -->
+                <div class="mcp-box">
+                    <div class="card-title"><span class="left" data-i18n="mcp.tools">🛠 工具列表</span></div>
+                    <div class="tool-item">
+                        <div>
+                            <div class="tool-name">call_plugin</div>
+                            <div class="tool-desc" data-i18n="mcp.toolDesc">统一调用入口，通过 receiver / action / params 派发。</div>
+                        </div>
+                        <span class="badge badge-ok" data-i18n="mcp.core">核心</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 测试区 -->
+            <div class="mcp-box">
+                <div class="card-title"><span class="left" data-i18n="mcp.testPlugin">🧪 测试 call_plugin</span></div>
+                <div class="test-area">
+                    <textarea id="testInput">{
+  "receiver": "builtins/tools/code_runner",
+  "params": {
+    "code": "async def execute(envelop, agent):\n    return {\"data\": 1+1}",
+    "packages": []
+  }
+}</textarea>
+                    <div class="mcp-actions">
+                        <button class="btn btn-primary" onclick="runTest()" data-i18n="mcp.run">▶ 运行</button>
+                        <span id="testStatus" style="font-size:11px;color:#8792a2;"></span>
+                    </div>
+                    <div class="test-result" id="testResult" data-i18n="mcp.resultPlaceholder">// 结果会显示在这里</div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+</div>
+
+<!-- Provider Modal -->
+<div id="providerModal" class="modal">
+    <div class="modal-content">
+        <h3 id="providerModalTitle" data-i18n="modal.providerAdd">新增 Provider</h3>
+        <input type="hidden" id="editProviderName">
+        <div class="form-row"><label data-i18n="modal.name">名称</label><input id="providerNameInput" placeholder="如: openai" data-i18n-ph="modal.namePh"></div>
+        <div class="form-row"><label>base_url</label><input id="providerBaseUrl" placeholder="https://api.openai.com/v1"></div>
+        <div class="form-row"><label>api_key</label><input id="providerApiKey" placeholder="sk-... 或 ${ENV_VAR} 或 none"></div>
+        <p class="help-text" style="margin-top:8px" data-i18n="modal.keyHint">支持：明文密钥(sk-xxx)、环境变量(${VAR})、无密钥(none)</p>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+            <button class="btn" onclick="closeProviderModal()" data-i18n="common.cancel">取消</button>
+            <button class="btn btn-primary" onclick="saveProvider()" data-i18n="common.save">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- Model Edit Modal -->
+<div id="modelModal" class="modal">
+    <div class="modal-content">
+        <h3 id="modelModalTitle" data-i18n="modal.modelEdit">编辑模型</h3>
+        <input type="hidden" id="editModelPn"><input type="hidden" id="editModelOldId">
+        <div class="form-row"><label data-i18n="modal.modelId">模型 ID</label><input id="editModelId" placeholder="gpt-4"></div>
+        <div class="form-row"><label>max_tokens</label><input id="editModelTokens" type="number" value="4096"></div>
+        <div class="form-row"><label>temperature</label><input id="editModelTemp" type="number" step="0.1" value="0.7"></div>
+        <div class="form-row"><label>role</label>
+            <select id="editModelRole">
+                <option value="" data-i18n="modal.roleNone">— 不绑定角色 —</option>
+                <option value="default">default</option>
+                <option value="coding">coding</option>
+                <option value="reasoning">reasoning</option>
+                <option value="image">image</option>
+            </select>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+            <button class="btn" onclick="closeModelModal()" data-i18n="common.cancel">取消</button>
+            <button class="btn btn-primary" onclick="saveModel()" data-i18n="common.save">保存</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const API_SETTINGS = '/api/builtins/control/_settings';
+let _providers = {}, _roles = {}, _rawConfig = {}, _allModelIds = [];
+let _lang = localStorage.getItem('aicp_lang') || 'zh';
+
+/* ============ i18n ============ */
+const I18N = {
+  zh: {
+    'brand.sub':'自举、自进化的 AI-Agent 运行时',
+    'badge.local':'本地版',
+    'nav.group':'面板','nav.apps':'应用','nav.settings':'配置','nav.mcp':'MCP',
+    'apps.title':'📦 应用列表',
+    'common.loading':'加载中...','common.refresh':'🔄 刷新','common.cancel':'取消','common.save':'保存',
+    'common.on':'开启','common.off':'关闭','common.fail':'加载失败','common.empty':'暂无应用，让 AI 造一个吧',
+    'common.edit':'编辑',
+    'settings.title':'⚙️ 系统配置',
+    'tab.engine':'🌐 引擎','tab.models':'🤖 模型','tab.roles':'🎯 角色',
+    'engine.server':'🌐 服务器','engine.ws':'🔌 WebSocket','engine.upload':'📤 上传','engine.auth':'🔐 认证',
+    'engine.save':'💾 保存引擎配置','engine.tokensPh':'每行一个 token',
+    'models.notice':'仅当应用需要调用 LLM 时才需配置模型；不使用 LLM 的应用可跳过此项。',
+    'models.global':'📋 全局参数','models.saveGlobal':'保存全局参数','models.addProvider':'+ 新增 Provider','models.empty':'暂无 Provider',
+    'roles.title':'🎯 角色映射','roles.desc':'角色决定不同场景使用哪个模型。',
+    'roles.default':'通用任务','roles.coding':'代码生成','roles.reasoning':'复杂推理','roles.image':'多模态','roles.save':'💾 保存角色配置',
+    'mcp.title':'🔌 MCP 配置','mcp.endpoint':'📡 端点配置','mcp.tools':'🛠 工具列表','mcp.copy':'📋 复制配置','mcp.test':'⚡ 测试连接',
+    'mcp.hint':'加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。',
+    'mcp.toolDesc':'统一调用入口，通过 receiver / action / params 派发。',
+    'mcp.core':'核心','mcp.testPlugin':'🧪 测试 call_plugin','mcp.run':'▶ 运行','mcp.resultPlaceholder':'// 结果会显示在这里',
+    'modal.providerAdd':'新增 Provider','modal.providerEdit':'编辑 Provider','modal.modelEdit':'编辑模型',
+    'modal.name':'名称','modal.namePh':'如: openai','modal.modelId':'模型 ID','modal.roleNone':'— 不绑定角色 —',
+    'modal.keyHint':'支持：明文密钥(sk-xxx)、环境变量(${VAR})、无密钥(none)',
+    'msg.pageCount':'个页面','msg.pages':'页','msg.delete':'删除','msg.deleteAppConfirm':'确定删除应用','msg.deleteFail':'删除失败: ',
+    'msg.savedEngine':'✅ 引擎配置已保存，重启后生效','msg.savedGlobal':'✅ 全局参数已保存','msg.savedRoles':'✅ 角色配置已保存',
+    'msg.savedProvider':'✅ Provider 已保存','msg.deletedProvider':'Provider 已删除','msg.addedModel':'模型已添加','msg.deletedModel':'模型已删除',
+    'msg.saveFail':'保存失败: ','msg.addFail':'添加失败: ','msg.enterModelId':'请输入模型 ID','msg.enterName':'请输入名称',
+    'msg.providerNotExist':'Provider 不存在','msg.modelNotExist':'模型不存在','msg.exists':'已存在',
+    'msg.testing':'测试中...','msg.connOk':'✓ 连接正常','msg.connAbnormal':'✗ 返回异常','msg.connFail':'✗ 连接失败',
+    'msg.running':'运行中...','msg.requesting':'// 请求中...','msg.done':'✓ 完成','msg.failed':'✗ 失败',
+    'msg.jsonParseFail':'✗ JSON 解析失败: ','msg.reqFail':'✗ 请求失败: ','msg.emptyResp':'// 空响应',
+    'msg.copied':'✓ 已复制','msg.deleteModelConfirm':'删除模型？相关角色引用也会被清理。',
+    'msg.deleteProviderConfirm':'确定要删除 Provider 吗？'
+  },
+  en: {
+    'brand.sub':'Self-bootstrapping, self-evolving AI-Agent runtime',
+    'badge.local':'Local',
+    'nav.group':'Panels','nav.apps':'Apps','nav.settings':'Settings','nav.mcp':'MCP',
+    'apps.title':'📦 Applications',
+    'common.loading':'Loading...','common.refresh':'🔄 Refresh','common.cancel':'Cancel','common.save':'Save',
+    'common.on':'On','common.off':'Off','common.fail':'Failed to load','common.empty':'No apps yet — let AI build one',
+    'common.edit':'Edit',
+    'settings.title':'⚙️ System Settings',
+    'tab.engine':'🌐 Engine','tab.models':'🤖 Models','tab.roles':'🎯 Roles',
+    'engine.server':'🌐 Server','engine.ws':'🔌 WebSocket','engine.upload':'📤 Upload','engine.auth':'🔐 Auth',
+    'engine.save':'💾 Save Engine Config','engine.tokensPh':'One token per line',
+    'models.notice':'Models are only required when an app needs to call an LLM. Apps without LLM usage can skip this.',
+    'models.global':'📋 Global Parameters','models.saveGlobal':'Save Global Parameters','models.addProvider':'+ Add Provider','models.empty':'No providers yet',
+    'roles.title':'🎯 Role Mapping','roles.desc':'Roles determine which model is used for each scenario.',
+    'roles.default':'General','roles.coding':'Code generation','roles.reasoning':'Complex reasoning','roles.image':'Multimodal','roles.save':'💾 Save Roles',
+    'mcp.title':'🔌 MCP Configuration','mcp.endpoint':'📡 Endpoint','mcp.tools':'🛠 Tools','mcp.copy':'📋 Copy Config','mcp.test':'⚡ Test Connection',
+    'mcp.hint':'Add to the MCP config of Cline / Cursor / Claude Desktop.',
+    'mcp.toolDesc':'Unified call entry dispatched via receiver / action / params.',
+    'mcp.core':'Core','mcp.testPlugin':'🧪 Test call_plugin','mcp.run':'▶ Run','mcp.resultPlaceholder':'// Results will appear here',
+    'modal.providerAdd':'Add Provider','modal.providerEdit':'Edit Provider','modal.modelEdit':'Edit Model',
+    'modal.name':'Name','modal.namePh':'e.g. openai','modal.modelId':'Model ID','modal.roleNone':'— No role bound —',
+    'modal.keyHint':'Supported: plain key (sk-xxx), env var (${VAR}), or none',
+    'msg.pageCount':'pages','msg.pages':'pages','msg.delete':'Delete','msg.deleteAppConfirm':'Delete app','msg.deleteFail':'Delete failed: ',
+    'msg.savedEngine':'✅ Engine config saved, restart to apply','msg.savedGlobal':'✅ Global parameters saved','msg.savedRoles':'✅ Roles saved',
+    'msg.savedProvider':'✅ Provider saved','msg.deletedProvider':'Provider deleted','msg.addedModel':'Model added','msg.deletedModel':'Model deleted',
+    'msg.saveFail':'Save failed: ','msg.addFail':'Add failed: ','msg.enterModelId':'Please enter model ID','msg.enterName':'Please enter name',
+    'msg.providerNotExist':'Provider does not exist','msg.modelNotExist':'Model does not exist','msg.exists':'already exists',
+    'msg.testing':'Testing...','msg.connOk':'✓ Connected','msg.connAbnormal':'✗ Abnormal response','msg.connFail':'✗ Connection failed',
+    'msg.running':'Running...','msg.requesting':'// Requesting...','msg.done':'✓ Done','msg.failed':'✗ Failed',
+    'msg.jsonParseFail':'✗ JSON parse failed: ','msg.reqFail':'✗ Request failed: ','msg.emptyResp':'// Empty response',
+    'msg.copied':'✓ Copied','msg.deleteModelConfirm':'Delete this model? Related role references will also be cleaned up.',
+    'msg.deleteProviderConfirm':'Are you sure you want to delete this provider?'
+  }
+};
+
+function t(key){ return I18N[_lang][key] || key; }
+
+function applyLang(lang){
+  _lang = lang;
+  localStorage.setItem('aicp_lang', lang);
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    if (I18N[lang][key] !== undefined) el.textContent = I18N[lang][key];
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    const key = el.dataset.i18nPh;
+    if (I18N[lang][key] !== undefined) el.placeholder = I18N[lang][key];
+  });
+  document.querySelectorAll('.lang-toggle button').forEach(b => {
+    b.classList.toggle('active', b.dataset.lang === lang);
+  });
+  loadApps();
+  loadModels();
+}
+
+document.querySelector('.lang-toggle').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-lang]');
+  if (!btn) return;
+  applyLang(btn.dataset.lang);
+});
+
+/* ============ 导航 ============ */
+document.querySelector('.sidebar').addEventListener('click', function(e) {
+    const item = e.target.closest('.sidebar-item');
+    if (!item || !item.dataset.panel) return;
+    switchPanel(item.dataset.panel);
+});
+
+function switchPanel(name) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+    const panel = document.getElementById(name);
+    if (panel) panel.classList.add('active');
+    const item = document.querySelector(`.sidebar-item[data-panel="${name}"]`);
+    if (item) item.classList.add('active');
+    if (name === 'apps') loadApps();
+    if (name === 'settings') { loadEngineConfig(); loadModels(); }
+}
+
+document.querySelectorAll('#settings .tabs').forEach(function(tabsEl) {
+    tabsEl.addEventListener('click', function(e) {
+        const btn = e.target.closest('.tab-btn');
+        if (!btn) return;
+        switchSettingsTab(btn.dataset.stab);
+    });
+});
+
+function switchSettingsTab(name) {
+    document.querySelectorAll('#settings .tab-btn').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#settings .tab-content').forEach(c => c.classList.remove('active'));
+    const btn = document.querySelector(`#settings .tab-btn[data-stab="${name}"]`);
+    if (btn) btn.classList.add('active');
+    const tab = document.getElementById(name + 'Tab');
+    if (tab) tab.classList.add('active');
+    if (name === 'models') loadModels();
+    if (name === 'engine') loadEngineConfig();
+    if (name === 'roles') loadRoles();
+}
+
+/* ============ 应用 ============ */
+async function loadApps(){
+    try {
+        const pagesResp = await fetch('/api/pages');
+        const pagesData = await pagesResp.json();
+        const allPages = (pagesData.pages || []).filter(p => p.path !== 'index.html' && p.path !== 'login.html' && p.path.includes('/'));
+        const appPageMap = {};
+        allPages.forEach(p => {
+            const appName = p.path.split('/')[0];
+            if (!appPageMap[appName]) appPageMap[appName] = [];
+            appPageMap[appName].push(p);
+        });
+        const apps = [];
+        for (const name in appPageMap) {
+            const pages = appPageMap[name];
+            const mainPage = pages.find(p => p.path.endsWith('/index.html')) || pages[0];
+            apps.push({ name, url: '/' + mainPage.path, pageCount: pages.length });
+        }
+        const grid = document.getElementById('appGrid');
+        if (!apps.length) { grid.innerHTML = `<div class="empty">${t('common.empty')}</div>`; return; }
+        grid.innerHTML = apps.map(a => `
+            <div class="app-card" onclick="window.open('${a.url}','_blank')">
+                <div class="app-name">📦 ${a.name}</div>
+                <div class="app-desc">${a.pageCount} ${t('msg.pageCount')}</div>
+                <div class="app-meta"><span>${a.pageCount} ${t('msg.pages')}</span></div>
+                <div class="app-actions">
+                    <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteApp('${a.name}')">${t('msg.delete')}</button>
+                </div>
+            </div>
+        `).join('');
+    } catch(e) { document.getElementById('appGrid').innerHTML = `<div class="empty">${t('common.fail')}</div>`; }
+}
+
+async function deleteApp(name) {
+    if (!confirm(`${t('msg.deleteAppConfirm')} ${name}?`)) return;
+    try {
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'uninstall',app_id:name})});
+        loadApps();
+    } catch(e) { alert(t('msg.deleteFail') + e.message); }
+}
+
+/* ============ 引擎配置 ============ */
+async function loadEngineConfig(){
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const resp = await res.json();
+        const config = resp.payload || resp.data || resp || {};
+        document.getElementById('cfgHost').value = config.host || '0.0.0.0';
+        document.getElementById('cfgPort').value = config.port || 9000;
+        document.getElementById('cfgStaticDir').value = config.static_dir || 'www';
+        document.getElementById('cfgDataDir').value = config.data_dir || 'data';
+        document.getElementById('cfgPluginsDir').value = config.plugins_dir || 'plugins';
+        document.getElementById('cfgWsUrl').value = (config.websocket||{}).external_url || 'ws://127.0.0.1:9001/ws';
+        document.getElementById('cfgEnableAuth').value = String(config.enable_auth || false);
+        document.getElementById('cfgTokens').value = (config.tokens || []).join('\n');
+        document.getElementById('cfgStudioToken').value = config.studio_token || '';
+        document.getElementById('cfgSessionId').value = config.session_id || '';
+        document.getElementById('cfgUploadUrl').value = (config.upload || {}).external_url || 'http://127.0.0.1:9002/upload';
+    } catch(e) { console.error(e); }
+}
+
+async function saveEngineConfig(){
+    const updates = {
+        host: document.getElementById('cfgHost').value||'0.0.0.0',
+        port: parseInt(document.getElementById('cfgPort').value)||9000,
+        static_dir: document.getElementById('cfgStaticDir').value||'www',
+        data_dir: document.getElementById('cfgDataDir').value||'data',
+        plugins_dir: document.getElementById('cfgPluginsDir').value||'plugins',
+        websocket: {external_url: document.getElementById('cfgWsUrl').value},
+        enable_auth: document.getElementById('cfgEnableAuth').value === 'true',
+        tokens: document.getElementById('cfgTokens').value.split('\n').map(s=>s.trim()).filter(Boolean),
+        studio_token: document.getElementById('cfgStudioToken').value,
+        upload: { external_url: document.getElementById('cfgUploadUrl').value },
+        session_id: document.getElementById('cfgSessionId').value
+    };
+    for (const [key, value] of Object.entries(updates)) {
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
+    }
+    alert(t('msg.savedEngine'));
+}
+
+/* ============ 模型 ============ */
+async function loadModels(){
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const resp = await res.json();
+        const config = resp.payload || resp.data || resp || {};
+        _rawConfig = JSON.parse(JSON.stringify(config));
+        _providers = config.models?.providers || {};
+        _roles = config.models?.roles || {};
+        _allModelIds = [];
+        document.getElementById('cfgMaxRetries').value = config.models?.max_retries || 3;
+        document.getElementById('cfgReqTimeout').value = config.models?.request_timeout || 60;
+        document.getElementById('cfgStreamTimeout').value = config.models?.stream_timeout || 300;
+        document.getElementById('cfgMaxConcurrent').value = config.models?.max_concurrent || 10;
+        for (const [pn, p] of Object.entries(_providers)) for (const m of (p.models || [])) _allModelIds.push(m.id);
+
+        let html = '';
+        for (const [pn, p] of Object.entries(_providers)) {
+            const models = p.models || [], baseUrl = p.base_url || '';
+            const apiKey = p.api_key || '';
+            const isNebula = pn.startsWith('nebula') || apiKey === 'none';
+            let keyBadge = `<span class="badge badge-none">—</span>`;
+            if (apiKey && apiKey !== 'none') {
+                if (/^\$\{\w+\}$/.test(apiKey)) keyBadge = `<span class="badge badge-env">${apiKey}</span>`;
+                else keyBadge = `<span class="badge badge-plain">${apiKey.substring(0,12)}***</span>`;
+            }
+            html += `<div class="provider-group">
+                <div class="provider-header" onclick="this.nextElementSibling.classList.toggle('open')">
+                    <div>
+                        <div style="font-weight:600;color:#0a2540;font-size:13px">${isNebula?'🕵️':'📦'} ${pn}</div>
+                        <div style="font-size:11px;color:#8792a2;margin-top:2px">${baseUrl||'-'}</div>
+                        <div style="margin-top:5px">🔑 ${keyBadge}</div>
+                    </div>
+                    <div style="display:flex;gap:5px" onclick="event.stopPropagation()">
+                        <button class="btn btn-sm" onclick="editProvider('${pn}')">${t('common.edit')}</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteProvider('${pn}')">${t('msg.delete')}</button>
+                    </div>
+                </div>
+                <div class="provider-body">
+                    ${models.map(m => {
+                        let roleBadges = '';
+                        for (const [role, mid] of Object.entries(_roles)) if (mid === m.id) roleBadges += `<span class="role-badge role-${role}">${role}</span>`;
+                        return `<div class="model-item">
+                            <div>
+                                <span class="code">${m.id}</span>${roleBadges}
+                                <div style="font-size:11px;color:#8792a2;margin-top:2px">tokens: ${m.max_tokens??'-'} | temp: ${m.temperature??'-'}</div>
+                            </div>
+                            <div style="display:flex;gap:5px">
+                                <button class="btn btn-warning btn-sm" onclick="editModel('${pn}','${m.id}')">${t('common.edit')}</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteModel('${pn}','${m.id}')">${t('msg.delete')}</button>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                    <div style="display:flex;gap:6px;margin-top:13px;padding-top:13px;border-top:1px dashed #e6ebf1">
+                        <input type="text" id="newModelId_${pn}" placeholder="Model ID" style="flex:1">
+                        <input type="number" id="newModelTokens_${pn}" placeholder="tokens" style="width:90px" value="4096">
+                        <input type="number" step="0.1" id="newModelTemp_${pn}" placeholder="temp" style="width:80px" value="0.7">
+                        <button class="btn btn-primary btn-sm" onclick="quickAddModel('${pn}')">+</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+        if (!Object.keys(_providers).length) html = `<div class="card" style="text-align:center;color:#8792a2;padding:36px">${t('models.empty')}</div>`;
+        document.getElementById('modelList').innerHTML = html;
+        loadRoles();
+    } catch(e) { console.error(e); }
+}
+
+async function saveGlobalParams(){
+    const updates = {
+        'models.max_retries': parseInt(document.getElementById('cfgMaxRetries').value)||3,
+        'models.request_timeout': parseInt(document.getElementById('cfgReqTimeout').value)||60,
+        'models.stream_timeout': parseInt(document.getElementById('cfgStreamTimeout').value)||300,
+        'models.max_concurrent': parseInt(document.getElementById('cfgMaxConcurrent').value)||10,
+    };
+    for (const [key, value] of Object.entries(updates)) {
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
+    }
+    alert(t('msg.savedGlobal'));
+}
+
+async function quickAddModel(pn) {
+    const mid = document.getElementById(`newModelId_${pn}`).value.trim();
+    if (!mid) return alert(t('msg.enterModelId'));
+    const tokens = parseInt(document.getElementById(`newModelTokens_${pn}`).value) || 4096;
+    const temp = parseFloat(document.getElementById(`newModelTemp_${pn}`).value) || 0.7;
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        if (!providers[pn]) return alert(`${t('msg.providerNotExist')}: ${pn}`);
+        if (!providers[pn].models) providers[pn].models = [];
+        if (providers[pn].models.some(m => m.id === mid)) return alert(`Model "${mid}" ${t('msg.exists')}`);
+        providers[pn].models.push({ id: mid, max_tokens: tokens, temperature: temp });
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        _providers = {}; _rawConfig = {};
+        await loadModels();
+        alert(`✅ ${t('msg.addedModel')}: ${mid}`);
+    } catch (e) { alert(t('msg.addFail') + e.message); }
+}
+
+async function deleteModel(pn, mid) {
+    if (!confirm(`${t('msg.deleteModelConfirm')} (${mid})`)) return;
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        let roles = JSON.parse(JSON.stringify(config.models?.roles || {}));
+        if (!providers[pn]) return alert(`${t('msg.providerNotExist')}: ${pn}`);
+        providers[pn].models = (providers[pn].models || []).filter(m => m.id !== mid);
+        for (const [role, rid] of Object.entries(roles)) if (rid === mid) delete roles[role];
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        _providers = {}; _rawConfig = {};
+        await loadModels();
+        alert(`✅ ${t('msg.deletedModel')}: ${mid}`);
+    } catch (e) { alert(t('msg.deleteFail') + e.message); }
+}
+
+function editModel(pn, mid){
+    const model = (_providers[pn]?.models||[]).find(m=>m.id===mid);
+    if (!model) return;
+    document.getElementById('modelModalTitle').innerText = `${t('modal.modelEdit')}: ${mid}`;
+    document.getElementById('editModelPn').value = pn;
+    document.getElementById('editModelOldId').value = mid;
+    document.getElementById('editModelId').value = mid;
+    document.getElementById('editModelTokens').value = model.max_tokens || 4096;
+    document.getElementById('editModelTemp').value = model.temperature || 0.7;
+    document.getElementById('editModelRole').value = '';
+    for (const [role, rid] of Object.entries(_roles)) if (rid === mid) { document.getElementById('editModelRole').value = role; break; }
+    document.getElementById('modelModal').classList.add('show');
+}
+
+function closeModelModal(){ document.getElementById('modelModal').classList.remove('show'); }
+
+async function saveModel(){
+    const pn = document.getElementById('editModelPn').value;
+    const oldId = document.getElementById('editModelOldId').value;
+    const newId = document.getElementById('editModelId').value.trim();
+    const tokens = parseInt(document.getElementById('editModelTokens').value)||4096;
+    const temp = parseFloat(document.getElementById('editModelTemp').value)||0.7;
+    const role = document.getElementById('editModelRole').value;
+    if (!newId) return alert(t('msg.enterModelId'));
+    const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+    const data = await res.json();
+    const providers = data.payload?.models?.providers || {};
+    const roles = data.payload?.models?.roles || {};
+    if (!providers[pn]) return alert(t('msg.providerNotExist'));
+    const models = providers[pn].models || [];
+    const idx = models.findIndex(m=>m.id===oldId);
+    if (idx === -1) return alert(t('msg.modelNotExist'));
+    models[idx] = {...models[idx], id: newId, max_tokens: tokens, temperature: temp};
+    if (oldId !== newId) for (const [r, rid] of Object.entries(roles)) if (rid === oldId) roles[r] = newId;
+    if (role) roles[role] = newId;
+    else for (const [r, rid] of Object.entries(roles)) if (rid === newId) delete roles[r];
+    providers[pn].models = models;
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+    closeModelModal();
+    loadModels();
+}
+
+function showAddProviderModal(){
+    document.getElementById('providerModalTitle').innerText = t('modal.providerAdd');
+    document.getElementById('editProviderName').value='';
+    document.getElementById('providerNameInput').value=''; document.getElementById('providerNameInput').disabled=false;
+    document.getElementById('providerBaseUrl').value=''; document.getElementById('providerApiKey').value='';
+    document.getElementById('providerModal').classList.add('show');
+}
+
+function editProvider(pn){
+    const rawProviders = _rawConfig.models?.providers || {};
+    const p = rawProviders[pn] || _providers[pn];
+    if (!p) return;
+    document.getElementById('providerModalTitle').innerText = t('modal.providerEdit');
+    document.getElementById('editProviderName').value=pn;
+    document.getElementById('providerNameInput').value=pn; document.getElementById('providerNameInput').disabled=true;
+    document.getElementById('providerBaseUrl').value=p.base_url||'';
+    document.getElementById('providerApiKey').value=p.api_key||'';
+    document.getElementById('providerModal').classList.add('show');
+}
+
+function closeProviderModal(){
+    document.getElementById('providerModal').classList.remove('show');
+    document.getElementById('providerNameInput').disabled=false;
+}
+
+async function saveProvider() {
+    const editName = document.getElementById('editProviderName').value;
+    const name = document.getElementById('providerNameInput').value.trim();
+    if (!name) return alert(t('msg.enterName'));
+    const baseUrl = document.getElementById('providerBaseUrl').value.trim();
+    const apiKey = document.getElementById('providerApiKey').value.trim();
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        if (editName && editName !== name) { if (providers[editName]) { providers[name] = providers[editName]; delete providers[editName]; } }
+        if (!providers[name]) providers[name] = { models: [] };
+        providers[name].base_url = baseUrl;
+        providers[name].api_key = apiKey;
+        const saveRes = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        const saveData = await saveRes.json();
+        if (!saveData.ok && !saveData.payload?.ok) throw new Error(saveData.error || t('msg.saveFail'));
+        closeProviderModal();
+        _providers = {}; _rawConfig = {};
+        await loadModels();
+        alert(t('msg.savedProvider'));
+    } catch (e) { alert(t('msg.saveFail') + e.message); }
+}
+
+async function deleteProvider(pn) {
+    if (!confirm(`${t('msg.deleteProviderConfirm')} (${pn})`)) return;
+    try {
+        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
+        const data = await res.json();
+        const config = data.payload || data || {};
+        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
+        let roles = JSON.parse(JSON.stringify(config.models?.roles || {}));
+        if (!providers[pn]) return alert(`${t('msg.providerNotExist')}: ${pn}`);
+        const providerModels = (providers[pn]?.models || []).map(m => m.id);
+        for (const [role, rid] of Object.entries(roles)) if (providerModels.includes(rid)) delete roles[role];
+        delete providers[pn];
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
+        _providers = {}; _rawConfig = {}; _allModelIds = [];
+        await loadModels();
+        alert(`✅ ${t('msg.deletedProvider')}: ${pn}`);
+    } catch (e) { alert(t('msg.deleteFail') + e.message); }
+}
+
+/* ============ 角色 ============ */
+function loadRoles(){
+    const selectIds = ['roleDefault', 'roleCoding', 'roleReasoning', 'roleImage'];
+    const roleKeys = ['default', 'coding', 'reasoning', 'image'];
+    for (let i = 0; i < selectIds.length; i++) {
+        const sel = document.getElementById(selectIds[i]);
+        if (!sel) continue;
+        sel.innerHTML = `<option value="">${t('modal.roleNone')}</option>`;
+        for (const mid of _allModelIds) sel.innerHTML += `<option value="${mid}" ${_roles[roleKeys[i]]===mid?'selected':''}>${mid}</option>`;
+    }
+    const preview = document.getElementById('rolesPreview');
+    if (preview) preview.textContent = JSON.stringify(_roles, null, 2) || '{}';
+}
+
+async function saveRoles(){
+    const roles = {};
+    const mapping = {roleDefault:'default', roleCoding:'coding', roleReasoning:'reasoning', roleImage:'image'};
+    for (const [elId, roleKey] of Object.entries(mapping)) {
+        const val = document.getElementById(elId).value;
+        if (val) roles[roleKey] = val;
+    }
+    await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
+    _roles = roles;
+    loadRoles();
+    loadModels();
+    alert(t('msg.savedRoles'));
+}
+
+/* ============ MCP ============ */
+function copyMcp() {
+    const text = document.getElementById('mcpConfigJson').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = event.target;
+        const old = btn.textContent;
+        btn.textContent = t('msg.copied');
+        setTimeout(() => btn.textContent = old, 1500);
+    });
+}
+
+async function testMcp() {
+    const btn = document.getElementById('testBtn');
+    const status = document.getElementById('mcpStatus');
+    btn.disabled = true;
+    status.textContent = t('msg.testing');
+    status.style.color = '#8792a2';
+    try {
+        const r = await fetch('/api/builtins/tools/code_runner', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                payload: {
+                    code: 'async def execute(envelop, agent):\n    return {"data": 1+1}',
+                    packages: []
+                }
+            })
+        });
+        const data = await r.json();
+        if (data.ok && data.data === 2) {
+            status.textContent = t('msg.connOk');
+            status.style.color = '#0e9f6e';
+        } else {
+            status.textContent = t('msg.connAbnormal');
+            status.style.color = '#df1b41';
+        }
+    } catch (e) {
+        status.textContent = t('msg.connFail');
+        status.style.color = '#df1b41';
+    } finally {
+        btn.disabled = false;
+        setTimeout(() => { status.textContent = ''; }, 3000);
+    }
+}
+
+async function runTest() {
+    const input = document.getElementById('testInput').value;
+    const result = document.getElementById('testResult');
+    const status = document.getElementById('testStatus');
+    let payload;
+    try {
+        payload = JSON.parse(input);
+    } catch (e) {
+        result.textContent = t('msg.jsonParseFail') + e.message;
+        return;
+    }
+    status.textContent = t('msg.running');
+    status.style.color = '#8792a2';
+    result.textContent = t('msg.requesting');
+    try {
+        const r = await fetch('/api/' + payload.receiver, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ payload: payload.params || {} })
+        });
+        const text = await r.text();
+        result.textContent = text || t('msg.emptyResp');
+        status.textContent = t('msg.done');
+        status.style.color = '#0e9f6e';
+    } catch (e) {
+        result.textContent = t('msg.reqFail') + e.message;
+        status.textContent = t('msg.failed');
+        status.style.color = '#df1b41';
+    }
+    setTimeout(() => { status.textContent = ''; }, 3000);
+}
+
+/* ============ 后端检测 ============ */
+async function detectBackend() {
+    try {
+        const r = await fetch('/api/backend_info', { cache: 'no-store' });
+        if (!r.ok) return;
+        const info = await r.json();
+        const map = {
+            'python': 'https://img.shields.io/badge/Python-Reference-blue?style=flat-square&logo=python',
+            'typescript': 'https://img.shields.io/badge/TypeScript-Reference-blue?style=flat-square&logo=typescript',
+            'java': 'https://img.shields.io/badge/Java-Implementation-orange?style=flat-square&logo=openjdk'
+        };
+        const badge = map[(info.language || '').toLowerCase()];
+        if (badge) {
+            const img = document.getElementById('backendBadgeImg');
+            img.src = badge;
+            img.style.display = 'inline-block';
+        }
+    } catch (e) {}
+}
+
+/* ============ 初始化 ============ */
+applyLang(_lang);
+loadApps();
+loadEngineConfig();
+loadModels();
+detectBackend();
+</script>
+</body>
+</html>
