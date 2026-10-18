@@ -1,0 +1,62 @@
+# ============================================================
+# AICP Engine .gitignore
+# ============================================================
+
+# 配置文件（含 key / token，不要提交）
+aicp.yaml
+*.local.yaml
+.env
+.env.*
+!.env.example
+
+# 数据目录（运行时生成，全部忽略）
+data/
+
+# 用户应用（运行时生成，全部忽略，保留目录）
+plugins/applications/*
+!plugins/applications/.gitkeep
+
+# 前端页面（运行时生成，全部忽略，保留目录）
+www/*
+!www/.gitkeep
+
+# 插件生成的运行时文件
+plugins/**/__pycache__/
+plugins/**/*.pyc
+plugins/**/*.contract.json
+plugins/_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 日志
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 系统
+desktop.ini
