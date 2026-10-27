@@ -124,6 +124,7 @@ class PluginRegistry:
         self._initialized = False
         self._agent = None
         self._cache_dirty = False
+        self._virtual: Dict[str, dict] = {}
 
     def initialize(self, agent):
         if self._initialized:
@@ -356,11 +357,45 @@ class PluginRegistry:
                 "help": meta.help_data,
                 "load_error": meta.load_error
             })
+        for vname, vinfo in self._virtual.items():
+            result.append({
+                "route": f"/api/{vname}",
+                "name": vname,
+                "file_path": None,
+                "file_hash": "virtual",
+                "is_loaded": True,
+                "help": {
+                    "description": vinfo.get("desc", ""),
+                    "schema": vinfo.get("schema"),
+                },
+                "load_error": None,
+                "is_virtual": True,
+                "source": vinfo.get("source", "virtual"),
+                "owner": vinfo.get("owner"),
+            })
         return result
 
     def get_plugin_info(self, name: str) -> Optional[dict]:
         meta = self._plugins.get(name)
         if not meta:
+            vinfo = self._virtual.get(name)
+            if vinfo:
+                return {
+                    "route": f"/api/{name}",
+                    "name": name,
+                    "file_path": None,
+                    "file_hash": "virtual",
+                    "is_loaded": True,
+                    "help": {
+                        "description": vinfo.get("desc", ""),
+                        "schema": vinfo.get("schema"),
+                    },
+                    "load_error": None,
+                    "last_loaded": None,
+                    "is_virtual": True,
+                    "source": vinfo.get("source", "virtual"),
+                    "owner": vinfo.get("owner"),
+                }
             return None
         return {
             "route": f"/api/{name}",
@@ -373,6 +408,39 @@ class PluginRegistry:
             "last_loaded": meta.last_loaded.isoformat() if meta.last_loaded else None
         }
 
+    # ---- 虚拟条目（外部 MCP 工具等，不落文件，内存注册）----
+    def register_virtual(self, name: str, desc: str = "", schema=None, owner: str = None,
+                         source: str = "virtual", handler=None) -> bool:
+        if not name:
+            return False
+        self._virtual[name] = {
+            "desc": desc or "",
+            "schema": schema,
+            "owner": owner,
+            "source": source,
+            "handler": handler,
+        }
+        self._cache_dirty = True
+        return True
+
+    def unregister_virtual(self, prefix: str) -> int:
+        if not prefix:
+            return 0
+        pfx = prefix.rstrip("/") + "/"
+        names = [n for n in self._virtual if n == prefix or n.startswith(pfx)]
+        for n in names:
+            self._virtual.pop(n, None)
+        if names:
+            self._cache_dirty = True
+        return len(names)
+
+    def get_virtual_handler(self, name: str):
+        v = self._virtual.get(name)
+        return v.get("handler") if v else None
+
+    def list_virtual(self) -> Dict[str, dict]:
+        return self._virtual
+
     def get_stats(self) -> dict:
         loaded = sum(1 for m in self._plugins.values() if m.is_loaded)
         with_error = sum(1 for m in self._plugins.values() if m.load_error)
@@ -380,6 +448,7 @@ class PluginRegistry:
             "total": len(self._plugins),
             "loaded": loaded,
             "with_error": with_error,
+            "virtual": len(self._virtual),
             "cache_file": str(CACHE_FILE)
         }
 
@@ -408,7 +477,9 @@ async def execute(envelop, agent):
         "stats": _handle_stats,
         "load": _handle_load,
         "unload": _handle_unload,
-        "refresh": _handle_refresh
+        "refresh": _handle_refresh,
+        "register_virtual": _handle_register_virtual,
+        "unregister_virtual": _handle_unregister_virtual
     }
 
     handler = handlers.get(action)
@@ -423,8 +494,37 @@ async def execute(envelop, agent):
 # 动作处理器
 # ============================================================
 
+_RESTORE_DONE = False
+
+
+async def _maybe_restore_external(agent):
+    """进程重启后，从本地 tools 缓存重放外部 MCP 工具（不联网）。"""
+    global _RESTORE_DONE
+    if _RESTORE_DONE:
+        return
+    if _registry._virtual:
+        _RESTORE_DONE = True
+        return
+    if "os/_mcp_client" not in core.plugins:
+        return  # 尚未加载，下次 list 再试
+    _RESTORE_DONE = True
+    try:
+        env = core.Envelop(sender="os/_registry", receiver="os/_mcp_client",
+                           intent="API_CALL", payload={"action": "register_virtual"})
+        await agent.system.call(env)
+        cnt = len(_registry._virtual)
+        if cnt:
+            agent.log.info("[registry] 外部工具已恢复 %d 条（本地缓存重放，未联网）" % cnt)
+    except Exception as e:
+        try:
+            agent.log.warning("[registry] 外部工具恢复失败: %s" % e)
+        except Exception:
+            pass
+
+
 async def _handle_list(envelop, agent):
     _registry._scan_plugins()  # ★ 先扫描，清理已删文件
+    await _maybe_restore_external(agent)
     include_unloaded = envelop.payload.get("include_unloaded", False)
     plugins = _registry.list_plugins(include_unloaded)
     envelop.payload = {
@@ -600,6 +700,35 @@ async def _handle_refresh(envelop, agent):
 # ============================================================
 # 帮助信息
 # ============================================================
+
+async def _handle_register_virtual(envelop, agent):
+    payload = envelop.payload
+    items = payload.get("items")
+    if isinstance(items, list):
+        n = 0
+        for it in items:
+            if isinstance(it, dict) and _registry.register_virtual(
+                it.get("name"), it.get("desc", ""), it.get("schema"),
+                it.get("owner"), it.get("source", "virtual")
+            ):
+                n += 1
+        envelop.payload = {"ok": True, "registered": n}
+        return envelop
+
+    ok = _registry.register_virtual(
+        payload.get("name"), payload.get("desc", ""), payload.get("schema"),
+        payload.get("owner"), payload.get("source", "virtual")
+    )
+    envelop.payload = {"ok": ok} if ok else {"ok": False, "error": "name required"}
+    return envelop
+
+
+async def _handle_unregister_virtual(envelop, agent):
+    prefix = envelop.payload.get("prefix") or envelop.payload.get("owner") or ""
+    n = _registry.unregister_virtual(prefix)
+    envelop.payload = {"ok": True, "removed": n, "prefix": prefix}
+    return envelop
+
 
 def help() -> dict:
     return {

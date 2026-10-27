@@ -7,6 +7,11 @@
   - 插件查找空间：plugins 字典（实现选择；协议要求"按 receiver 可达"）
   - 追加状态约束：本 core 不涉及状态层（属于 Tier 3，由上层处理）
 
+三层分离（改任何东西之前先理解这三层）：
+  - Envelop 顶层字段 = 包裹结构（封闭集合）
+  - payload            = 内容（开放集合，core 不解释其结构）
+  - meta               = 投递指令（半开放，只有"路由行为键"会改变 route 行为）
+
 协议级失败类（status）：
   空字符串      = 成功（无协议级错误）
   "INVALID"    = Envelop 违反约束（route 产生）
@@ -16,10 +21,59 @@
   "META_FAILED"= meta 契约无法满足，或拒绝（插件产生）
   终止状态： "DROPPED" / "ISOLATED" / "DORMANT"
 
+# ============================================================
+# 路由行为键清单（meta 中会改变 route 行为的键）
+#
+# 只有下列键被 route / 异步 / 回调真正消费。不在清单上的键视为
+# "插件私货"：route 不读，异步回调也不保证透传（见 _execute_async）。
+# 新增行为键 = 改协议，必须追加到本清单。
+#
+#   callback_receiver        有值时：route 立即返回 processing，后台执行，
+#                            完成后回调到该地址/路由
+#   is_callback              有值时：route 立即 ACK，后台投递到 receiver
+#   callback_session_id      回调透传给接收方（跨层语义）
+#   session_id               route 兜底填 callback_session_id 用
+#   remote_node              回调透传（跨节点标识）
+#   remote_plugin            回调透传（远程插件标识）
+#   signature                _http_callback 发送时写入，接收方校验
+#
+# 仅"透传"不等于"行为键"：remote_node / remote_plugin / signature 不改变
+# route 的分支走向，只被带到回调消息里。
+# ============================================================
+
+# ============================================================
+# 协议演进规则（改 core 之前必读）
+#
+# status：协议内部状态机
+#   新增值          → 允许。追加常量 + 更新 is_terminal()，不改已有分支
+#   修改已有语义    → 禁止（所有按 status 判断的插件会静默错乱）
+#   删除值          → 禁止
+#
+# Envelop 字段：包裹结构，封闭集合
+#   新增字段        → 禁止。Envelop 是"包裹"不是"内容容器"，
+#                     任何业务数据一律放 payload，不要长在 Envelop 上。
+#                     加字段 = 悄悄改协议，会让 route / 异步 / 回调
+#                     每一层都要多回答一次"这个字段要不要透传"。
+#   删除字段        → 禁止
+#   修改字段语义    → 禁止
+#
+# payload：内容，开放集合
+#   随便加、随便删，core 不解释它的结构。
+#
+# meta：投递指令，半开放
+#   只有"路由行为键"（见上方清单）会改变 route 行为，必须显式登记。
+#   不在清单上的键 = 插件私货：route 不读，异步回调也不保证透传
+#   （当前只透传 remote_node / remote_plugin / callback_session_id / session_id）。
+#
+# route 返回契约：永远返回 Envelop，不返回 None
+#   禁止改变。
+# ============================================================
+
 向后兼容：
   - status 是新增字段，默认 ""。旧代码不读它，行为不变。
   - route 在设置 status 的同时，仍然写 payload["error"]。
   - 所有已有函数签名、字段、payload 语义保留。
+  - Envelop.result() 是新增读法；旧代码仍可直接读 .payload / .status。
 """
 
 import asyncio
@@ -109,6 +163,9 @@ class Envelop:
 
     额外字段（本实现选择，Tier 3；旧代码依赖，保留）：
       intent, channel_id, trace_id, message_id, created_at, path_history
+
+    ⚠ 字段集是封闭集合：不允许新增 / 删除 / 改语义。
+      业务数据一律放 payload；投递指令放 meta 且必须登记为行为键。
     """
 
     __slots__ = (
@@ -165,6 +222,40 @@ class Envelop:
         env.created_at = data.get("created_at", env.created_at)
         return env
 
+    # --------------------------------------------------------
+    # 统一读法（新增）
+    # --------------------------------------------------------
+    def result(self, default_error: str = "no response") -> dict:
+        """归一化读取：把 status / payload.error / 空 payload 统一成 {ok, ...}。
+
+        调用者不需要知道失败来自协议层还是业务层，读这一个方法即可。
+        旧代码仍可直接读 .payload / .status，行为不变。
+
+        返回：
+          {"ok": True,  ...payload}              成功
+          {"ok": False, "status": "...", ...}   协议级失败（MISSING / TIMEOUT / ...）
+          {"ok": False, ...payload}             业务级失败（payload.error 存在）
+
+        注意：协议级失败时保留 status 字段；调用方若只看 ok 会丢诊断信息，
+        需要区分失败类型时读 result["status"]。
+        """
+        raw = self.payload
+        if raw is None:
+            payload = {}
+        elif isinstance(raw, dict):
+            payload = dict(raw)          # 拷贝，避免污染原 Envelop
+        else:
+            payload = {"data": raw}
+
+        status = self.status or ""
+        if status:
+            return {**payload, "ok": False, "status": status}
+
+        if payload.get("error"):
+            return {**payload, "ok": False}
+
+        return {**payload, "ok": True}
+
 
 # ============================================================
 # Agent —— 能力容器
@@ -207,12 +298,36 @@ def _strip_async_meta(meta: dict) -> dict:
 
 
 def _get_callback_token(agent: Agent = None) -> str:
-    """从 agent.config 读 token，不硬编码"""
+    """回调用的 token。优先 HMAC 签发（与 os/_auth 共享 BIO_SECRET），
+    其次静态 tokens，最后环境变量。"""
+    # 1. 尝试 HMAC 签发（内部回调，用 system 身份）
+    try:
+        from importlib import import_module
+        auth_mod = import_module("plugins.os._auth")
+        return auth_mod.issue_hmac_token("system", ttl_seconds=300)   # 5 分钟短期
+    except Exception as e:
+        print(f"[callback] HMAC 签发失败，回退静态 token: {e}")
+    # 2. 静态 tokens
     if agent and hasattr(agent, 'config'):
         tokens = agent.config.get("tokens", [])
         if tokens:
             return tokens[0]
+    # 3. 环境变量
     return os.environ.get("AICP_TOKEN", "")
+
+
+def _attach_traceback(envelop: "Envelop"):
+    """把完整 traceback 放进 meta。
+
+    不污染 payload（业务层读不到），但自改 / 排障需要完整堆栈。
+    meta["traceback"] 不在路由行为键清单内，不会被 route 消费。
+    """
+    import traceback
+    try:
+        envelop.meta["traceback"] = traceback.format_exc()
+    except Exception:
+        pass
+    return envelop
 
 
 # ============================================================
@@ -228,12 +343,17 @@ def _get_callback_token(agent: Agent = None) -> str:
 #   1. 同步：无特殊 meta，直接执行并等待结果
 #   2. 异步回调：meta 中有 callback_receiver，后台执行完成后回调
 #   3. 回调确认：meta 中有 is_callback，立即 ACK 并后台投递
+#
+# 返回契约（保证）：
+#   route 永远返回 Envelop（不返回 None）。
+#   调用方可无条件 result.result() 拿归一结果。
 # ============================================================
-async def route(envelop: Envelop, agent: Agent = None, timeout: float = 1200.0) -> Optional[Envelop]:
+async def route(envelop: Envelop, agent: Agent = None, timeout: float = 600.0) -> Envelop:
     """引擎路由。
 
     每次路由尝试消耗一个 ttl（协议级）。
     结构性失败设置 envelop.status；同时写 payload["error"]（向后兼容）。
+    永远返回 Envelop，不返回 None。
     """
 
     # ---- INVALID：Envelop 结构违反约束 ----
@@ -293,6 +413,12 @@ async def route(envelop: Envelop, agent: Agent = None, timeout: float = 1200.0) 
     # ============================================================
     try:
         result = await asyncio.wait_for(plugin(envelop, agent), timeout=timeout)
+        # ★ 新增：插件返回 None 时兜底，保证 route 永远返回 Envelop
+        if result is None:
+            envelop.status = STATUS_EXCEPTION
+            envelop.payload = {**envelop.payload, "error": "Plugin returned None"}
+            _attach_traceback(envelop)
+            return envelop
         return result
     except asyncio.TimeoutError:
         envelop.status = STATUS_TIMEOUT
@@ -301,6 +427,8 @@ async def route(envelop: Envelop, agent: Agent = None, timeout: float = 1200.0) 
     except Exception as e:
         envelop.status = STATUS_EXCEPTION
         envelop.payload = {**envelop.payload, "error": f"Plugin execution error: {str(e)[:200]}"}
+        # 完整堆栈进 meta：payload 只有截断的 200 字，自改需要全貌
+        _attach_traceback(envelop)
         return envelop
 
 
@@ -312,6 +440,15 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
 
     # ★★★ 关键：执行插件前，清除异步内部标记 ★★★
     envelop.meta = _strip_async_meta(envelop.meta)
+    # ★ 恢复 contextvar：异步 Task 不继承父 Task 的 contextvar，
+    #   这里用 envelop 里透传的 session_id 重新设一次，让 LLM 统计归位
+    try:
+        from runtime._llm import set_current_session
+        _sid = envelop.meta.get("callback_session_id") or envelop.meta.get("session_id") or ""
+        if _sid:
+            set_current_session(_sid)
+    except Exception:
+        pass
 
     try:
         plugin = plugins.get(envelop.receiver)
@@ -332,6 +469,7 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
             payload={"error": f"Plugin execution error: {str(e)[:200]}"},
             status=STATUS_EXCEPTION,
         )
+        _attach_traceback(result)
 
     if result is None:
         result = Envelop(
@@ -352,7 +490,8 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
     result.meta["trace_id"] = envelop.trace_id
 
     # 透传业务信息（不是异步标记）
-    for key in ("remote_node", "remote_plugin", "callback_session_id"):
+    # 注意：只有下列键被透传；其他 meta 键（插件私货）不保证带到回调。
+    for key in ("remote_node", "remote_plugin", "callback_session_id", "user_id"):
         if envelop.meta.get(key):
             result.meta[key] = envelop.meta[key]
 
@@ -412,6 +551,15 @@ async def _http_callback(url: str, envelop: Envelop, timeout: float, agent: Agen
 
 async def _deliver_callback(envelop: Envelop, agent: Agent, timeout: float):
     """后台投递回调消息到插件。"""
+    # ★ 恢复 contextvar（同 _execute_async）
+    try:
+        from runtime._llm import set_current_session
+        _sid = envelop.meta.get("callback_session_id") or envelop.meta.get("session_id") or ""
+        if _sid:
+            set_current_session(_sid)
+    except Exception:
+        pass
+
     try:
         plugin = plugins.get(envelop.receiver)
         if plugin:

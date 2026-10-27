@@ -36,7 +36,7 @@ async def _publish(envelop, agent):
         return envelop
 
     plugin_dir = Path(f"plugins/applications/{app_id}")
-    www_dir = Path(f"www/{app_id}")
+    www_dir = Path(f"www/apps/{app_id}")
 
     if not plugin_dir.exists() and not www_dir.exists():
         envelop.payload = {"error": f"App '{app_id}' not found"}

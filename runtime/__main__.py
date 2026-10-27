@@ -22,8 +22,8 @@ if str(_root) not in sys.path:
 
 from logging.handlers import RotatingFileHandler
 from core import Envelop, Agent, route
-from runtime._config import load_config
-from runtime._loader import load_all_plugins, start_hot_reload_watcher
+from ._config import load_config
+from ._loader import load_all_plugins, start_hot_reload_watcher
 
 
 def setup_logging():
@@ -98,7 +98,7 @@ async def main():
     llm = None
     if config.get("models", {}).get("providers"):
         try:
-            from runtime._llm import LLM
+            from ._llm import LLM
             llm = LLM(config)
             logger.info(f"LLM: {llm.default_model}")
         except Exception as e:
@@ -113,7 +113,7 @@ async def main():
 
     loop = asyncio.get_event_loop()
 
-    from runtime._system import SystemServer
+    from ._system import SystemServer
     system = SystemServer(loop, route, config=config)
 
     # Agent

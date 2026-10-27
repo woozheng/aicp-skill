@@ -10,7 +10,10 @@ aicp.yaml
 !.env.example
 
 # 数据目录（运行时生成，全部忽略）
-data/
+data/*
+
+# 例外：能力库 data/skills 进版本控制（可生长的资产，不是运行时垃圾）
+!data/skills/
 
 # 用户应用（运行时生成，全部忽略，保留目录）
 plugins/applications/*

@@ -77,18 +77,21 @@ class SystemServer:
         except Exception:
             pass
 
-    async def call(self, envelop):
-        # ---------- 可视化推送（out）----------
+    async def call(self, envelop, timeout=None):
+        # 可视化推送（out）
         if self._viz_enabled:
             try:
                 self._viz_queue.put_nowait(("out", envelop))
             except asyncio.QueueFull:
                 pass
 
-        # 直接执行插件，不激活记忆、不提取记忆
-        response = await self._route(envelop, self._agent)
+        # ★ 有 timeout 时传给 route
+        if timeout is not None:
+            response = await self._route(envelop, self._agent, timeout=timeout)
+        else:
+            response = await self._route(envelop, self._agent)
 
-        # ---------- 可视化推送（in）----------
+        # 可视化推送（in）
         if self._viz_enabled:
             try:
                 self._viz_queue.put_nowait(("in", envelop, response))

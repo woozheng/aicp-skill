@@ -1,4 +1,4 @@
-"""fetch — 通用 HTTP 请求工具（内置基础工具）
+"""web_fetch — 通用 HTTP 请求工具（内置基础工具）
 
 支持 GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS 等方法，
 可自定义 headers、body、超时、代理、SSL 验证等。
@@ -136,7 +136,7 @@ async def execute(envelop, agent):
 
 def help():
     return {
-        "route": "builtins/tools/fetch",
+        "route": "builtins/tools/web_fetch",
         "description": "通用 HTTP 请求工具，支持 GET/POST/PUT/DELETE 等方法",
         "actions": {
             "request": {

@@ -1,4 +1,16 @@
-"""WebSocket 网关插件 — 复用 HTTP 路由格式，共享 _auth 认证"""
+"""WebSocket 网关插件 — 复用 HTTP 路由格式，共享 _auth 认证
+
+改造点（v2）：
+  - is_local_request 检查 X-Forwarded-For：反向代理后不再误判本机
+  - ws_handler 透传 remote / forwarded_for 给 os/_auth，local/hybrid 护栏生效
+  - 握手成功后把 user_id 挂到 ws 对象，供后续按用户隔离用
+  - token 提取顺序：Sec-WebSocket-Protocol > Header > Cookie > Query
+
+改造点（v3）：
+  - push / broadcast / push_to_ws / close_channel 全部加 2s 单次超时
+  - 发送超时或异常即剔除死连接，避免慢/死连接阻塞整个 push
+  - push 返回 sent 数，死连接已 unregister，下次不再尝试
+"""
 import asyncio
 import json
 import time
@@ -6,7 +18,10 @@ import uuid
 import aiohttp
 from aiohttp import web
 import core
-import logging
+
+
+# 单次发送超时（秒）。对端不读 -> 超时 -> 剔除，避免 push 卡死。
+WS_SEND_TIMEOUT = 2.0
 
 
 class WebSocketGateway:
@@ -40,66 +55,119 @@ class WebSocketGateway:
         self._ws_id.pop(ws, None)
 
     async def push(self, channel_id, data):
+        """向 channel 推送。单次 send 2s 超时，死连接剔除。"""
         sent = 0
+        dead = []
         for ws in list(self._channels.get(channel_id, set())):
-            if not ws.closed:
-                try:
-                    await ws.send_json(data)
-                    sent += 1
-                    # print(f"[WS Gateway] 发送成功: channel={channel_id}, sent={sent}")
-                except Exception as e:
-                    print(f"[WS Gateway] 发送异常: {e}")
-                    self.unregister(ws)
-            else:
-                self.unregister(ws)
+            if ws.closed:
+                dead.append(ws)
+                continue
+            try:
+                await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
+                sent += 1
+            except asyncio.TimeoutError:
+                print(f"[WS Gateway] push 超时（{WS_SEND_TIMEOUT}s），剔除死连接 channel={channel_id}")
+                dead.append(ws)
+            except Exception as e:
+                print(f"[WS Gateway] push 发送异常: {e}")
+                dead.append(ws)
+        for ws in dead:
+            self.unregister(ws)
         return sent
 
     async def broadcast(self, data):
+        """向所有连接广播。单次 send 2s 超时，死连接剔除。"""
         sent = 0
+        dead = []
         for ws in list(self._ws_to_channels.keys()):
-            if not ws.closed:
-                try:
-                    await ws.send_json(data)
-                    sent += 1
-                except Exception:
-                    self.unregister(ws)
-            else:
-                self.unregister(ws)
+            if ws.closed:
+                dead.append(ws)
+                continue
+            try:
+                await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
+                sent += 1
+            except asyncio.TimeoutError:
+                print(f"[WS Gateway] broadcast 超时（{WS_SEND_TIMEOUT}s），剔除死连接")
+                dead.append(ws)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.unregister(ws)
         return sent
 
     def get_status(self):
         channels_info = {}
         for cid, ws_set in self._channels.items():
-            channels_info[cid] = {"connections": len(ws_set), "ws_ids": [self._ws_id.get(ws, "?") for ws in ws_set if not ws.closed]}
-        return {"total_channels": len(self._channels), "total_connections": len(self._ws_to_channels), "channels": channels_info}
+            channels_info[cid] = {
+                "connections": len(ws_set),
+                "ws_ids": [self._ws_id.get(ws, "?") for ws in ws_set if not ws.closed],
+            }
+        return {
+            "total_channels": len(self._channels),
+            "total_connections": len(self._ws_to_channels),
+            "channels": channels_info,
+        }
 
 
 def extract_token_from_request(request):
-    token = request.query.get("token", "")
-    if token:
-        return token
+    """从请求提取 token。顺序：Sec-WebSocket-Protocol > Header > Cookie > Query。
+
+    Query 放最后：URL 里的 token 会进 access log / 代理日志 / 浏览器历史。
+    """
+    # 1. Sec-WebSocket-Protocol（浏览器子协议，不进日志）
+    proto = request.headers.get("Sec-WebSocket-Protocol", "")
+    for part in proto.split(","):
+        part = part.strip()
+        if part.startswith("token."):
+            return part[6:]
+
+    # 2. 自定义 Header
     token = request.headers.get("X-AICP-Token", "")
     if token:
         return token
+
+    # 3. Bearer
     auth_header = request.headers.get("Authorization", "")
     if auth_header and auth_header.startswith("Bearer "):
         return auth_header[7:]
-    if hasattr(request, 'cookies'):
+
+    # 4. Cookie
+    if hasattr(request, "cookies"):
         token = request.cookies.get("aicp_token", "")
         if token:
             return token
-    return ""
+
+    # 5. Query（兜底，会进日志）
+    return request.query.get("token", "")
 
 
 def is_local_request(request):
-    client_ip = request.remote
-    if client_ip in ['127.0.0.1', 'localhost', '::1']:
-        return True
-    return False
+    """有 X-Forwarded-For 说明经过代理，一律视为非本机。"""
+    if request.headers.get("X-Forwarded-For", ""):
+        return False
+    return request.remote in ("127.0.0.1", "localhost", "::1")
+
+
+def is_same_origin(request):
+    origin = request.headers.get("Origin", "")
+    if not origin:
+        return False
+    from urllib.parse import urlparse
+    try:
+        o = urlparse(origin)
+        fwd_host = request.headers.get("X-Forwarded-Host", "")
+        fwd_proto = request.headers.get("X-Forwarded-Proto", "https")
+        if fwd_host:
+            s = urlparse(f"{fwd_proto}://{fwd_host}")
+            return o.hostname == s.hostname
+        s = urlparse(f"http://{request.host}")
+        return o.hostname == s.hostname
+    except Exception:
+        return False
 
 
 async def execute(envelop, agent):
-    gateway = getattr(agent, 'ws_gateway', None)
+    gateway = getattr(agent, "ws_gateway", None)
     action = envelop.payload.get("action", "")
 
     if action == "push":
@@ -108,7 +176,12 @@ async def execute(envelop, agent):
         if not channel_id:
             envelop.payload = {"error": "channel_id required"}
             return envelop
-        data["_meta"] = {"sender": envelop.sender, "intent": envelop.intent, "trace_id": envelop.trace_id, "timestamp": time.time()}
+        data["_meta"] = {
+            "sender": envelop.sender,
+            "intent": envelop.intent,
+            "trace_id": envelop.trace_id,
+            "timestamp": time.time(),
+        }
         if gateway:
             sent = await gateway.push(channel_id, data)
             envelop.payload = {"ok": True, "sent": sent, "channel_id": channel_id}
@@ -118,7 +191,11 @@ async def execute(envelop, agent):
 
     elif action == "broadcast":
         data = envelop.payload.get("data", {})
-        data["_meta"] = {"sender": envelop.sender, "trace_id": envelop.trace_id, "timestamp": time.time()}
+        data["_meta"] = {
+            "sender": envelop.sender,
+            "trace_id": envelop.trace_id,
+            "timestamp": time.time(),
+        }
         sent = await gateway.broadcast(data) if gateway else 0
         envelop.payload = {"ok": True, "sent": sent}
         return envelop
@@ -129,16 +206,27 @@ async def execute(envelop, agent):
         if not ws_id:
             envelop.payload = {"error": "ws_id required"}
             return envelop
-        data["_meta"] = {"sender": envelop.sender, "trace_id": envelop.trace_id, "timestamp": time.time()}
+        data["_meta"] = {
+            "sender": envelop.sender,
+            "trace_id": envelop.trace_id,
+            "timestamp": time.time(),
+        }
         if gateway:
             sent = 0
-            for ws, wid in gateway._ws_id.items():
+            dead = []
+            for ws, wid in list(gateway._ws_id.items()):
                 if wid == ws_id and not ws.closed:
                     try:
-                        await ws.send_json(data)
+                        await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
                         sent += 1
+                    except asyncio.TimeoutError:
+                        agent.log.info(f"[WS] push_to_ws 超时（{WS_SEND_TIMEOUT}s），剔除")
+                        dead.append(ws)
                     except Exception as e:
                         agent.log.info(f"[WS] push_to_ws error: {e}")
+                        dead.append(ws)
+            for ws in dead:
+                gateway.unregister(ws)
             envelop.payload = {"ok": True, "sent": sent, "ws_id": ws_id}
         else:
             envelop.payload = {"error": "ws_gateway not ready"}
@@ -153,8 +241,11 @@ async def execute(envelop, agent):
         if gateway:
             for ws in list(gateway._channels.get(channel_id, set())):
                 try:
-                    await ws.close(code=1000, message=b"Channel closed by server")
-                except Exception:
+                    await asyncio.wait_for(
+                        ws.close(code=1000, message=b"Channel closed by server"),
+                        timeout=WS_SEND_TIMEOUT,
+                    )
+                except (asyncio.TimeoutError, Exception):
                     pass
                 gateway.unregister(ws, channel_id)
         envelop.payload = {"ok": True, "channel_id": channel_id}
@@ -176,17 +267,23 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
         channel_id = request.query.get("channel", f"default_{uuid.uuid4().hex[:6]}")
 
         origin = request.headers.get("Origin", "")
-        server_host = request.host
-        is_same_origin = (origin == f"http://{server_host}" or origin == f"https://{server_host}")
-        is_local = request.remote in ('127.0.0.1', 'localhost', '::1')
-        should_skip_auth = is_local or is_same_origin
+        is_same_orig = is_same_origin(request)
+        is_local = is_local_request(request)
+        should_skip_auth = is_local or is_same_orig
 
+        # ---- 鉴权 ----
+        user_id = "local"
         if not should_skip_auth:
             auth_env = core.Envelop(
                 sender="os/_websocket",
                 receiver="os/_auth",
                 payload={"action": "verify"},
-                meta={"token": token}
+                meta={
+                    "token": token,
+                    # ★ 透传来源，让 os/_auth 的 local/hybrid 护栏生效
+                    "remote": request.remote or "",
+                    "forwarded_for": request.headers.get("X-Forwarded-For", ""),
+                },
             )
             auth_result = await agent.system.call(auth_env)
 
@@ -197,21 +294,34 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
                 await ws.close(code=4001, message=b"Unauthorized")
                 return ws
 
-        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=64*1024*1024)
+            user_id = auth_result.payload.get("user_id", "local")
+
+        # ---- 握手 ----
+        ws = web.WebSocketResponse(
+            heartbeat=30,
+            max_msg_size=64 * 1024 * 1024,
+            protocols=["aicp"] if "token." in request.headers.get("Sec-WebSocket-Protocol", "") else (),
+        )
         await ws.prepare(request)
+        ws._user_id = user_id  # 挂到 ws 对象，后续按用户隔离可用
 
         gateway.register(ws, channel_id)
 
         ws_id = gateway._ws_id.get(ws, "?")
-        agent.log.info(f"[WS] Connected: {ws_id} → channel={channel_id}, from={request.remote}, origin={origin}")
+        agent.log.info(
+            f"[WS] Connected: {ws_id} → channel={channel_id}, "
+            f"user={user_id}, from={request.remote}, origin={origin}"
+        )
 
         await ws.send_json({
             "type": "connected",
             "ws_id": ws_id,
             "channel_id": channel_id,
-            "timestamp": time.time()
+            "user_id": user_id,
+            "timestamp": time.time(),
         })
 
+        # ---- 消息循环 ----
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
@@ -225,11 +335,15 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
                                 receiver=data.get("receiver", ""),
                                 intent=body.get("intent", "API_CALL"),
                                 payload=body.get("payload", body),
-                                meta={**body.get("meta", {}), "ws_id": ws_id, "channel_id": channel_id},
+                                meta={
+                                    **body.get("meta", {}),
+                                    "ws_id": ws_id,
+                                    "channel_id": channel_id,
+                                    "user_id": user_id,
+                                    "source": "websocket",
+                                },
                             )
 
-                            # ★ 直接路由，不在这里加记忆逻辑
-                            # 记忆激活/提取由 runtime/_system.py 的 SystemServer.call 统一处理
                             result = await agent.system.call(envelop)
 
                             await ws.send_json({
@@ -246,7 +360,7 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
                             await ws.send_json({
                                 "type": "subscribed",
                                 "channel": new_channel,
-                                "timestamp": time.time()
+                                "timestamp": time.time(),
                             })
                             agent.log.info(f"[WS] {ws_id} subscribed to {new_channel}")
 
@@ -257,7 +371,7 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
                             await ws.send_json({
                                 "type": "unsubscribed",
                                 "channel": sub_channel,
-                                "timestamp": time.time()
+                                "timestamp": time.time(),
                             })
 
                         elif data.get("type") == "ping":
@@ -288,6 +402,5 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
     await runner.setup()
     await web.TCPSite(runner, host, port).start()
 
-    # agent.log.info(f"[WS] WebSocket server listening on ws://{host}:{port}/ws")
-
+    agent.log.info(f"[WS] WebSocket server listening on ws://{host}:{port}/ws")
     return runner

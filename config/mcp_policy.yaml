@@ -1,0 +1,8 @@
+# MCP 对外策略配置（随仓库走，不含密钥；与 aicp.yaml 的环境配置分离）
+# 黑名单最终名单 = _mcp_server.py 内置 DEFAULT_BLACKLIST + 下面追加项，不支持从默认名单删项。
+# 语法：receiver 整体禁用；receiver:action 只禁单个 action。改完重启引擎生效。
+mcp:
+  blacklist: []
+  # blacklist:
+  #   - applications/demo/demo_api   # 禁用整个插件
+  #   - os/_db:QUERY                 # 只禁某个 action

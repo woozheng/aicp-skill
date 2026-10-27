@@ -14,8 +14,8 @@ def _get_restart_cmd() -> list:
     智能识别当前启动方式，返回正确的重启命令。
     
     支持：
+    - python -m package（相对导入必须用 -m 方式）
     - python xxx.py
-    - python -m xxx
     - uvicorn xxx:app
     - gunicorn xxx:app
     - 被 systemd/supervisor/docker 托管
@@ -28,6 +28,34 @@ def _get_restart_cmd() -> list:
     
     argv0 = argv[0]
     python_exe = sys.executable
+    
+    # ============================================================
+    # 场景 0：python -m package 启动
+    # 主模块有 __package__ 且非空 → 必须用 -m 方式重启，否则相对导入炸
+    # ============================================================
+    main_module = sys.modules.get('__main__')
+    if main_module and getattr(main_module, '__package__', None):
+        pkg = main_module.__package__
+        return [python_exe, '-m', pkg] + argv[1:]
+
+    # ============================================================
+    # 场景 0.5：python path/to/__main__.py 直接跑包入口
+    # __package__ 为空，但文件是某个包的 __main__.py，且用了相对导入
+    # → 推断包名，用 -m 方式重启
+    # ============================================================
+    argv0_path = Path(argv0)
+    if argv0_path.name == '__main__.py' and argv0_path.parent.name:
+        # 读首屏，看有没有 from .xxx 相对导入
+        try:
+            src = argv0_path.read_text(encoding='utf-8', errors='ignore')
+            if 'from .' in src or 'from ..' in src:
+                pkg_name = argv0_path.parent.name
+                # 确认父目录在 sys.path 里（即 cwd 是项目根）
+                parent_dir = str(argv0_path.parent.parent.resolve())
+                if parent_dir in [str(Path(p).resolve()) for p in sys.path if p]:
+                    return [python_exe, '-m', pkg_name] + argv[1:]
+        except Exception:
+            pass
     
     # ============================================================
     # 场景 1：python xxx.py
@@ -72,33 +100,28 @@ def _spawn_and_exit(cmd: list, agent):
     agent.log.info(f"[restart] 重启命令: {cmd}")
     
     try:
-        # 关键：传列表，不传字符串
-        # Windows 上需要 special handling
         if sys.platform == 'win32':
-            # Windows：用 list2cmdline 确保带空格的路径正确转义
-            # 但用 CREATE_NEW_PROCESS_GROUP 让新进程独立
-            subprocess.Popen(
-                cmd,
-                cwd=os.getcwd(),
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-                close_fds=True,
-                env=os.environ.copy(),
-            )
+            # Windows：优先 os.execv —— 新进程继承控制台，能看到启动日志
+            # 成功则不返回；失败 fallback 到 Popen（不用 DETACHED_PROCESS）
+            try:
+                os.execv(cmd[0], cmd)
+            except OSError as e:
+                agent.log.warning(f"[restart] os.execv 失败({e})，改用 Popen")
+                subprocess.Popen(
+                    cmd,
+                    cwd=os.getcwd(),
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    close_fds=True,
+                    env=os.environ.copy(),
+                )
+                agent.log.info("[restart] 新进程已启动，退出当前进程")
         else:
-            # Unix：直接 Popen，新进程会继承环境
-            subprocess.Popen(
-                cmd,
-                cwd=os.getcwd(),
-                start_new_session=True,  # 脱离当前进程组
-                close_fds=True,
-                env=os.environ.copy(),
-            )
-        
-        agent.log.info("[restart] 新进程已启动，退出当前进程")
+            # Unix：execv 替换当前进程，最干净
+            os.execv(cmd[0], cmd)
     except Exception as e:
         agent.log.error(f"[restart] 启动新进程失败: {e}")
     
-    # 退出当前进程
+    # 只有 Popen 分支会走到这里（execv 成功不返回）
     os._exit(0)
 
 
@@ -120,18 +143,13 @@ async def execute(envelop, agent):
                 os._exit(0)
                 return
             
-            try:
-                argv0 = sys.argv[0]
-                if argv0.endswith('.py'):
-                    cmd = [sys.executable] + sys.argv
-                else:
-                    cmd = sys.argv
-                
-                agent.log.info(f"[restart] execv: {cmd}")
-                os.execv(cmd[0], cmd)
-            except Exception as e:
-                agent.log.error(f"[restart] execv 失败: {e}")
-                os._exit(1)
+            cmd = _get_restart_cmd()
+            if not cmd:
+                agent.log.error("[restart] 无法识别启动方式，放弃重启")
+                return
+            
+            agent.log.info(f"[restart] execv: {cmd}")
+            _spawn_and_exit(cmd, agent)
         
         asyncio.create_task(_delayed_restart())
         return envelop

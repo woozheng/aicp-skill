@@ -143,20 +143,17 @@ async def execute(envelop, agent):
         if key.startswith("models"):
             try:
                 from runtime._llm import LLM
-                from runtime._aicp_llm import AICP_LLM
+
 
                 new_config = agent.config
                 if new_config.get("models", {}).get("providers"):
                     new_llm = LLM(new_config)
-                    new_aicp_llm = AICP_LLM(new_config, is_remote=True, llm=new_llm)   # ← 传入
+
 
                     agent.llm = new_llm
-                    agent.aicp_llm = new_aicp_llm
-                    agent.chatEnvelop = new_aicp_llm.chatEnvelop if new_aicp_llm else None
 
-                    # 清 remote caps 缓存（类变量）
-                    AICP_LLM._cached_remote_section = None
-                    AICP_LLM._cached_remote_ts = 0.0
+
+
 
                     llm_reloaded = True
                     print(f"[control] ✅ LLM 已重建（key={key}）")
@@ -206,7 +203,7 @@ async def execute(envelop, agent):
                         "type": "builtin" if scan_dir == "plugins/builtins" else "user",
                         "auto_start": cfg.get("auto_start", False),
                         "py_files": len(list(app_dir.rglob("*.py"))),
-                        "html_files": len(list(Path("www").rglob(f"{app_dir.name}/**/*.html"))) if Path("www").exists() else 0,
+                        "html_files": len(list(Path("www").rglob(f"apps/{app_dir.name}/**/*.html"))) if Path("www").exists() else 0,
                         "deletable": scan_dir != "plugins/builtins",
                         "error": cfg.get("_error", ""),
                     })
@@ -235,7 +232,7 @@ async def execute(envelop, agent):
             envelop.payload = {"error": "Cannot uninstall system app"}
             return envelop
         shutil.rmtree(Path(f"plugins/applications/{app_id}"), ignore_errors=True)
-        shutil.rmtree(Path(f"www/{app_id}"), ignore_errors=True)
+        shutil.rmtree(Path(f"www/apps/{app_id}"), ignore_errors=True)
         envelop.payload = {"ok": True, "app_id": app_id}
         return envelop
 

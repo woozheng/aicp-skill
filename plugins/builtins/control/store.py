@@ -112,7 +112,7 @@ def _copy_app(src_dir, app_id):
     www_src = src_dir / "www" / app_id
     if not www_src.exists():
         www_src = src_dir / app_id / "www" / app_id
-    www_dst = Path(f"www/{app_id}")
+    www_dst = Path(f"www/apps/{app_id}")
 
     if plugin_src.exists():
         if plugin_dst.exists():
@@ -149,7 +149,7 @@ async def _uninstall(envelop, agent):
 def _remove_app(app_id):
     """删除应用目录"""
     shutil.rmtree(Path(f"plugins/applications/{app_id}"), ignore_errors=True)
-    shutil.rmtree(Path(f"www/{app_id}"), ignore_errors=True)
+    shutil.rmtree(Path(f"www/apps/{app_id}"), ignore_errors=True)
 
 
 async def _installed(envelop, agent):

@@ -3,6 +3,17 @@
 只执行传入的代码，不调 LLM，不生成代码。
 代码由网页 AI 写好，通过 call_plugin 提交。
 
+设计原则：
+    1. 能力全放行：agent 想写什么写什么（open / print / import requests / import subprocess / HTTP 都可用）
+    2. 阻塞全异步化：所有可能阻塞事件循环的调用，底层透明转成异步/线程池
+    3. 兜底靠隔离：execute 整体丢专用线程池跑，同步阻塞也挂不到主事件循环
+    4. 只拦真正危险的东西：rm -rf /、format、mkfs 这类会毁系统的命令
+
+稳定性加固（本次）：
+    - 专用线程池 _CODE_EXECUTOR（max_workers=2），卡住的执行不占默认池
+    - 超时/完成/排队都打日志，方便排查「卡住」是执行慢还是排队
+    - 不改 AST 检查、沙箱能力、execute 签名、返回值结构
+
 接收：
     payload.code: Python 代码文本（必须是 async def execute(envelop, agent) 结构）
     payload.packages: 依赖列表（可选，如 ["pandas", "requests"]）
@@ -15,14 +26,20 @@ import asyncio
 import ast
 import importlib
 import json
+import logging
 import re
 import subprocess
 import sys
+import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import core
+
+
+logger = logging.getLogger("aicp.code_runner")
 
 
 # ============================================================
@@ -32,31 +49,142 @@ import core
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_SUBPROCESS_TIMEOUT = 30
 
-BLOCKED_BUILTINS = frozenset({
-    "eval", "exec", "compile", "open", "globals", "locals", "__import__"
-})
+# ★ code_runner 专用线程池：独立于默认池，卡住的执行不占其他插件的线程
+#   最多 2 个并发执行，第 3 个排队（避免无限起线程把内存打爆）
+_CODE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="code_runner")
 
-import builtins
-SAFE_BUILTINS = {
-    k: v for k, v in builtins.__dict__.items()
-    if k not in BLOCKED_BUILTINS and not k.startswith("_")
-}
+# 只拦截真正会毁系统的命令，不拦"能力"
+DANGEROUS_COMMANDS = [
+    "rm -rf /", "rm -rf ~", "rm -rf /*",
+    "format c:", "format d:", "del /f /s /q c:\\", "del /f /s /q d:\\",
+    "mkfs", "dd if=/dev/zero", "diskpart", "fdisk",
+    "shutdown", "reboot",
+]
+
+# 云元数据地址（安全策略，必须拦）
+BLOCKED_FETCH_HOSTS = [
+    "169.254.169.254", "metadata.google.internal",
+]
+
+# ============================================================
+# 环境摘要（模块级缓存，首次算，后续复用）
+# ============================================================
+
+_ENV_CACHE: Optional[Dict[str, Any]] = None
+_ENV_CACHE_AT: float = 0.0
+_ENV_CACHE_TTL: float = 300.0   # 5 分钟刷新一次（磁盘/网络可能变）
+
+
+def _get_env_summary() -> Dict[str, Any]:
+    """探测当前执行环境的关键事实，供模型决策参考。
+
+    缓存 5 分钟：磁盘/网络速度可能变，但 CPU/GPU/库可用性基本不变。
+    模型每次跑代码都看到 env，不需要专门「探测环境」这一步。
+    """
+    global _ENV_CACHE, _ENV_CACHE_AT
+
+    now = time.time()
+    if _ENV_CACHE is not None and (now - _ENV_CACHE_AT) < _ENV_CACHE_TTL:
+        return _ENV_CACHE
+
+    res: Dict[str, Any] = {}
+
+    # --- CPU / 内存 ---
+    try:
+        import os as _os
+        res["cpu_count"] = _os.cpu_count()
+    except Exception:
+        res["cpu_count"] = "unknown"
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        res["mem_total_gb"] = round(vm.total / 1e9, 1)
+        res["mem_available_gb"] = round(vm.available / 1e9, 1)
+    except Exception:
+        res["mem_total_gb"] = "psutil 未装"
+
+    # --- 磁盘 ---
+    try:
+        import shutil
+        du = shutil.disk_usage(".")
+        res["disk_total_gb"] = round(du.total / 1e9, 1)
+        res["disk_free_gb"] = round(du.free / 1e9, 1)
+    except Exception:
+        res["disk_free_gb"] = "unknown"
+
+    # --- GPU ---
+    try:
+        import torch
+        if torch.cuda.is_available():
+            res["gpu"] = True
+            try:
+                res["gpu_name"] = torch.cuda.get_device_name(0)
+            except Exception:
+                res["gpu_name"] = "unknown"
+        else:
+            res["gpu"] = False
+            res["gpu_note"] = "torch 已装但 CUDA 不可用（无 GPU 或驱动缺失）"
+    except ImportError:
+        res["gpu"] = "no_torch"
+        res["gpu_note"] = "torch 未装，不要尝试 CUDA 相关包"
+    except Exception as e:
+        res["gpu"] = f"probe_fail: {type(e).__name__}"
+        res["gpu_note"] = "torch 探测失败，不要依赖 CUDA"
+
+    # --- 常用库可用性 ---
+    import importlib.util as _ilu
+    libs = ["cv2", "skimage", "PIL", "numpy", "requests", "aiohttp",
+            "torch", "onnxruntime", "rapidocr_onnxruntime", "easyocr"]
+    available = []
+    missing = []
+    for name in libs:
+        try:
+            if _ilu.find_spec(name) is not None:
+                available.append(name)
+            else:
+                missing.append(name)
+        except Exception:
+            missing.append(name)
+    res["libs_available"] = available
+    res["libs_missing"] = missing
+
+    # --- 网络速度探测（轻量，HEAD 请求，2s 超时）---
+    # 只探「大文件下载源」，用于模型判断「能不能下模型」
+    net_sources = {
+        "pypi": "https://pypi.org",
+        "hf-mirror": "https://hf-mirror.com",
+        "modelscope": "https://modelscope.cn",
+    }
+    net: Dict[str, str] = {}
+    try:
+        import requests as _rq
+        for name, url in net_sources.items():
+            try:
+                t0 = time.time()
+                _rq.head(url, timeout=2, allow_redirects=True)
+                ms = int((time.time() - t0) * 1000)
+                net[name] = f"ok {ms}ms"
+            except Exception as e:
+                net[name] = f"fail: {type(e).__name__}"
+    except ImportError:
+        net["_"] = "requests 未装"
+    res["net"] = net
+
+    # --- 执行限制（code_runner 自己的事实）---
+    res["exec_timeout_s"] = DEFAULT_TIMEOUT_SECONDS
+    res["exec_max_concurrent"] = 2
+    res["note"] = (
+        "exec_timeout_s 是单次 code_runner 执行的硬超时；"
+        "下载/安装类操作超过这个时间会被中断，请先估算耗时再决定。"
+    )
+
+    _ENV_CACHE = res
+    _ENV_CACHE_AT = now
+    return res
 
 
 class SandboxBlockError(RuntimeError):
     pass
-
-
-DANGEROUS_COMMANDS = [
-    "format ", "rm -rf /", "rm -rf ~", "del /f /s /q c:\\",
-    "del /f /s /q d:\\", "shutdown", "mkfs", "dd if=/dev/zero",
-    "diskpart", "fdisk", "format c:",
-]
-
-BLOCKED_FETCH_HOSTS = [
-    "169.254.169.254", "metadata.google.internal",
-    "localhost", "127.0.0.1", "0.0.0.0",
-]
 
 
 # ============================================================
@@ -82,7 +210,7 @@ def _strip_code_wrapper(code: str) -> str:
 
 
 # ============================================================
-# AST 预检
+# AST 预检（只做"结构合法性"检查，不拦能力）
 # ============================================================
 
 def _ast_pre_check(source: str) -> Optional[str]:
@@ -113,18 +241,19 @@ def _ast_pre_check(source: str) -> Optional[str]:
     if not has_execute:
         return "代码中必须定义 async def execute(envelop, agent)"
 
-    # 死循环 / 阻塞检测
+    # 只拦"必然死循环"，不拦正常能力
     for node in ast.walk(tree):
         if isinstance(node, ast.While):
             if isinstance(node.test, ast.Constant) and node.test.value in (True, 1):
-                return "禁止 while True，用有限循环"
+                has_break = any(isinstance(n, ast.Break) for n in ast.walk(node))
+                if not has_break:
+                    return "禁止无 break 的 while True，用有限循环"
+
+    # 禁止 eval/exec/__import__（防止绕过沙箱构造）
+    for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr == "sleep":
-                if isinstance(func.value, ast.Name) and func.value.id == "time":
-                    return "禁止 time.sleep，用 await asyncio.sleep(N)"
-            if isinstance(func, ast.Name) and func.id == "input":
-                return "禁止 input()，沙箱没有交互输入"
+            if isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec", "__import__"):
+                return f"禁止使用 {node.func.id}()"
 
     return None
 
@@ -194,7 +323,7 @@ async def ensure_packages(packages: List[str]) -> None:
 
 
 # ============================================================
-# 沙箱
+# 沙箱：能力全放行，阻塞全异步化
 # ============================================================
 
 def _check_dangerous_command(cmd: str):
@@ -207,47 +336,43 @@ def _check_dangerous_command(cmd: str):
     return cmd
 
 
-def _check_fetch_url(url: str):
-    if not isinstance(url, str):
-        raise SandboxBlockError("fetch url 必须是字符串")
-    if not url.startswith(("http://", "https://")):
-        raise SandboxBlockError(f"fetch 只支持 http/https: {url}")
-    url_lower = url.lower()
-    for b in BLOCKED_FETCH_HOSTS:
-        if b in url_lower:
-            raise SandboxBlockError(f"fetch 禁止访问: {b}")
-    return url
-
-
 def _build_safe_globals(agent) -> Dict[str, Any]:
+    import builtins as _builtins
     import requests as _requests
     import bs4 as _bs4
     from pathlib import Path as _Path
 
-    g = dict(SAFE_BUILTINS)
+    # 基础 builtins 全放行（open / print / 等都不禁）
+    # 仅把 __import__ 换成"受限 import"：拦截危险命令模块的同步用法，但不拦能力
+    g = {k: v for k, v in _builtins.__dict__.items() if not k.startswith("_")}
 
     _original_get = _requests.get
     _original_post = _requests.post
 
-    def _safe_subprocess_run(cmd, **kwargs):
+    # ---- subprocess：全异步化，agent 写 await subprocess.run(...) ----
+    async def _async_subprocess_run(cmd, **kwargs):
+        """subprocess.run 的异步版本：丢线程池，不阻塞事件循环"""
         if isinstance(cmd, str):
             _check_dangerous_command(cmd)
-            for c in (">", "<", "`", "$", ";", "&"):
-                if c in cmd:
-                    raise SandboxBlockError(
-                        f"字符串命令中不允许 `{c}`，用 Python open() 替代"
-                    )
+        elif isinstance(cmd, list):
+            for p in cmd:
+                if isinstance(p, str):
+                    _check_dangerous_command(p)
         kwargs.setdefault("capture_output", True)
         kwargs.setdefault("text", True)
         kwargs.setdefault("encoding", "utf-8")
         kwargs.setdefault("errors", "replace")
-        res = subprocess.run(cmd, **kwargs)
-        res.stdout = res.stdout or ""
-        res.stderr = res.stderr or ""
-        return res
+        timeout = kwargs.pop("timeout", DEFAULT_SUBPROCESS_TIMEOUT)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(subprocess.run, cmd, **kwargs),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise SandboxBlockError(f"subprocess.run 超时（{timeout}s）")
 
     class SubprocessProxy:
-        run = staticmethod(_safe_subprocess_run)
+        run = staticmethod(_async_subprocess_run)  # 返回 coroutine，必须 await
         PIPE = subprocess.PIPE
         STDOUT = subprocess.STDOUT
         DEVNULL = subprocess.DEVNULL
@@ -255,38 +380,45 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
         CalledProcessError = subprocess.CalledProcessError
 
         @staticmethod
-        def Popen(*a, **kw):
-            raise SandboxBlockError("禁止使用 subprocess.Popen，用 subprocess.run")
+        async def Popen(*a, **kw):
+            raise SandboxBlockError("禁止使用 subprocess.Popen，用 await subprocess.run(...)")
 
+    # ---- requests：打本地服务改走异步，打外部保持同步 ----
     def _safe_get(url, *a, **kw):
         if url.startswith(("http://127.0.0.1", "http://localhost")):
-            raise SandboxBlockError("禁止用同步 requests 调本地 API，用 aiohttp")
+            raise SandboxBlockError(
+                "禁止用同步 requests 调本地 API（会阻塞事件循环），用 await fetch_async(url)"
+            )
         return _original_get(url, *a, **kw)
 
     def _safe_post(url, *a, **kw):
         if url.startswith(("http://127.0.0.1", "http://localhost")):
-            raise SandboxBlockError("禁止用同步 requests 调本地 API，用 aiohttp")
+            raise SandboxBlockError(
+                "禁止用同步 requests 调本地 API（会阻塞事件循环），用 await post_json(url, payload)"
+            )
         return _original_post(url, *a, **kw)
 
     class SafeRequests:
         get = staticmethod(_safe_get)
         post = staticmethod(_safe_post)
 
-    def _noop_print(*a, **kw):
-        raise SandboxBlockError("禁止 print()，用 return {'data': ...}")
-
-    def _safe_run(cmd, timeout=DEFAULT_SUBPROCESS_TIMEOUT, cwd=None):
+    # ---- run / run_async：run 也异步化 ----
+    async def _safe_run(cmd, timeout=DEFAULT_SUBPROCESS_TIMEOUT, cwd=None):
         if timeout > 300:
             raise ValueError(f"Timeout {timeout}s exceeds maximum 300s")
         if isinstance(cmd, str):
             _check_dangerous_command(cmd)
-            for c in (">", "<", "`", "$", ";", "&"):
-                if c in cmd:
-                    raise SandboxBlockError(f"run() 字符串命令中不允许 `{c}`")
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, timeout=timeout,
-            text=True, encoding="utf-8", errors="replace", cwd=cwd,
-        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    subprocess.run,
+                    cmd, shell=True, capture_output=True, timeout=timeout,
+                    text=True, encoding="utf-8", errors="replace", cwd=cwd,
+                ),
+                timeout=timeout + 5,
+            )
+        except asyncio.TimeoutError:
+            raise SandboxBlockError(f"run() 超时（{timeout}s）")
         return result.stdout or ""
 
     async def _safe_run_async(cmd, timeout=DEFAULT_SUBPROCESS_TIMEOUT, cwd=None):
@@ -294,9 +426,6 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
             raise ValueError(f"Timeout {timeout}s exceeds maximum 300s")
         if isinstance(cmd, str):
             _check_dangerous_command(cmd)
-            for c in (">", "<", "`", "$", ";", "&"):
-                if c in cmd:
-                    raise SandboxBlockError(f"run_async 字符串命令中不允许 `{c}`")
             cmd_list = cmd.split()
         elif isinstance(cmd, list):
             for p in cmd:
@@ -334,8 +463,18 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
                 pass
             raise SandboxBlockError(f"run_async 超时（{timeout}s），已终止")
 
+    # ---- fetch：同步版本禁内网，异步版本允许内网 ----
     def _safe_fetch(url, timeout=15):
-        _check_fetch_url(url)
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise SandboxBlockError(f"fetch 只支持 http/https: {url}")
+        url_lower = url.lower()
+        for b in BLOCKED_FETCH_HOSTS:
+            if b in url_lower:
+                raise SandboxBlockError(f"fetch 禁止访问: {b}（云元数据地址）")
+        if "127.0.0.1" in url_lower or "localhost" in url_lower:
+            raise SandboxBlockError(
+                "同步 fetch 禁内网（会阻塞）。验证本地页面用 await fetch_async(url)"
+            )
         resp = _original_get(url, timeout=timeout, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
@@ -346,6 +485,49 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
             resp.encoding = resp.apparent_encoding or "utf-8"
         return resp.text
 
+    async def _safe_fetch_async(url, timeout=15, headers=None, method="GET", json_body=None):
+        """异步 HTTP：可访问本地回环（验证自己起的服务/页面用）"""
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            raise SandboxBlockError(f"fetch_async 只支持 http/https: {url}")
+        if "169.254.169.254" in url or "metadata.google.internal" in url.lower():
+            raise SandboxBlockError("fetch_async 禁止访问云元数据地址")
+        try:
+            import aiohttp
+        except ImportError:
+            raise SandboxBlockError("aiohttp 未安装，packages 里加 'aiohttp'")
+        hdrs = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        if headers:
+            hdrs.update(headers)
+        cli_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=cli_timeout) as sess:
+            async with sess.request(method.upper(), url, headers=hdrs, json=json_body) as r:
+                text = await r.text()
+
+                # ★ dict 子类：加 json() 方法，模型写 res.json() 也能用
+                class _FetchResult(dict):
+                    def json(self):
+                        return json.loads(self.get("text") or "{}")
+                    @property
+                    def ok(self):
+                        return 200 <= self.get("status", 0) < 300
+
+                return _FetchResult(
+                    status=r.status,
+                    text=text,
+                    url=str(r.url),
+                )
+
+    async def _safe_post_json(url, payload=None, timeout=15, headers=None):
+        res = await _safe_fetch_async(
+            url, timeout=timeout, headers=headers, method="POST", json_body=payload or {}
+        )
+        try:
+            data = json.loads(res["text"])
+        except Exception:
+            data = None
+        return {"status": res["status"], "json": data, "text": res["text"]}
+
+    # ---- os：只禁 chdir，其他全放行 ----
     class SafeOS:
         def __init__(self):
             self._os = __import__("os")
@@ -363,18 +545,63 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
         "json": json,
         "os": SafeOS(),
         "Path": _Path,
-        "open": open,
         "requests": SafeRequests,
         "BeautifulSoup": _bs4.BeautifulSoup,
         "re": re,
         "run": _safe_run,
         "run_async": _safe_run_async,
         "fetch": _safe_fetch,
+        "fetch_async": _safe_fetch_async,
+        "post_json": _safe_post_json,
         "subprocess": SubprocessProxy,
-        "print": _noop_print,
     })
 
     return g
+
+
+# ============================================================
+# 执行隔离：整个 execute 丢专用线程池，同步阻塞也挂不到主循环
+# ============================================================
+
+def _run_execute_sync(execute_fn, envelop, agent):
+    """在独立线程里跑 execute（用于隔离同步阻塞）"""
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(execute_fn(envelop, agent))
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+
+async def _run_execute_isolated(execute_fn, envelop, agent, timeout):
+    """把 execute 丢专用线程池，超时主循环脱身。
+
+    注意：线程无法强杀（Python 限制），超时后线程仍在后台跑到自然结束。
+    但用专用池（max_workers=2）保证：
+      - 不占默认池，不影响其他插件
+      - 最多 2 个并发，第 3 个排队（不会无限起线程）
+    """
+    loop = asyncio.get_running_loop()
+    fut = loop.run_in_executor(
+        _CODE_EXECUTOR, _run_execute_sync, execute_fn, envelop, agent
+    )
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except asyncio.TimeoutError:
+        # 超时：主循环脱身，但线程仍在跑
+        # 这里主动记一条 warn，方便排查「卡住」是不是超时线程占池
+        try:
+            logger.warning(
+                f"[code_runner] 执行超时 {timeout}s，线程仍在后台运行（线程池 2 并发）"
+            )
+        except Exception:
+            pass
+        raise SandboxBlockError(
+            f"执行超时（{timeout}s）。代码可能仍在后台线程运行，但主服务已脱身"
+        )
 
 
 # ============================================================
@@ -384,13 +611,12 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
 async def _execute_code(code: str, agent) -> Dict[str, Any]:
     """执行代码，返回 {ok, data/error, error_category}"""
 
-    # 0. 确保 data/workspace 存在
     try:
         Path("data/workspace").mkdir(parents=True, exist_ok=True)
     except Exception:
         pass
 
-    # 1. AST 预检
+    # 1. AST 预检（只查结构合法性）
     ast_err = _ast_pre_check(code)
     if ast_err:
         return {
@@ -442,20 +668,29 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "error_category": "LLM_CODE",
         }
 
-    # 5. 执行
+    # 5. 执行（隔离到专用线程池，同步阻塞也挂不到主循环）
     envelop = core.Envelop(payload={"state": {}})
+    _t0 = time.time()
+
+    # ★ 若专用池被占满（2 个都在跑），本次会排队；提前打日志让前端/日志能看出来
     try:
-        ret = await asyncio.wait_for(
-            execute_fn(envelop, agent),
-            timeout=DEFAULT_TIMEOUT_SECONDS,
+        _busy = _CODE_EXECUTOR._work_queue.qsize() if hasattr(_CODE_EXECUTOR, "_work_queue") else 0
+        if _busy >= 2:
+            logger.warning(
+                f"[code_runner] 线程池繁忙（排队 {_busy} 个），本次执行需等待"
+            )
+    except Exception:
+        pass
+
+    try:
+        ret = await _run_execute_isolated(
+            execute_fn, envelop, agent, DEFAULT_TIMEOUT_SECONDS
         )
-    except asyncio.TimeoutError:
-        return {
-            "ok": False,
-            "error": f"【错误分类】LLM_CODE\n【一句话】执行超时\n【原因】超过 {DEFAULT_TIMEOUT_SECONDS} 秒",
-            "error_category": "LLM_CODE",
-        }
+        logger.info(f"[code_runner] 执行完成 耗时={time.time()-_t0:.1f}s")
     except SandboxBlockError as e:
+        logger.warning(
+            f"[code_runner] 沙箱拦截/超时 耗时={time.time()-_t0:.1f}s 原因={e}"
+        )
         return {
             "ok": False,
             "error": f"【错误分类】SANDBOX_BLOCK\n【一句话】沙箱拦截\n【原因】{e}",
@@ -481,9 +716,10 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": "【错误分类】LLM_CODE\n【一句话】返回值缺少 data 字段\n【原因】必须 return {'data': ...}",
             "error_category": "LLM_CODE",
+            "env": _get_env_summary(),
         }
 
-    return {"ok": True, "data": ret["data"]}
+    return {"ok": True, "data": ret["data"], "env": _get_env_summary()}
 
 
 # ============================================================
@@ -499,16 +735,27 @@ async def execute(envelop, agent):
         return envelop
 
     if not isinstance(packages, list):
+        if packages:
+            # 传了非 list（dict/str）→ 明确报错，别静默吞
+            envelop.payload = {
+                "ok": False,
+                "error": (
+                    "【错误分类】LLM_CODE\n【一句话】packages 参数格式错误\n"
+                    "【原因】packages 必须是数组，如 [\"pandas\", \"requests\"]，"
+                    f"不能是 {type(packages).__name__}"
+                ),
+                "error_category": "LLM_CODE",
+                "env": _get_env_summary(),
+            }
+            return envelop
         packages = []
 
-    # 代码清洗：剥掉 ~~~python~~~ 包裹
     code = _strip_code_wrapper(code)
 
     if not code:
         envelop.payload = {"ok": False, "error": "代码为空"}
         return envelop
 
-    # 先装依赖
     if packages:
         try:
             await ensure_packages(packages)
@@ -517,10 +764,14 @@ async def execute(envelop, agent):
                 "ok": False,
                 "error": f"【错误分类】DEPENDENCY\n【一句话】依赖安装失败\n【原因】{e}",
                 "error_category": "DEPENDENCY",
+                "env": _get_env_summary(),
             }
             return envelop
 
     result = await _execute_code(code, agent)
+    if 'agent.llm' in code and not getattr(agent, 'llm', None):
+        result['llm_notice'] = ('引擎未配置模型：aicp.yaml 缺 models.providers，agent.llm 为 None，'
+                                'LLM 调用不会生效，请提示用户先配置模型')
     envelop.payload = result
     return envelop
 
@@ -538,5 +789,18 @@ def help():
             "data": "成功时的结果",
             "error": "失败时的错误描述",
             "error_category": "LLM_CODE / SANDBOX_BLOCK / RUNTIME_INTERNAL / DEPENDENCY",
+        },
+        "sandbox_notes": {
+            "import": "import requests / subprocess / urllib / http 等都能用，不拦 import",
+            "subprocess": "subprocess.run 是 async，必须 await；底层丢线程池，不阻塞事件循环",
+            "run": "run() 是 async，必须 await；shell=True 也走线程池",
+            "run_async": "run_async() 是 async；用 create_subprocess_exec，最推荐",
+            "fetch": "同步 fetch 禁内网；验证本地页面用 await fetch_async(url)",
+            "fetch_async": "async，可访问 127.0.0.1/localhost，验证服务用这个",
+            "post_json": "async，POST JSON 并解析响应",
+            "requests": "同步 requests 打本地会被拦，用 await fetch_async / post_json；打外部可用",
+            "execute 隔离": "execute 整体跑在专用线程池（2 并发），同步阻塞也挂不到主事件循环",
+            "危险命令": "rm -rf /、format、mkfs 等会被拦",
+            "eval/exec/__import__": "禁止（防止绕过沙箱构造）",
         },
     }

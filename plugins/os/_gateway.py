@@ -10,6 +10,10 @@ import json
 import asyncio
 
 
+# 免登录即可访问的静态页面（其余 .html 需 token 鉴权）
+PUBLIC_PAGES = {'index.html', '404.html'}
+
+
 async def execute(envelop, agent):
     action = envelop.payload.get("action", "START")
 
@@ -26,9 +30,14 @@ async def execute(envelop, agent):
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type, X-AICP-Token, Authorization",
+                    "Access-Control-Allow-Private-Network": "true",
+                    "Access-Control-Allow-Local-Network": "true",
+                    "Access-Control-Max-Age": "600",
                 })
             resp = await handler(request)
             resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Private-Network"] = "true"
+            resp.headers["Access-Control-Allow-Local-Network"] = "true"
             return resp
 
         app.middlewares.append(cors)
@@ -63,6 +72,10 @@ async def execute(envelop, agent):
                 "token": token,
                 "authorization": request.headers.get("Authorization", ""),
                 "cookie_token": request.cookies.get("aicp_token", ""),
+                "remote": request.remote or "",
+                "forwarded_for": request.headers.get("X-Forwarded-For", ""),
+                "origin": request.headers.get("Origin", ""),
+                "host": request.host,
             }
             if envelop_meta:
                 meta.update(envelop_meta)
@@ -148,11 +161,17 @@ async def execute(envelop, agent):
                 })
 
             if path == "auth/verify":
-                ok, _ = await _verify_auth(request, agent, "auth/verify")
+                ok, auth_payload = await _verify_auth(request, agent, "auth/verify")
                 if ok:
-                    return web.json_response({"ok": True})
+                    auth_payload = auth_payload or {}
+                    return web.json_response({
+                        "ok": True,
+                        "user_id": auth_payload.get("user_id", "local"),
+                        "permissions": auth_payload.get("permissions", {}),
+                        "source": auth_payload.get("source", ""),
+                    })
                 else:
-                    return web.json_response({"ok": False}, status=401)
+                    return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
 
             MAX_BODY_SIZE = 10 * 1024 * 1024
             body = {}
@@ -186,7 +205,13 @@ async def execute(envelop, agent):
             if not isinstance(body, dict):
                 body = {"data": body}
 
-            body_meta = body.get("meta", {}) if isinstance(body.get("meta"), dict) else {}
+            raw_body_meta = body.get("meta", {}) if isinstance(body.get("meta"), dict) else {}
+
+            # ★ 剥掉前端可伪造的身份字段，不让它们进 env_meta
+            body_meta = {
+                k: v for k, v in raw_body_meta.items()
+                if k not in ("user_id", "auth_result", "token", "permissions")
+            }
 
             need_auth = not (_is_local(request) or _is_same_origin(request))
 
@@ -208,10 +233,29 @@ async def execute(envelop, agent):
                 "path": path,
                 "headers": {k: v for k, v in request.headers.items()},
                 "raw_body": raw_body.decode('utf-8', errors='ignore') if raw_body else "",
+                "remote": request.remote or "",
+                "forwarded_for": request.headers.get("X-Forwarded-For", ""),
+                "origin": request.headers.get("Origin", ""),
+                "host": request.host,
             }
 
+            # ★ 鉴权成功后，网关盖章 user_id；放在 **body_meta 之后，覆盖前端任何自报值
             if auth_payload:
                 env_meta["auth_result"] = auth_payload
+                env_meta["auth_user_id"] = auth_payload.get("user_id", "")
+                env_meta["auth_source"] = auth_payload.get("source", "")
+                env_meta["auth_permissions"] = auth_payload.get("permissions", {})
+                if auth_payload.get("user_id"):
+                    env_meta["user_id"] = auth_payload["user_id"]
+                elif need_auth:
+                    # 鉴权了但 _auth 没返回 user_id：拒绝，不落 local
+                    return web.json_response({"error": "auth did not return user_id"}, status=500)
+            elif not need_auth:
+                # 本地 / 同源放行：显式盖章为 local，让下游插件的 admin 判定能工作
+                env_meta["auth_user_id"] = "local"
+                env_meta["auth_source"] = "local"
+                env_meta["auth_permissions"] = {"*": True}
+                env_meta["user_id"] = "local"
 
             env = core.Envelop(
                 sender="os/_gateway",
@@ -250,7 +294,12 @@ async def execute(envelop, agent):
                     content_type=result.meta.get("content_type", "application/octet-stream"),
                 )
 
-            return web.json_response(result.payload if result.payload else {"ok": True})
+            # ★ 兜底序列化：payload 里混入 bytes/自定义对象时不应整条 500，
+            # 否则前端 res.json() 报 "Unexpected non-whitespace character after JSON"
+            return web.json_response(
+                result.result(),
+                dumps=lambda o: json.dumps(o, ensure_ascii=False, default=str),
+            )
 
         async def handle_static(request):
             file_path = request.match_info.get("path", "")
@@ -337,15 +386,13 @@ async def execute(envelop, agent):
                 return await _route_get("os/_static", request,
                                     action="serve_data", file_path=file_path[5:])
 
-            is_root_file = '/' not in file_path
-            is_login_page = file_path in ['login.html', '404.html']
+            is_public_page = file_path in PUBLIC_PAGES
 
-            if file_path.endswith('.html') and not is_login_page and is_root_file:
+            if file_path.endswith('.html') and not is_public_page:
                 ok, _ = await _verify_auth(request, agent, "__static__")
                 if not ok:
-                    from urllib.parse import quote
                     return web.Response(
-                        text=f'<script>location.href="/login.html?redirect={quote(request.path)}"</script>',
+                        text='<script>location.href="/"</script>',
                         content_type='text/html',
                     )
 
@@ -406,7 +453,7 @@ async def execute(envelop, agent):
                 status = 403 if "Forbidden" in str(result.payload.get("error", "")) else 404
                 return web.Response(text=result.payload["error"], status=status)
 
-            return web.json_response(result.payload if result.payload else {"ok": True})
+            return web.json_response(result.result())
 
         app.router.add_post("/v1/chat/completions", handle_v1_chat)
         app.router.add_post("/api/{path:.*}", handle_api)

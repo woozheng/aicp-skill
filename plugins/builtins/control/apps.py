@@ -57,7 +57,7 @@ async def execute(envelop, agent):
             return envelop
 
         import shutil
-        for d in [Path(f"plugins/applications/{app_id}"), Path(f"www/{app_id}")]:
+        for d in [Path(f"plugins/applications/{app_id}"), Path(f"www/apps/{app_id}")]:
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
 
@@ -69,6 +69,56 @@ async def execute(envelop, agent):
                 del core.plugins[route]
 
         envelop.payload = {"ok": True, "app_id": app_id}
+        return envelop
+
+    elif action == "list_frontend":
+        # 扫描 www/apps/ 下的前端应用（每个目录含 index.html）
+        import re
+        from pathlib import Path
+
+        title_re = re.compile(r"<title>(.*?)</title>", re.S | re.I)
+        apps = []
+        www_dir = Path("www/apps")
+        if www_dir.exists():
+            for d in sorted(www_dir.iterdir()):
+                if not d.is_dir() or d.name.startswith(".") or d.name == "__pycache__":
+                    continue
+                index_html = d / "index.html"
+                if not index_html.exists():
+                    continue
+
+                title = d.name
+                try:
+                    content = index_html.read_text(encoding="utf-8", errors="ignore")
+                    m = title_re.search(content)
+                    if m and m.group(1).strip():
+                        title = m.group(1).strip()
+                except Exception:
+                    pass
+
+                desc = ""
+                desc_en = ""
+                yaml_path = Path("plugins/applications") / d.name / "app.yaml"
+                if yaml_path.exists():
+                    try:
+                        import yaml
+                        cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+                        desc = cfg.get("description", "") or ""
+                        desc_en = cfg.get("description_en", "") or ""
+                        if title == d.name and cfg.get("name"):
+                            title = cfg.get("name")
+                    except Exception:
+                        pass
+
+                apps.append({
+                    "id": d.name,
+                    "name": title,
+                    "description": desc,
+                    "description_en": desc_en,
+                    "url": f"/apps/{d.name}/",
+                })
+
+        envelop.payload = {"ok": True, "apps": apps, "total": len(apps)}
         return envelop
 
     envelop.payload = {"error": f"Unknown action: {action}"}
