@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>AICP BIO-1 · Web Studio</title>
+<meta name="page-title" content="Web Studio">
+<meta name="page-title-en" content="Web Studio">
+<meta name="page-icon" content="🛠️">
+<meta name="page-desc" content="网页版代码开发：在线编辑与调试应用">
+<meta name="page-desc-en" content="Browser-based code development: edit and debug apps online">
+<link rel="stylesheet" href="/vendor/monaco/min/vs/editor/editor.main.css">
+<style>
+/* ============ Linear 深色 Token ============ */
+:root{
+  --bg:#08090A;
+  --surface:#16171C;
+  --surface-2:#1E1F25;
+  --surface-3:#25262D;
+  --border:rgba(255,255,255,0.06);
+  --border-strong:rgba(255,255,255,0.10);
+  --text:#F7F8F8;
+  --text-2:#B4B8C0;
+  --text-3:#8A8F98;
+  --text-4:#5C6068;
+  --brand:#5E6AD2;
+  --brand-hover:#6E79DB;
+  --brand-soft:rgba(94,106,210,0.12);
+  --ok:#4CB782;
+  --err:#E5484D;
+  --warn:#D9A441;
+  --radius:10px;
+  --radius-sm:6px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',Roboto,sans-serif;
+  --font-mono:'SF Mono',Menlo,Consolas,'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--font-sans);
+  background:var(--bg);
+  color:var(--text);
+  display:flex;
+  font-size:13px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ============ 左侧栏 ============ */
+.sidebar{
+  width:260px;
+  background:var(--surface);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;flex-shrink:0;
+  z-index:20;transition:width .22s ease;
+  overflow:hidden;height:100vh;
+}
+.sidebar-brand{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:48px;flex-shrink:0;
+  border-bottom:1px solid var(--border);position:relative;
+}
+.brand-mark{
+  width:22px;height:22px;border-radius:6px;
+  background:linear-gradient(135deg,#5E6AD2,#8B5CF6);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;color:#fff;flex-shrink:0;text-decoration:none;
+}
+.brand-name{
+  font-size:13px;font-weight:600;color:var(--text);
+  flex:1;white-space:nowrap;overflow:hidden;
+  display:flex;align-items:baseline;gap:5px;
+}
+.brand-name .sub{color:var(--text-3);font-weight:400;font-size:11px}
+.lang-toggle{
+  display:flex;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:2px;gap:2px;height:24px;align-items:center;flex-shrink:0;
+}
+.lang-toggle button{
+  border:none;background:transparent;padding:2px 7px;border-radius:4px;
+  font-size:10px;font-weight:500;height:18px;color:var(--text-3);
+  cursor:pointer;font-family:inherit;transition:.15s;line-height:1;
+}
+.lang-toggle button.active{background:var(--surface-3);color:var(--text)}
+.collapse-btn{
+  background:transparent;border:none;color:var(--text-3);cursor:pointer;
+  width:24px;height:24px;border-radius:4px;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:.15s;flex-shrink:0;font-size:14px;line-height:1;
+}
+.collapse-btn:hover{background:var(--surface-2);color:var(--text)}
+
+/* 项目选择区 */
+.sidebar-section{padding:12px 12px 8px;flex-shrink:0;display:flex;flex-direction:column;gap:8px}
+.sidebar-section select{
+  width:100%;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:7px 9px;color:var(--text);font-size:12px;
+  outline:none;font-family:inherit;transition:.15s;
+}
+.sidebar-section select:focus{border-color:var(--brand);background:var(--bg)}
+.sidebar-section option{background:var(--surface-2);color:var(--text)}
+.new-btn{
+  background:var(--brand);color:#fff;border:none;
+  border-radius:var(--radius-sm);padding:8px;
+  font-size:12px;cursor:pointer;font-weight:500;
+  font-family:inherit;transition:.15s;height:32px;white-space:nowrap;
+}
+.new-btn:hover{background:var(--brand-hover)}
+
+/* 文件树 */
+.file-tree{
+  flex:1;overflow-y:auto;padding:0 8px 8px;
+  font-family:var(--font-mono);font-size:11.5px;
+}
+.tree-item{
+  padding:5px 8px;cursor:pointer;border-radius:4px;
+  color:var(--text-2);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;transition:.12s;
+}
+.tree-item:hover{background:var(--surface-2);color:var(--text)}
+.tree-item.dir{color:var(--warn);font-weight:600}
+.tree-item.active{background:var(--brand-soft);color:var(--brand)}
+.tree-empty{padding:16px 10px;color:var(--text-4);font-size:11px;text-align:center}
+
+/* 底部动作 */
+.sidebar-footer{
+  display:flex;padding:6px;gap:4px;
+  border-top:1px solid var(--border);flex-shrink:0;background:var(--surface);
+}
+.footer-nav-btn{
+  flex:1;background:transparent;border:1px solid transparent;
+  border-radius:var(--radius-sm);padding:6px;
+  color:var(--text-3);font-size:11px;cursor:pointer;
+  font-family:inherit;transition:.15s;font-weight:500;
+  height:32px;display:inline-flex;align-items:center;justify-content:center;
+  gap:4px;white-space:nowrap;
+}
+.footer-nav-btn:hover{background:var(--surface-2);color:var(--text-2)}
+.sidebar-actions{
+  display:flex;padding:6px;gap:4px;
+  border-top:1px solid var(--border);flex-shrink:0;background:var(--surface);
+}
+.action-btn{
+  flex:1;background:transparent;border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:5px;
+  color:var(--text-3);font-size:11px;cursor:pointer;
+  font-family:inherit;transition:.15s;
+  height:26px;display:inline-flex;align-items:center;justify-content:center;
+  gap:4px;white-space:nowrap;
+}
+.action-btn:hover{background:var(--surface-2);color:var(--text);border-color:var(--border-strong)}
+
+/* 收起态 */
+.sidebar.collapsed{width:56px}
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .lang-toggle,
+.sidebar.collapsed .sidebar-section,
+.sidebar.collapsed .file-tree,
+.sidebar.collapsed .footer-nav-btn .txt,
+.sidebar.collapsed .action-btn .txt{display:none}
+.sidebar.collapsed .sidebar-brand{
+  flex-direction:column;padding:8px 0;height:auto;
+  gap:4px;justify-content:center;align-items:center;
+}
+.sidebar.collapsed .brand-mark{margin:0 auto}
+.sidebar.collapsed .collapse-btn{margin:0 auto}
+.sidebar.collapsed .sidebar-footer,
+.sidebar.collapsed .sidebar-actions{flex-direction:column;padding:6px 0;gap:0}
+.sidebar.collapsed .footer-nav-btn,
+.sidebar.collapsed .action-btn{
+  flex:0 0 auto;width:56px;height:32px;padding:0;border:none;
+  border-radius:0;font-size:14px;justify-content:center;
+}
+
+/* ============ 主区 ============ */
+.main{
+  flex:1;display:flex;flex-direction:column;
+  overflow:hidden;min-height:0;min-width:0;position:relative;
+}
+.editor-toolbar{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 14px;background:var(--surface);
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.editor-toolbar .fname{
+  flex:1;font-family:var(--font-mono);font-size:12px;
+  color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.tb-btn{
+  background:var(--surface-2);border:1px solid var(--border);
+  color:var(--text-2);border-radius:var(--radius-sm);
+  padding:5px 11px;font-size:11.5px;cursor:pointer;
+  font-family:inherit;transition:.15s;white-space:nowrap;
+}
+.tb-btn:hover{background:var(--surface-3);color:var(--text);border-color:var(--border-strong)}
+.tb-btn.primary{background:var(--brand);color:#fff;border-color:transparent}
+.tb-btn.primary:hover{background:var(--brand-hover)}
+.tb-btn.danger:hover{color:var(--err);border-color:rgba(229,72,77,.35)}
+#editorContainer{flex:1;min-height:0}
+.status{
+  padding:7px 14px;background:var(--surface);
+  border-top:1px solid var(--border);
+  font-size:11.5px;color:var(--text-3);flex-shrink:0;
+  display:flex;align-items:center;gap:8px;
+}
+.status .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex-shrink:0}
+
+/* 外部 AI 快捷入口 */
+.ai-links{display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px 4px}
+.ai-links a{
+  font-size:10.5px;color:var(--text-3);text-decoration:none;
+  padding:3px 7px;border:1px solid var(--border);border-radius:4px;transition:.15s;
+}
+.ai-links a:hover{color:var(--text);border-color:var(--border-strong);background:var(--surface-2)}
+</style>
+</head>
+<body>
+
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <a href="/" class="brand-mark" title="AICP Home">A</a>
+    <span class="brand-name">AICP <span class="sub">Studio</span></span>
+    <div class="lang-toggle" id="langToggle">
+      <button data-lang="zh">中</button>
+      <button data-lang="en" class="active">EN</button>
+    </div>
+    <button class="collapse-btn" onclick="toggleSidebar()" title="Collapse">☰</button>
+  </div>
+
+  <div class="sidebar-section">
+    <select id="projectSelect" onchange="selectProject(this.value)"></select>
+    <button class="new-btn" onclick="newProject()"><span data-i18n="studio.newProject">+ New project</span></button>
+  </div>
+
+  <div class="file-tree" id="fileTree"></div>
+
+  <div class="sidebar-footer">
+    <button class="footer-nav-btn" onclick="showSaveBookmark()" title="Bookmark">📌<span class="txt" data-i18n="studio.bookmark">Bookmark</span></button>
+    <button class="footer-nav-btn" onclick="copyProtocol()" title="Protocol">📡<span class="txt" data-i18n="studio.protocol">Protocol</span></button>
+    <button class="footer-nav-btn" onclick="previewProject()" title="Preview">👁<span class="txt" data-i18n="studio.preview">Preview</span></button>
+  </div>
+
+  <div class="sidebar-actions">
+    <button class="action-btn" onclick="refreshFileTree()" title="Refresh">↻<span class="txt" data-i18n="studio.refresh">Refresh</span></button>
+    <button class="action-btn" onclick="logout()" title="Logout">⏻<span class="txt" data-i18n="nav.logout">Logout</span></button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="editor-toolbar">
+    <span class="fname" id="editorFileName" data-i18n="studio.noFile">No file opened</span>
+    <button class="tb-btn primary" onclick="saveFile()">💾 <span data-i18n="studio.save">Save</span></button>
+    <button class="tb-btn danger" onclick="deleteFile()">🗑 <span data-i18n="studio.delete">Delete</span></button>
+  </div>
+  <div id="editorContainer"></div>
+  <div class="status"><span class="dot"></span><span id="statusBar" data-i18n="studio.ready">Ready</span></div>
+  <div class="ai-links">
+    <a href="https://chat.deepseek.com" target="_blank">DeepSeek</a>
+    <a href="https://www.doubao.com/chat" target="_blank">Doubao</a>
+    <a href="https://tongyi.aliyun.com" target="_blank">Qwen</a>
+    <a href="https://claude.ai" target="_blank">Claude</a>
+    <a href="https://kimi.moonshot.cn" target="_blank">Kimi</a>
+  </div>
+</div>
+
+<script src="/vendor/monaco/min/vs/loader.js"></script>
+<script>
+// ============ i18n ============
+var I18N = {
+  zh: {
+    'nav.logout':'退出',
+    'studio.newProject':'+ 新建项目','studio.selectProject':'选择项目...',
+    'studio.bookmark':'书签','studio.protocol':'协议','studio.preview':'预览',
+    'studio.refresh':'刷新','studio.save':'保存','studio.delete':'删除',
+    'studio.noFile':'未打开文件','studio.ready':'就绪','studio.noFiles':'暂无文件',
+    'studio.promptName':'项目名称（英文）:',
+    'studio.protocolCopied':'✅ 协议已复制到剪贴板，请粘贴到聊天框发送',
+    'studio.protocolMissing':'协议文件不存在',
+    'studio.noPreview':'没有可预览的 HTML 文件',
+    'studio.needProject':'请先选择项目',
+    'studio.saved':'✅ 已保存: ','studio.deleted':'✅ 已删除',
+    'studio.currentProject':'📁 当前项目: ',
+    'studio.confirmDelete':'确认删除？',
+    'studio.unauthorized':'未授权，请重新登录'
+  },
+  en: {
+    'nav.logout':'Logout',
+    'studio.newProject':'+ New project','studio.selectProject':'Select project...',
+    'studio.bookmark':'Bookmark','studio.protocol':'Protocol','studio.preview':'Preview',
+    'studio.refresh':'Refresh','studio.save':'Save','studio.delete':'Delete',
+    'studio.noFile':'No file opened','studio.ready':'Ready','studio.noFiles':'No files',
+    'studio.promptName':'Project name (english):',
+    'studio.protocolCopied':'✅ Protocol copied to clipboard, paste it into the chat box',
+    'studio.protocolMissing':'Protocol file not found',
+    'studio.noPreview':'No previewable HTML file',
+    'studio.needProject':'Select a project first',
+    'studio.saved':'✅ Saved: ','studio.deleted':'✅ Deleted',
+    'studio.currentProject':'📁 Project: ',
+    'studio.confirmDelete':'Delete this file?',
+    'studio.unauthorized':'Unauthorized, please sign in again'
+  }
+};
+var _lang = localStorage.getItem('aicp_lang') || 'en';
+function t(key){ return (I18N[_lang] && I18N[_lang][key]) || key; }
+function applyLang(lang){
+  _lang = lang;
+  localStorage.setItem('aicp_lang', lang);
+  document.documentElement.lang = (lang === 'zh' ? 'zh-CN' : 'en');
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    var k = el.getAttribute('data-i18n');
+    var v = I18N[lang] && I18N[lang][k];
+    if (v !== undefined) el.textContent = v;
+  });
+  document.querySelectorAll('#langToggle button').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-lang') === lang);
+  });
+  var sel = document.getElementById('projectSelect');
+  if (sel && sel.options.length) sel.options[0].textContent = t('studio.selectProject');
+  var st = document.getElementById('statusBar');
+  if (st && st.getAttribute('data-static') !== '1') st.textContent = t('studio.ready');
+}
+document.getElementById('langToggle').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-lang]');
+  if (b) applyLang(b.getAttribute('data-lang'));
+});
+
+// ============ 基础 ============
+const ENGINE = window.location.origin;
+const API = ENGINE + '/api/builtins/studio/api';
+let currentProject = localStorage.getItem('aicp_current_project') || '';
+let currentFile = null;
+let editor = null;
+
+function getToken() {
+  var m = document.cookie.match(/aicp_token=([^;]+)/);
+  if (m) return decodeURIComponent(m[1]);
+  return localStorage.getItem('aicp_token') || '';
+}
+function setStatus(msg, sticky) {
+  var el = document.getElementById('statusBar');
+  el.textContent = msg;
+  if (sticky) el.setAttribute('data-static','1'); else el.removeAttribute('data-static');
+}
+function apiFetch(url, body) {
+  var headers = {'Content-Type':'application/json'};
+  var token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return fetch(url, {method:'POST', headers:headers, body: JSON.stringify(body)});
+}
+async function api(action, data) {
+  data = data || {};
+  var r = await apiFetch(API, Object.assign({action: action}, data));
+  if (r.status === 401) {
+    localStorage.removeItem('aicp_token');
+    document.cookie = 'aicp_token=; path=/; max-age=0';
+    location.href = '/';
+    return {ok:false, error:'unauthorized'};
+  }
+  return await r.json();
+}
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+function logout() {
+  document.cookie = 'aicp_token=; path=/; max-age=0';
+  localStorage.removeItem('aicp_token');
+  localStorage.removeItem('aicp_current_project');
+  location.href = '/';
+}
+
+// ============ 书签 ============
+function showSaveBookmark(){
+  var key = getToken();
+  var c = "javascript:(function(){const T='" + key + "';let P=localStorage.getItem('aicp_save_project')||'';const p=prompt('保存到项目（留空存入缓存区）:',P);if(p===null)return;if(p)localStorage.setItem('aicp_save_project',p);const h={'Content-Type':'application/json'};if(T)h['Authorization']='Bearer '+T;const gt=()=>navigator.clipboard&&navigator.clipboard.readText?Promise.resolve(navigator.clipboard.readText()).catch(()=>Promise.resolve(prompt('剪贴板读取失败，请手动粘贴内容:',''))):Promise.resolve(prompt('请粘贴要保存的内容:',''));gt().then(t=>{if(t===null||t===undefined)return;fetch('" + ENGINE + "/api/builtins/studio/api',{method:'POST',headers:h,body:JSON.stringify({action:'save_blocks',text:t,app_id:p})}).then(r=>r.json()).then(d=>{if(d.ok){try{const bc=new BroadcastChannel('aicp_studio');bc.postMessage({type:'refresh'});bc.close();}catch(e){}alert('✅ 已保存 '+(d.count||0)+' 个文件到 '+(p||'缓存区')+'\\n'+((d.saved||[]).join('\\n')||''));}else{alert('❌ 保存失败: '+(d.error||'未知错误'))}}).catch(e=>alert('❌ 网络错误: '+e.message))})})();";
+  var ta = document.createElement('textarea');
+  ta.value = c; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+  document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+  alert('保存书签代码已复制！\n\n1. 浏览器新建书签\n2. 名称填 "AICP保存"\n3. 网址粘贴刚才复制的内容\n\n之后在任何 AI 网页上：\nCtrl+A → Ctrl+C → 点书签 → 选择项目 → 自动保存');
+}
+
+// ============ 协议 ============
+async function copyProtocol(){
+  try{
+    var d = await api('get_protocol');
+    if (d.protocol){
+      await navigator.clipboard.writeText(d.protocol);
+      setStatus(t('studio.protocolCopied'));
+      alert(t('studio.protocolCopied'));
+    } else {
+      alert(t('studio.protocolMissing'));
+    }
+  }catch(e){ alert('Failed: ' + e.message); }
+}
+
+// ============ Monaco ============
+window.MonacoEnvironment = {
+  getWorkerUrl: function(moduleId, label){
+    var code = "self.MonacoEnvironment = { baseUrl: '/vendor/monaco/min/vs/' };\nimportScripts('/vendor/monaco/min/vs/base/worker/workerMain.js');";
+    return URL.createObjectURL(new Blob([code], {type:'text/javascript'}));
+  }
+};
+require.config({paths:{vs:'/vendor/monaco/min/vs'}});
+require(['vs/editor/editor.main'], function(){
+  editor = monaco.editor.create(document.getElementById('editorContainer'), {
+    value:'', language:'plaintext', theme:'vs-dark', automaticLayout:true,
+    fontSize:13, minimap:{enabled:false}, scrollBeyondLastLine:false
+  });
+});
+
+// ============ 项目 ============
+async function loadProjects(){
+  try{
+    var d = await api('list_projects');
+    var s = document.getElementById('projectSelect');
+    s.innerHTML = '';
+    var opt = document.createElement('option');
+    opt.value = ''; opt.textContent = t('studio.selectProject');
+    s.appendChild(opt);
+    (d.projects || []).forEach(function(p){
+      var o = document.createElement('option');
+      o.value = p; o.textContent = p;
+      s.appendChild(o);
+    });
+    if (currentProject) s.value = currentProject;
+  }catch(e){}
+}
+async function selectProject(name){
+  currentProject = name;
+  localStorage.setItem('aicp_current_project', name);
+  await refreshFileTree();
+  setStatus(name ? (t('studio.currentProject') + name) : t('studio.ready'));
+}
+async function newProject(){
+  var n = prompt(t('studio.promptName'));
+  if (!n) return;
+  await api('write_file', {path:'plugins/applications/' + n + '/app.yaml', content:'name: ' + n + '\nversion: 1.0.0\nauto_start: false\ninit_action: init\n'});
+  await api('write_file', {path:'www/apps/' + n + '/index.html', content:'<h1>Hello AICP</h1>'});
+  await loadProjects();
+  selectProject(n);
+}
+
+async function refreshFileTree(){
+  var box = document.getElementById('fileTree');
+  if (!currentProject){ box.innerHTML = '<div class="tree-empty">' + t('studio.noFiles') + '</div>'; return; }
+  try{
+    var d = await api('list_files', {app_id: currentProject});
+    box.innerHTML = '';
+    var any = false;
+    ['www','plugins','data'].forEach(function(s){
+      var f = (d.tree && d.tree[s]) || [];
+      if (!f.length) return;
+      any = true;
+      var dir = document.createElement('div');
+      dir.className = 'tree-item dir';
+      dir.textContent = s + '/';
+      dir.onclick = function(){ toggleDir(dir); };
+      box.appendChild(dir);
+      var wrap = document.createElement('div');
+      wrap.style.display = 'none';
+      f.forEach(function(i){
+        var el = document.createElement('div');
+        var depth = (i.name.split('/').length - 1) * 10 + 10;
+        el.className = 'tree-item';
+        el.style.paddingLeft = depth + 'px';
+        el.textContent = i.name.split('/').pop();
+        el.title = i.path;
+        if (!i.dir){
+          el.onclick = function(){ openFile(i.path, el); };
+          if (i.path === currentFile) el.classList.add('active');
+        } else {
+          el.style.color = 'var(--warn)';
+        }
+        wrap.appendChild(el);
+      });
+      box.appendChild(wrap);
+    });
+    if (!any) box.innerHTML = '<div class="tree-empty">' + t('studio.noFiles') + '</div>';
+  }catch(e){
+    box.innerHTML = '<div class="tree-empty">' + t('studio.unauthorized') + '</div>';
+  }
+}
+function toggleDir(el){
+  var n = el.nextElementSibling;
+  if (n && n.tagName === 'DIV'){
+    n.style.display = (n.style.display === 'none') ? 'block' : 'none';
+  }
+}
+
+async function openFile(path, el){
+  var ext = path.split('.').pop().toLowerCase();
+  if (['png','jpg','jpeg','gif','webp','mp4','mp3','wav','zip'].indexOf(ext) >= 0){
+    if (path.indexOf('www/') === 0){
+      window.open(ENGINE + '/apps/' + currentProject + '/' + path.split('/').slice(3).join('/'), '_blank');
+    } else {
+      window.open(ENGINE + '/api/builtins/studio/api?path=' + encodeURIComponent(path), '_blank');
+    }
+    return;
+  }
+  try{
+    var d = await api('read_file', {path: path});
+    var m = {py:'python', md:'markdown', yaml:'yaml', yml:'yaml', html:'html', htm:'html',
+             css:'css', js:'javascript', json:'json', xml:'xml', txt:'plaintext'};
+    monaco.editor.setModelLanguage(editor.getModel(), m[ext] || 'plaintext');
+    editor.setValue(d.content || '');
+    document.getElementById('editorFileName').textContent = path.split('/').pop();
+    currentFile = path;
+    document.querySelectorAll('.tree-item.active').forEach(function(x){ x.classList.remove('active'); });
+    if (el) el.classList.add('active');
+    setStatus(t('studio.currentProject') + currentProject + '  ·  ' + path);
+  }catch(e){}
+}
+
+async function saveFile(){
+  if (!currentFile || !editor) return;
+  var r = await api('write_file', {path: currentFile, content: editor.getValue()});
+  if (r && r.ok) setStatus(t('studio.saved') + currentFile);
+  else setStatus('Save failed: ' + ((r && r.error) || 'unknown'));
+}
+async function deleteFile(){
+  if (!currentFile) return;
+  if (!confirm(t('studio.confirmDelete'))) return;
+  await api('delete_file', {path: currentFile});
+  currentFile = null;
+  if (editor) editor.setValue('');
+  document.getElementById('editorFileName').textContent = t('studio.noFile');
+  setStatus(t('studio.deleted'));
+  refreshFileTree();
+}
+
+// ============ 预览 ============
+async function previewProject(){
+  if (!currentProject){ alert(t('studio.needProject')); return; }
+  try{
+    var d = await api('list_files', {app_id: currentProject});
+    var w = ((d.tree && d.tree.www) || []).filter(function(f){ return !f.dir && f.name.endsWith('.html'); });
+    if (!w.length){ alert(t('studio.noPreview')); return; }
+    if (w.length === 1){
+      window.open(ENGINE + '/apps/' + currentProject + '/' + w[0].name, '_blank');
+    } else {
+      var l = '多个预览页面:\n\n';
+      w.forEach(function(f, i){ l += (i + 1) + '. ' + f.name + '\n'; });
+      l += '\n输入序号打开，或输入 0 全部打开:';
+      var c = prompt(l, '1');
+      if (!c) return;
+      var idx = parseInt(c);
+      if (idx === 0) w.forEach(function(f){ window.open(ENGINE + '/apps/' + currentProject + '/' + f.name, '_blank'); });
+      else if (idx > 0 && idx <= w.length) window.open(ENGINE + '/apps/' + currentProject + '/' + w[idx-1].name, '_blank');
+    }
+  }catch(e){ alert('Failed: ' + e.message); }
+}
+
+// ============ 广播 ============
+try{
+  var bc = new BroadcastChannel('aicp_studio');
+  bc.onmessage = function(e){
+    if (e.data && e.data.type === 'refresh'){
+      refreshFileTree();
+      setStatus(t('studio.currentProject') + currentProject);
+    }
+  };
+}catch(e){}
+
+// ============ 启动 ============
+applyLang(_lang);
+loadProjects().then(function(){
+  if (currentProject) return selectProject(currentProject);
+  refreshFileTree();
+});
+</script>
+</body>
+</html>

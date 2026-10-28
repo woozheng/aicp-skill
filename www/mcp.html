@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AICP — MCP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { background: #0a0a0f; color: #e5e7eb; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+body { min-height: 100vh; display: flex; flex-direction: column; }
+nav { position: sticky; top: 0; z-index: 100; background: rgba(10,10,15,0.75); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.06); }
+.nav-inner { max-width: 1120px; margin: 0 auto; padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; }
+.nav-logo { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 700; color: #f9fafb; text-decoration: none; letter-spacing: -0.01em; }
+.nav-logo-icon { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg,#8b5cf6,#6366f1,#3b82f6); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: white; }
+.nav-links { display: flex; align-items: center; gap: 28px; list-style: none; }
+.nav-links a { font-size: 14px; font-weight: 500; color: #9ca3af; text-decoration: none; transition: color 0.2s; }
+.nav-links a:hover, .nav-links a.active { color: #e5e7eb; }
+.nav-cta { display: flex; align-items: center; gap: 10px; }
+.nav-btn-ghost { background: transparent; color: #c4b5fd; border: 1px solid rgba(139,92,246,0.3); padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; transition: all 0.2s; }
+.nav-btn-ghost:hover { background: rgba(139,92,246,0.1); border-color: rgba(139,92,246,0.5); }
+.nav-btn-primary { background: linear-gradient(135deg,#8b5cf6,#6366f1); color: white; border: none; padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; transition: all 0.2s; box-shadow: 0 4px 14px rgba(139,92,246,0.3); }
+.nav-btn-primary:hover { box-shadow: 0 6px 20px rgba(139,92,246,0.45); transform: translateY(-1px); }
+.lang-toggle { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #9ca3af; padding: 6px 10px; border-radius: 6px; font-size: 12px; font-family: 'JetBrains Mono', monospace; cursor: pointer; transition: all 0.2s; }
+.lang-toggle:hover { color: #e5e7eb; border-color: rgba(255,255,255,0.2); }
+.hamburger { display: none; background: none; border: none; cursor: pointer; padding: 6px; color: #9ca3af; }
+.page-header { position: relative; padding: 70px 24px 40px; text-align: center; overflow: hidden; }
+.page-header::before { content: ''; position: absolute; top: -100px; left: 50%; transform: translateX(-50%); width: 700px; height: 500px; background: radial-gradient(circle, rgba(139,92,246,0.15), transparent 60%); pointer-events: none; }
+.page-header h1 { font-size: clamp(32px,5vw,52px); font-weight: 800; letter-spacing: -0.03em; margin-bottom: 14px; position: relative; z-index: 2; }
+.page-header h1 .grad { background: linear-gradient(135deg,#c4b5fd,#818cf8,#60a5fa); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.page-header p { font-size: 16px; color: #9ca3af; max-width: 620px; margin: 0 auto; line-height: 1.6; position: relative; z-index: 2; }
+.section { max-width: 1120px; width: 100%; margin: 0 auto; padding: 30px 24px; }
+.section-title { font-size: 22px; font-weight: 700; color: #f3f4f6; letter-spacing: -0.01em; margin-bottom: 6px; }
+.section-sub { font-size: 14px; color: #6b7280; margin-bottom: 20px; line-height: 1.6; }
+.endpoint { background: rgba(20,20,28,0.5); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 22px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; }
+.endpoint-row { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.endpoint-key { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; font-weight: 600; }
+.endpoint-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #c4b5fd; word-break: break-all; }
+.endpoint-val.plain { color: #e5e7eb; }
+.tool-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; }
+.tool-card { background: rgba(20,20,28,0.5); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 22px 20px; display: flex; flex-direction: column; gap: 8px; transition: all 0.3s ease; }
+.tool-card:hover { transform: translateY(-3px); border-color: rgba(139,92,246,0.3); }
+.tool-name { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; color: #a78bfa; }
+.tool-card p { font-size: 13px; color: #9ca3af; line-height: 1.55; flex: 1; }
+.tool-tag { align-self: flex-start; font-size: 11px; color: #6b7280; border: 1px solid rgba(255,255,255,0.08); border-radius: 999px; padding: 2px 8px; }
+.client-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.client-tab { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #9ca3af; padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; transition: all 0.2s; }
+.client-tab:hover { color: #e5e7eb; }
+.client-tab.active { background: rgba(139,92,246,0.14); border-color: rgba(139,92,246,0.4); color: #c4b5fd; }
+.client-panel { display: none; }
+.client-panel.active { display: block; }
+.code-block { position: relative; background: #0d0d14; border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; overflow: hidden; }
+.code-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; color: #6b7280; font-family: 'JetBrains Mono', monospace; }
+.copy-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #9ca3af; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-family: 'JetBrains Mono', monospace; cursor: pointer; transition: all 0.2s; }
+.copy-btn:hover { color: #e5e7eb; border-color: rgba(255,255,255,0.22); }
+.code-block pre { padding: 16px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.7; color: #c7d2fe; }
+.note { margin-top: 12px; font-size: 12.5px; color: #6b7280; line-height: 1.6; }
+.note code { font-family: 'JetBrains Mono', monospace; color: #a78bfa; background: rgba(139,92,246,0.1); padding: 1px 5px; border-radius: 4px; }
+footer { border-top: 1px solid rgba(255,255,255,0.05); padding: 40px 24px; margin-top: auto; }
+.footer-inner { max-width: 1120px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.footer-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; color: #d1d5db; font-size: 15px; }
+.footer-copy { font-size: 13px; color: #6b7280; }
+.footer-links { display: flex; gap: 20px; align-items: center; }
+.footer-links a { color: #9ca3af; text-decoration: none; font-size: 13px; transition: color 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+.footer-links a:hover { color: #e5e7eb; }
+.footer-links svg { width: 14px; height: 14px; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 24px; }
+.modal-card { background: #14141c; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 28px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.modal-title { font-size: 18px; font-weight: 700; color: #f3f4f6; margin-bottom: 6px; }
+.modal-desc { font-size: 13px; color: #9ca3af; margin-bottom: 18px; line-height: 1.5; }
+.modal-input { width: 100%; padding: 11px 14px; background: #0a0a0f; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; color: #e5e7eb; font-size: 14px; font-family: 'JetBrains Mono', monospace; outline: none; transition: border-color 0.2s; margin-bottom: 12px; }
+.modal-input:focus { border-color: rgba(139,92,246,0.5); }
+.modal-error { color: #f87171; font-size: 12px; margin-bottom: 12px; display: none; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+@media (max-width: 1024px) { .tool-grid { grid-template-columns: repeat(2,1fr); } .nav-links { display: none; } }
+.mcp-directions { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 22px; position: relative; z-index: 2; flex-wrap: wrap; }
+.dir-tag { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(139,92,246,0.25); background: rgba(139,92,246,0.08); color: #c4b5fd; }
+.dir-tag:nth-child(3) { border-color: rgba(96,165,250,0.25); background: rgba(96,165,250,0.08); color: #93c5fd; }
+.dir-arrow { color: #6b7280; font-size: 16px; }
+.mcp-section { border-top: 1px solid rgba(255,255,255,0.06); padding-top: 36px; margin-top: 12px; }
+.mcp-section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.mcp-section-badge { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 10px; border-radius: 6px; }
+.mcp-section-badge.server { background: rgba(139,92,246,0.12); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.25); }
+.mcp-section-badge.client { background: rgba(96,165,250,0.12); color: #93c5fd; border: 1px solid rgba(96,165,250,0.25); }
+.mcp-section-title { font-size: 20px; font-weight: 700; color: #f3f4f6; letter-spacing: -0.01em; }
+.client-intro { background: rgba(20,20,28,0.5); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.client-intro p { font-size: 14px; color: #9ca3af; line-height: 1.7; }
+.client-intro strong { color: #e5e7eb; }
+.client-how { background: rgba(15,23,42,0.6); border: 1px solid rgba(96,165,250,0.15); border-radius: 12px; padding: 18px 20px; }
+.client-how h4 { font-size: 13px; font-weight: 600; color: #93c5fd; margin-bottom: 10px; letter-spacing: 0.02em; }
+.client-how code { font-family: 'JetBrains Mono', monospace; color: #a78bfa; background: rgba(139,92,246,0.1); padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+.client-how pre { margin-top: 10px; padding: 12px 14px; background: #0a0a0f; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #c7d2fe; line-height: 1.6; overflow-x: auto; }
+@media (max-width: 640px) { .tool-grid { grid-template-columns: 1fr; } .endpoint { grid-template-columns: 1fr; } .page-header { padding: 50px 20px 30px; } .nav-cta .nav-btn-ghost { display: none; } .client-intro { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">
+      <span class="nav-logo-icon">A</span>
+      AICP
+    </a>
+    <ul class="nav-links">
+      <li><a href="/" data-i18n="nav.home">Home</a></li>
+      <li><a href="/console" data-i18n="nav.console">Console</a></li>
+      <li><a href="/applications" data-i18n="nav.apps">Applications</a></li>
+      <li><a href="/mcp" class="active" data-i18n="nav.mcp">MCP</a></li>
+    </ul>
+    <div class="nav-cta">
+      <button class="lang-toggle" id="langToggle" onclick="toggleLang()">EN</button>
+      <button class="nav-btn-ghost" id="navToken" onclick="openTokenModal()" data-i18n="nav.token">Token</button>
+      <button class="nav-btn-ghost" id="navLogout" onclick="logoutHome()" title="Logout">⏻</button>
+      <a href="/console" class="nav-btn-primary" data-i18n="nav.getStarted">Get Started</a>
+    </div>
+    <button class="hamburger" aria-label="Menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+  </div>
+</nav>
+
+<section class="page-header">
+  <h1><span class="grad" data-i18n="mcp.title">AICP · 双向 MCP 节点</span></h1>
+  <p data-i18n="mcp.sub">对外是 MCP Server，对内是 MCP Client —— 一边把能力暴露给 AI 工具，一边把外部工具吸进 AICP。</p>
+  <div class="mcp-directions">
+    <span class="dir-tag" data-i18n="mcp.dirServer">MCP Server · 向外提供能力</span>
+    <span class="dir-arrow">⇄</span>
+    <span class="dir-tag" data-i18n="mcp.dirClient">MCP Client · 向内吸收能力</span>
+  </div>
+</section>
+
+<section class="section">
+  <div class="mcp-section-head">
+    <span class="mcp-section-badge server" data-i18n="mcp.serverBadge">As a Server</span>
+    <span class="mcp-section-title" data-i18n="mcp.serverTitle">向外提供能力</span>
+  </div>
+  <div class="section-sub mcp-server-intro" data-i18n="mcp.serverIntro">AICP doesn't just expose a handful of tool calls — it exposes an entire <strong>orchestration-ready engineering runtime</strong>. Every backend plugin from apps you've generated, every internal skill you've accumulated, BIO-1's self-orchestration capability, and system-level primitives like files, tasks, and memory — all reachable through five meta-tools. What your AI client gets is a working agent OS, not a pile of scattered APIs.</div>
+  <div class="section-title" data-i18n="mcp.endpointTitle">Endpoint</div>
+  <div class="section-sub" data-i18n="mcp.endpointSub">The MCP server runs as a separate process on port 9100, alongside the HTTP gateway on 9000.</div>
+  <div class="endpoint">
+    <div class="endpoint-row">
+      <div class="endpoint-key" data-i18n="mcp.url">URL</div>
+      <div class="endpoint-val">http://127.0.0.1:9100/mcp</div>
+    </div>
+    <div class="endpoint-row">
+      <div class="endpoint-key" data-i18n="mcp.transport">Transport</div>
+      <div class="endpoint-val plain">Streamable HTTP &mdash; POST</div>
+    </div>
+    <div class="endpoint-row">
+      <div class="endpoint-key" data-i18n="mcp.auth">Authorization</div>
+      <div class="endpoint-val">Authorization: Bearer &lt;token&gt;</div>
+    </div>
+    <div class="endpoint-row">
+      <div class="endpoint-key" data-i18n="mcp.session">Session</div>
+      <div class="endpoint-val plain">Mcp-Session-Id</div>
+    </div>
+  </div>
+  <div class="note" data-i18n="mcp.authNote">In <code>local</code> mode the token is optional. In <code>token</code> / <code>hybrid</code> mode sign a token from the Admin page first.</div>
+</section>
+
+<section class="section">
+  <div class="section-title" data-i18n="mcp.toolsTitle">Exposed tools</div>
+  <div class="section-sub" data-i18n="mcp.toolsSub">Five meta-tools. Everything else is reachable through them — no context explosion.</div>
+  <div class="tool-grid">
+    <div class="tool-card">
+      <div class="tool-name">call_plugin</div>
+      <p data-i18n="mcp.tool.callPlugin">Call any AICP plugin by its full route. The core of the bridge.</p>
+      <span class="tool-tag">receiver</span>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">list_capabilities</div>
+      <p data-i18n="mcp.tool.listCaps">Discover what AICP can do — search plugins by keyword or list them all.</p>
+      <span class="tool-tag">optional</span>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">get_contract</div>
+      <p data-i18n="mcp.tool.getContract">Get a plugin's parameter contract and usage notes before calling it.</p>
+      <span class="tool-tag">plugin</span>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">my_memory</div>
+      <p data-i18n="mcp.tool.myMemory">Your experience backpack — stored on the AICP side, survives switching clients.</p>
+      <span class="tool-tag">optional</span>
+    </div>
+    <div class="tool-card">
+      <div class="tool-name">my_tasks</div>
+      <p data-i18n="mcp.tool.myTasks">Your task board — resume, update and close work from any MCP client.</p>
+      <span class="tool-tag">optional</span>
+    </div>
+  </div>
+</section><section class="section">
+  <div class="section-title" data-i18n="mcp.clientTitle">Client setup</div>
+  <div class="section-sub" data-i18n="mcp.clientSub">Paste into your client's MCP configuration. Replace <code>&lt;token&gt;</code> with the token from the Admin page.</div>
+
+  <div class="client-tabs" id="clientTabs">
+    <button class="client-tab active" data-client="claude_code">Claude Code</button>
+    <button class="client-tab" data-client="cursor">Cursor</button>
+    <button class="client-tab" data-client="cline">Cline</button>
+    <button class="client-tab" data-client="vscode">VS Code</button>
+    <button class="client-tab" data-client="codex">Codex</button>
+    <button class="client-tab" data-client="claude_desktop">Claude Desktop</button>
+  </div>
+
+  <div class="client-panel active" data-panel="claude_code">
+    <div class="code-block">
+      <div class="code-head"><span>~/.claude.json</span><button class="copy-btn" data-copy="cc" data-i18n="common.copy">Copy</button></div>
+<pre><code>{
+  "mcpServers": {
+    "aicp": {
+      "type": "http",
+      "url": "http://127.0.0.1:9100/mcp",
+      "headers": {
+        "Authorization": "Bearer &lt;token&gt;"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+    <div class="note" data-i18n="mcp.note.claudeCode">Claude Code supports <code>type: "http"</code> directly — no bridge needed.</div>
+  </div>
+
+  <div class="client-panel" data-panel="cursor">
+    <div class="code-block">
+      <div class="code-head"><span>~/.cursor/mcp.json</span><button class="copy-btn" data-copy="cursor" data-i18n="common.copy">Copy</button></div>
+<pre><code>{
+  "mcpServers": {
+    "aicp": {
+      "type": "http",
+      "url": "http://127.0.0.1:9100/mcp",
+      "headers": {
+        "Authorization": "Bearer &lt;token&gt;"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+  </div>
+
+  <div class="client-panel" data-panel="cline">
+    <div class="code-block">
+      <div class="code-head"><span>cline_mcp_settings.json</span><button class="copy-btn" data-copy="cline" data-i18n="common.copy">Copy</button></div>
+<pre><code>{
+  "mcpServers": {
+    "aicp": {
+      "type": "streamableHttp",
+      "url": "http://127.0.0.1:9100/mcp",
+      "disabled": false,
+      "headers": {
+        "Authorization": "Bearer &lt;token&gt;"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+    <div class="note" data-i18n="mcp.note.cline">Cline wants <code>type: "streamableHttp"</code> and an explicit <code>disabled: false</code>.</div>
+  </div>
+
+  <div class="client-panel" data-panel="vscode">
+    <div class="code-block">
+      <div class="code-head"><span>.vscode/mcp.json</span><button class="copy-btn" data-copy="vscode" data-i18n="common.copy">Copy</button></div>
+<pre><code>{
+  "servers": {
+    "aicp": {
+      "type": "http",
+      "url": "http://127.0.0.1:9100/mcp",
+      "headers": {
+        "Authorization": "Bearer &lt;token&gt;"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+    <div class="note" data-i18n="mcp.note.vscode">VS Code uses <code>servers</code>, not <code>mcpServers</code>.</div>
+  </div>
+
+  <div class="client-panel" data-panel="codex">
+    <div class="code-block">
+      <div class="code-head"><span>~/.codex/config.toml</span><button class="copy-btn" data-copy="codex" data-i18n="common.copy">Copy</button></div>
+<pre><code>[mcp_servers.aicp]
+url = "http://127.0.0.1:9100/mcp"</code></pre>
+    </div>
+  </div>
+
+  <div class="client-panel" data-panel="claude_desktop">
+    <div class="code-block">
+      <div class="code-head"><span>claude_desktop_config.json</span><button class="copy-btn" data-copy="desktop" data-i18n="common.copy">Copy</button></div>
+<pre><code>{
+  "mcpServers": {
+    "aicp": {
+      "command": "python",
+      "args": [
+        "path/to/mcp_stdio_bridge.py",
+        "http://127.0.0.1:9100/mcp"
+      ],
+      "env": {}
+    }
+  }
+}</code></pre>
+    </div>
+    <div class="note" data-i18n="mcp.note.claudeDesktop">Claude Desktop only speaks stdio, so it goes through the stdio bridge shipped with the <code>aicp-mcp-bridge</code> skill.</div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title" data-i18n="mcp.testTitle">Smoke test</div>
+  <div class="section-sub" data-i18n="mcp.testSub">Hit the endpoint directly to confirm it answers before blaming the client.</div>
+  <div class="code-block">
+    <div class="code-head"><span>curl</span><button class="copy-btn" data-copy="curl" data-i18n="common.copy">Copy</button></div>
+<pre><code>curl -s -X POST http://127.0.0.1:9100/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer &lt;token&gt;" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+  </div>
+  <div class="note" data-i18n="mcp.testNote">You should see <code>call_plugin</code> in <code>result.tools</code>. Health checks live at <code>/health</code>, <code>/ready</code> and <code>/metrics</code> on the same port.</div>
+</section>
+
+<section class="section">
+  <div class="mcp-section-head">
+    <span class="mcp-section-badge client" data-i18n="mcp.clientBadge">As a Client</span>
+    <span class="mcp-section-title" data-i18n="mcp.clientTitle">向内吸收能力</span>
+  </div>
+  <div class="client-intro">
+    <div>
+      <p data-i18n="mcp.clientIntro1"><strong>AICP 本身也是 MCP Client</strong>，可以反向接入任意外部 MCP Server。接入后的工具会变成 AICP 体内和内置插件平权的能力，agent 可以直接调用，也能通过 AICP 的 MCP Server 再暴露给上层客户端。</p>
+      <p style="margin-top:12px;" data-i18n="mcp.clientIntro2">也就是说，AICP 是一个<strong>MCP 汇接点</strong>：一边接你的 AI 工具（Claude Code / Cursor / Cline …），一边接任意外部 MCP Server，中间由 BIO-1 统一编排。</p>
+    </div>
+    <div class="client-how">
+      <h4 data-i18n="mcp.clientHowTitle">怎么接入</h4>
+      <p data-i18n="mcp.clientHowDesc">在控制台把 MCP Server 的信息告诉 BIO-1，它会自动完成注册，无需手动改配置。</p>
+      <pre data-i18n="mcp.clientHowExample">"帮我接入这个 MCP Server：
+  name: <服务名>
+  url: https://<MCP服务地址>
+  auth: Bearer &lt;token&gt;"</pre>
+    </div>
+  </div>
+  <div class="note" data-i18n="mcp.clientNote">接入完成后，外部工具以 <code>&lt;server_name&gt;/&lt;tool_name&gt;</code> 的路由出现在系统中，可被 AICP BIO-1 编排，在对话中触发。</div>
+</section>
+
+<footer>
+  <div class="footer-inner">
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <div class="footer-logo">
+        <span class="nav-logo-icon" style="width:22px;height:22px;font-size:12px;border-radius:6px;">A</span>
+        AICP
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 AICP. AI that lives in your system.</div>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/woozheng/aicp" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.58v-2c-3.34.72-4.04-1.6-4.04-1.6-.55-1.4-1.33-1.77-1.33-1.77-1.09-.74.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.49 1 .1-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.13-.3-.54-1.52.12-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.25 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.8 5.63-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .3z"/></svg>
+        GitHub
+      </a>
+      <a href="/mcp" data-i18n="footer.mcp">MCP</a>
+      <a href="/applications" data-i18n="footer.apps">Applications</a>
+    </div>
+  </div>
+</footer>
+
+<div class="modal" id="tokenModal">
+  <div class="modal-card">
+    <div class="modal-title" data-i18n="token.title">Access Token</div>
+    <div class="modal-desc" data-i18n="token.desc">Paste your token to access protected features.</div>
+    <input type="text" class="modal-input" id="tokenInput" placeholder="tok_..." autocomplete="off">
+    <div class="modal-error" id="tokenError"></div>
+    <div class="modal-actions">
+      <button class="nav-btn-ghost" onclick="closeTokenModal()" data-i18n="common.cancel">Cancel</button>
+      <button class="nav-btn-primary" onclick="saveToken()" data-i18n="common.save">Save</button>
+    </div>
+  </div>
+</div>
+<script>
+var I18N = {
+  en: {
+    'nav.home': 'Home',
+    'nav.console': 'Console',
+    'nav.apps': 'Applications',
+    'nav.mcp': 'MCP',
+    'nav.admin': 'Admin',
+    'nav.token': 'Token',
+    'nav.getStarted': 'Get Started',
+    'token.title': 'Access Token',
+    'token.desc': 'Paste your token to access protected features.',
+    'common.cancel': 'Cancel',
+    'common.save': 'Save',
+    'common.copy': 'Copy',
+    'mcp.title': 'AICP · Bidirectional MCP Node',
+    'mcp.sub': 'AICP is both an MCP server and an MCP client — expose your capabilities outward, absorb external tools inward.',
+    'mcp.dirServer': 'MCP Server · Outbound',
+    'mcp.dirClient': 'MCP Client · Inbound',
+    'mcp.serverBadge': 'As a Server',
+    'mcp.serverTitle': 'Exposing capabilities outward',
+    'mcp.clientBadge': 'As a Client',
+    'mcp.clientTitle': 'Absorbing capabilities inward',
+    'mcp.clientIntro1': '<strong>AICP itself is also an MCP Client.</strong> It can connect to any external MCP server in reverse. Connected tools become first-class citizens inside AICP — on equal footing with built-in plugins, directly callable by agents, and re-exposable through AICP\'s own MCP server.',
+    'mcp.clientIntro2': 'In other words, AICP is an <strong>MCP hub</strong>: your AI tools (Claude Code / Cursor / Cline …) plug in on one side, any external MCP servers plug in on the other, and BIO-1 orchestrates everything in the middle.',
+    'mcp.clientHowTitle': 'How to connect',
+    'mcp.clientHowDesc': 'Tell BIO-1 the MCP server details in the console, and it will handle the registration automatically — no manual config files.',
+    'mcp.clientHowExample': '"Connect this MCP server for me:\n  name: <server_name>\n  url: https://<mcp-server-url>\n  auth: Bearer <token>"',
+    'mcp.clientNote': 'Once connected, external tools appear in the system at the route <code>&lt;server_name&gt;/&lt;tool_name&gt;</code>. They can be orchestrated by AICP BIO-1 and triggered in conversation.',
+    'mcp.serverIntro': 'AICP doesn\'t just expose a handful of tool calls — it exposes an entire <strong>orchestration-ready engineering runtime</strong>. Every backend plugin from apps you\'ve generated, every internal skill you\'ve accumulated, BIO-1\'s self-orchestration capability, and system-level primitives like files, tasks, and memory — all reachable through five meta-tools. What your AI client gets is a working agent OS, not a pile of scattered APIs.',
+    'mcp.endpointTitle': 'Endpoint',
+    'mcp.endpointSub': 'The MCP server runs as a separate process on port 9100, alongside the HTTP gateway on 9000.',
+    'mcp.url': 'URL',
+    'mcp.transport': 'Transport',
+    'mcp.auth': 'Authorization',
+    'mcp.session': 'Session',
+    'mcp.authNote': 'In local mode the token is optional. In token / hybrid mode sign a token from the Admin page first.',
+    'mcp.toolsTitle': 'Exposed tools',
+    'mcp.toolsSub': 'Five meta-tools. Everything else is reachable through them — no context explosion.',
+    'mcp.tool.callPlugin': "Call any AICP plugin by its full route. The core of the bridge.",
+    'mcp.tool.listCaps': 'Discover what AICP can do — search plugins by keyword or list them all.',
+    'mcp.tool.getContract': "Get a plugin's parameter contract and usage notes before calling it.",
+    'mcp.tool.myMemory': 'Your experience backpack — stored on the AICP side, survives switching clients.',
+    'mcp.tool.myTasks': 'Your task board — resume, update and close work from any MCP client.',
+    'mcp.clientTitle': 'Client setup',
+    'mcp.clientSub': 'Paste into your client MCP configuration. Replace the token placeholder with the token from the Admin page.',
+    'mcp.note.claudeCode': 'Claude Code supports type: http directly — no bridge needed.',
+    'mcp.note.cline': 'Cline wants type: streamableHttp and an explicit disabled: false.',
+    'mcp.note.vscode': 'VS Code uses servers, not mcpServers.',
+    'mcp.note.claudeDesktop': 'Claude Desktop only speaks stdio, so it goes through the stdio bridge shipped with the aicp-mcp-bridge skill.',
+    'mcp.testTitle': 'Smoke test',
+    'mcp.testSub': 'Hit the endpoint directly to confirm it answers before blaming the client.',
+    'mcp.testNote': 'You should see call_plugin in result.tools. Health checks live at /health, /ready and /metrics on the same port.',
+    'footer.copy': '© 2026 AICP. AI that lives in your system.',
+    'footer.mcp': 'MCP',
+    'footer.apps': 'Applications'
+  },
+  zh: {
+    'nav.home': '首页',
+    'nav.console': '控制台',
+    'nav.apps': '应用',
+    'nav.mcp': 'MCP',
+    'nav.admin': '管理',
+    'nav.token': '令牌',
+    'nav.getStarted': '立即开始',
+    'token.title': '访问令牌',
+    'token.desc': '粘贴你的 token 以访问受保护功能。',
+    'common.cancel': '取消',
+    'common.save': '保存',
+    'common.copy': '复制',
+    'mcp.title': 'AICP · 双向 MCP 节点',
+    'mcp.sub': '对外是 MCP Server，对内是 MCP Client —— 一边把能力暴露给 AI 工具，一边把外部工具吸进 AICP。',
+    'mcp.dirServer': 'MCP Server · 向外提供能力',
+    'mcp.dirClient': 'MCP Client · 向内吸收能力',
+    'mcp.serverBadge': '作为服务端',
+    'mcp.serverTitle': '向外提供能力',
+    'mcp.clientBadge': '作为客户端',
+    'mcp.clientTitle': '向内吸收能力',
+    'mcp.clientIntro1': '<strong>AICP 本身也是 MCP Client</strong>，可以反向接入任意外部 MCP Server。接入后的工具会变成 AICP 体内和内置插件平权的能力，agent 可以直接调用，也能通过 AICP 的 MCP Server 再暴露给上层客户端。',
+    'mcp.clientIntro2': '也就是说，AICP 是一个<strong>MCP 汇接点</strong>：一边接你的 AI 工具（Claude Code / Cursor / Cline …），一边接任意外部 MCP Server，中间由 BIO-1 统一编排。',
+    'mcp.clientHowTitle': '怎么接入',
+    'mcp.clientHowDesc': '在控制台把 MCP Server 的信息告诉 BIO-1，它会自动完成注册，无需手动改配置。',
+    'mcp.clientHowExample': '"帮我接入这个 MCP Server：\n  name: <服务名>\n  url: https://<MCP服务地址>\n  auth: Bearer <token>"',
+    'mcp.clientNote': '接入完成后，外部工具以 <code>&lt;server_name&gt;/&lt;tool_name&gt;</code> 的路由出现在系统中，可被 AICP BIO-1 编排，在对话中触发。',
+    'mcp.serverIntro': 'AICP 向外暴露的不只是几个工具调用，而是一整套<strong>可被 AI 编排的工程运行底座</strong>。你生成的所有 App 后端插件、沉淀的内部 Skills、BIO-1 的自编排能力，以及文件/任务/记忆等系统级能力——全部通过 5 个元工具统一对外。上层 AI 客户端拿到的是一个能干活的「智能体操作系统」，而不是零散的 API。',
+    'mcp.endpointTitle': '接入地址',
+    'mcp.endpointSub': 'MCP 服务是独立进程，监听 9100 端口，与 9000 端口的 HTTP 网关并行。',
+    'mcp.url': '地址',
+    'mcp.transport': '传输协议',
+    'mcp.auth': '鉴权',
+    'mcp.session': '会话',
+    'mcp.authNote': 'local 模式下 token 可选；token / hybrid 模式下需要先在管理后台签发 token。',
+    'mcp.toolsTitle': '暴露的工具',
+    'mcp.toolsSub': '五个元工具，其余能力都能通过它们触达，不会撑爆上下文。',
+    'mcp.tool.callPlugin': '按完整路由调用任意 AICP 插件，这是整个桥接的核心。',
+    'mcp.tool.listCaps': '发现 AICP 现有能力——按关键词搜索，或列出全部插件。',
+    'mcp.tool.getContract': '调用前先查某个插件的参数契约与用法说明。',
+    'mcp.tool.myMemory': '你的经验背包——存在 AICP 侧，换客户端也不丢。',
+    'mcp.tool.myTasks': '你的任务看板——在任何 MCP 客户端里接手、更新、收尾。',
+    'mcp.clientTitle': '客户端配置',
+    'mcp.clientSub': '粘进客户端的 MCP 配置即可，把 token 占位符换成管理后台签发的 token。',
+    'mcp.note.claudeCode': 'Claude Code 直接支持 type: http，不需要桥接。',
+    'mcp.note.cline': 'Cline 需要 type: streamableHttp，并显式写 disabled: false。',
+    'mcp.note.vscode': 'VS Code 用的是 servers，不是 mcpServers。',
+    'mcp.note.claudeDesktop': 'Claude Desktop 只支持 stdio，需要走 aicp-mcp-bridge 技能自带的 stdio 桥。',
+    'mcp.testTitle': '冒烟测试',
+    'mcp.testSub': '先直接打这个端点确认它有响应，再去怀疑客户端。',
+    'mcp.testNote': '应该在 result.tools 里看到 call_plugin。同端口还有 /health、/ready、/metrics 三个健康检查。',
+    'footer.copy': '© 2026 AICP. AI 住在你的系统里。',
+    'footer.mcp': 'MCP',
+    'footer.apps': '应用'
+  }
+};
+
+var _lang = localStorage.getItem('aicp_lang') || 'en';
+
+function t(key) {
+  var dict = I18N[_lang] || I18N.en;
+  return dict[key] || key;
+}
+
+function applyLang() {
+  var els = document.querySelectorAll('[data-i18n]');
+  for (var i = 0; i < els.length; i++) {
+    var key = els[i].getAttribute('data-i18n');
+    if (I18N[_lang] && I18N[_lang][key]) els[i].innerHTML = I18N[_lang][key];
+  }
+  var lt = document.getElementById('langToggle');
+  if (lt) lt.textContent = _lang === 'zh' ? 'EN' : '中';
+  document.documentElement.lang = _lang;
+  updateNavAuth();
+}
+
+function toggleLang() {
+  _lang = _lang === 'en' ? 'zh' : 'en';
+  localStorage.setItem('aicp_lang', _lang);
+  applyLang();
+}
+
+function openTokenModal() {
+  var tok = localStorage.getItem('aicp_token') || '';
+  document.getElementById('tokenInput').value = tok;
+  document.getElementById('tokenError').style.display = 'none';
+  document.getElementById('tokenModal').style.display = 'flex';
+}
+function closeTokenModal() {
+  document.getElementById('tokenModal').style.display = 'none';
+}
+function logoutHome() {
+  localStorage.removeItem('aicp_token');
+  localStorage.removeItem('aicp_user');
+  document.cookie = 'aicp_token=; Path=/; Max-Age=0; SameSite=Lax';
+  location.href = '/';
+}
+
+async function saveToken() {
+  var tok = document.getElementById('tokenInput').value.trim();
+  if (!tok) {
+    localStorage.removeItem('aicp_token');
+    localStorage.removeItem('aicp_user');
+    closeTokenModal();
+    updateNavAuth();
+    return;
+  }
+  try {
+    var res = await fetch('/api/os/_auth', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
+      body: JSON.stringify({action: 'verify'})
+    });
+    var data = await res.json();
+    if (data.ok) {
+      localStorage.setItem('aicp_token', tok);
+      localStorage.setItem('aicp_user', JSON.stringify({uid: data.user_id, perms: data.permissions || {}}));
+      closeTokenModal();
+      updateNavAuth();
+    } else {
+      document.getElementById('tokenError').textContent = data.error || 'Invalid token';
+      document.getElementById('tokenError').style.display = 'block';
+    }
+  } catch(e) {
+    localStorage.setItem('aicp_token', tok);
+    closeTokenModal();
+    updateNavAuth();
+  }
+}
+function updateNavAuth() {
+  var user = null;
+  try { user = JSON.parse(localStorage.getItem('aicp_user') || 'null'); } catch(e) {}
+  var tokenBtn = document.getElementById('navToken');
+  if (!tokenBtn) return;
+
+  if (user && user.uid) {
+    tokenBtn.textContent = user.uid;
+  } else {
+    tokenBtn.textContent = t('nav.token');
+  }
+}
+
+/* Client tabs */
+document.addEventListener('DOMContentLoaded', function() {
+  var tabs = document.querySelectorAll('.client-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener('click', function() {
+      var key = this.getAttribute('data-client');
+      for (var j = 0; j < tabs.length; j++) tabs[j].classList.remove('active');
+      this.classList.add('active');
+      var panels = document.querySelectorAll('.client-panel');
+      for (var k = 0; k < panels.length; k++) {
+        panels[k].classList.toggle('active', panels[k].getAttribute('data-panel') === key);
+      }
+    });
+  }
+});
+
+/* Copy buttons */
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest ? e.target.closest('.copy-btn') : null;
+  if (!btn) return;
+  var block = btn.closest('.code-block');
+  var code = block ? block.querySelector('pre code') : null;
+  if (!code) return;
+  var text = code.innerText;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){
+      var old = btn.textContent;
+      btn.textContent = '✓';
+      setTimeout(function(){ btn.textContent = old; }, 1200);
+    });
+  }
+});
+
+applyLang();
+</script>
+
+</body>
+</html>

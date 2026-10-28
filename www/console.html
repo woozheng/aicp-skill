@@ -1,0 +1,3116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>AICP BIO-1 · Console</title>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<style>
+/* ============ Linear 深色 Token ============ */
+:root{
+  --bg:#08090A;
+  --surface:#16171C;
+  --surface-2:#1E1F25;
+  --surface-3:#25262D;
+  --border:rgba(255,255,255,0.06);
+  --border-strong:rgba(255,255,255,0.10);
+  --text:#F7F8F8;
+  --text-2:#B4B8C0;
+  --text-3:#8A8F98;
+  --text-4:#5C6068;
+  --brand:#5E6AD2;
+  --brand-hover:#6E79DB;
+  --brand-soft:rgba(94,106,210,0.12);
+  --ok:#4CB782;
+  --ok-soft:rgba(76,183,130,0.10);
+  --err:#E5484D;
+  --err-soft:rgba(229,72,77,0.10);
+  --warn:#D9A441;
+  --warn-soft:rgba(217,164,65,0.10);
+  --radius:10px;
+  --radius-sm:6px;
+  --chat-width:720px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',Roboto,sans-serif;
+  --font-mono:'SF Mono',Menlo,Consolas,'Courier New',monospace;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--font-sans);
+  background:var(--bg);
+  color:var(--text);
+  display:flex;
+  font-size:13px;
+  -webkit-font-smoothing:antialiased;
+  letter-spacing:0;
+}
+
+/* ============ 左侧栏（通顶） ============ */
+.sidebar{
+  width:260px;
+  background:var(--surface);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;flex-shrink:0;
+  z-index:20;transition:width .22s ease;
+  overflow:hidden;
+  height:100vh;
+}
+
+/* 品牌行（原顶栏内容） */
+.sidebar-brand{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:48px;
+  flex-shrink:0;
+  border-bottom:1px solid var(--border);
+  position:relative;
+}
+.brand-mark{
+  width:22px;height:22px;border-radius:6px;
+  background:linear-gradient(135deg,#5E6AD2,#8B5CF6);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;color:#fff;
+  flex-shrink:0;
+  text-decoration:none;
+}
+.brand-name{
+  font-size:13px;font-weight:600;color:var(--text);
+  flex:1;white-space:nowrap;overflow:hidden;
+  display:flex;align-items:baseline;gap:5px;
+}
+.brand-name .sub{
+  color:var(--text-3);font-weight:400;font-size:11px;
+}
+.lang-toggle{
+  display:flex;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:2px;gap:2px;height:24px;align-items:center;
+  flex-shrink:0;
+}
+.lang-toggle button{
+  border:none;background:transparent;
+  padding:2px 7px;border-radius:4px;
+  font-size:10px;font-weight:500;height:18px;
+  color:var(--text-3);cursor:pointer;font-family:inherit;
+  transition:.15s;line-height:1;
+}
+.lang-toggle button.active{background:var(--surface-3);color:var(--text)}
+.collapse-btn{
+  background:transparent;border:none;
+  color:var(--text-3);cursor:pointer;
+  width:24px;height:24px;border-radius:4px;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:.15s;flex-shrink:0;font-size:14px;line-height:1;
+}
+.collapse-btn:hover{background:var(--surface-2);color:var(--text)}
+
+.sidebar-search{padding:12px 12px 8px;flex-shrink:0}
+.sidebar-search input{
+  width:100%;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:7px 11px;color:var(--text);font-size:12px;
+  outline:none;font-family:inherit;transition:.15s;
+}
+.sidebar-search input:focus{border-color:var(--brand);background:var(--bg)}
+.sidebar-search input::placeholder{color:var(--text-4)}
+
+.new-conv-btn{
+  margin:0 12px 10px;
+  background:var(--brand);color:#fff;border:none;
+  border-radius:var(--radius-sm);padding:8px;
+  font-size:12px;cursor:pointer;font-weight:500;
+  font-family:inherit;transition:.15s;height:32px;
+  white-space:nowrap;
+}
+.new-conv-btn:hover{background:var(--brand-hover)}
+
+.conv-list{flex:1;overflow-y:auto;padding:0 8px}
+.conv-item{
+  padding:9px 10px;margin-bottom:4px;
+  border-radius:var(--radius-sm);cursor:pointer;
+  border:1px solid transparent;transition:.15s;position:relative;
+}
+.conv-item:hover{background:var(--surface-2)}
+.conv-item.active{background:var(--brand-soft);border-color:rgba(94,106,210,0.2)}
+.conv-item .conv-title{
+  font-size:12px;font-weight:500;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.conv-item .conv-preview{
+  font-size:11px;color:var(--text-3);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.conv-item .conv-meta{
+  font-size:10px;color:var(--text-4);margin-top:2px;
+  display:flex;gap:6px;
+}
+.conv-item .conv-del{
+  float:right;color:var(--err);font-size:11px;cursor:pointer;
+  padding:0 3px;opacity:0;transition:.15s;
+}
+.conv-item:hover .conv-del{opacity:1}
+.conv-item.conv-sub{
+  margin-left:10px;border-left:2px solid rgba(94,106,210,0.3);
+  padding-left:8px;
+}
+.conv-item.conv-sub .conv-title{font-size:11px;color:var(--text-2)}
+
+.conv-item.conv-archived{
+  opacity:.55;
+}
+.conv-item.conv-archived .conv-title{
+  color:var(--text-3);
+}
+.conv-item.conv-archived .conv-preview{
+  color:var(--text-4);
+}
+.conv-lock{
+  margin-left:4px;
+  font-size:11px;
+  vertical-align:middle;
+}
+
+.sidebar-footer{
+  display:flex;padding:6px;gap:4px;
+  border-top:1px solid var(--border);flex-shrink:0;
+  background:var(--surface);
+}
+.footer-nav-btn{
+  flex:1;background:transparent;border:1px solid transparent;
+  border-radius:var(--radius-sm);padding:6px;
+  color:var(--text-3);font-size:11px;cursor:pointer;
+  font-family:inherit;transition:.15s;font-weight:500;
+  height:32px;display:inline-flex;align-items:center;justify-content:center;
+  gap:4px;white-space:nowrap;
+}
+.footer-nav-btn:hover{background:var(--surface-2);color:var(--text-2)}
+.footer-nav-btn.active{
+  background:var(--brand-soft);color:var(--brand);
+  border-color:rgba(94,106,210,0.2);
+}
+
+/* 系统按钮行（重启/退出） */
+.sidebar-actions{
+  display:flex;padding:6px;gap:4px;
+  border-top:1px solid var(--border);flex-shrink:0;
+  background:var(--surface);
+}
+.action-btn{
+  flex:1;background:transparent;border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:5px;
+  color:var(--text-3);font-size:11px;cursor:pointer;
+  font-family:inherit;transition:.15s;
+  height:26px;display:inline-flex;align-items:center;justify-content:center;
+  gap:4px;white-space:nowrap;
+}
+.action-btn:hover{background:var(--surface-2);color:var(--text);border-color:var(--border-strong)}
+
+/* ============ 侧栏收起态 ============ */
+.sidebar.collapsed{width:56px}
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .lang-toggle,
+.sidebar.collapsed .sidebar-search,
+.sidebar.collapsed .new-conv-btn,
+.sidebar.collapsed .conv-list,
+.sidebar.collapsed .footer-nav-btn .txt,
+.sidebar.collapsed .action-btn .txt{display:none}
+
+/* 收起态品牌行：只留 A 居中 */
+.sidebar.collapsed .sidebar-brand{
+  flex-direction:column;padding:8px 0;height:auto;
+  gap:4px;justify-content:center;align-items:center;
+}
+.sidebar.collapsed .brand-mark{
+  margin:0 auto;
+}
+.sidebar.collapsed .collapse-btn{
+  margin:0 auto;
+}
+
+/* 收起态底部图标：贴左一列 */
+.sidebar.collapsed .sidebar-footer{
+  flex-direction:column;padding:6px 0;gap:0;
+  align-items:stretch;
+}
+.sidebar.collapsed .footer-nav-btn{
+  flex:0 0 auto;width:56px;height:36px;
+  padding:0;border-radius:0;font-size:16px;
+  justify-content:center;border:none;
+  border-left:2px solid transparent;
+}
+.sidebar.collapsed .footer-nav-btn.active{
+  border-left:2px solid var(--brand);
+  background:var(--brand-soft);
+  color:var(--brand);
+  border-radius:0;
+}
+.sidebar.collapsed .sidebar-actions{
+  flex-direction:column;padding:6px 0;gap:0;
+}
+.sidebar.collapsed .action-btn{
+  flex:0 0 auto;width:56px;height:32px;
+  padding:0;border:none;border-radius:0;font-size:14px;
+  border-left:2px solid transparent;
+}
+.sidebar.collapsed .action-btn:hover{
+  background:var(--surface-2);
+}
+
+/* ============ 主区（通顶） ============ */
+.main{
+  flex:1;display:flex;overflow:hidden;min-height:0;min-width:0;
+  position:relative;height:100vh;
+}
+
+/* ============ 聊天面板 ============ */
+.panel{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0;min-width:0;position:relative}
+.panel.active{display:flex}
+
+/* 悬浮对话标题（不占布局） */
+.chat-title-float{
+  position:absolute;
+  top:0;left:0;right:0;
+  height:32px;
+  display:flex;align-items:center;
+  padding:0 24px;
+  z-index:5;
+  pointer-events:none;
+  background:linear-gradient(to bottom, var(--bg) 60%, transparent);
+  transition:opacity .25s;
+}
+.chat-title-float .title-text{
+  font-size:11px;font-weight:500;color:var(--text-3);
+  max-width:var(--chat-width);margin:0 auto;width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  pointer-events:auto;cursor:default;
+}
+.chat-title-float .title-text .rename-hint{
+  margin-left:6px;color:var(--text-4);cursor:pointer;
+  pointer-events:auto;font-size:11px;
+}
+.chat-title-float .title-text .rename-hint:hover{color:var(--text-2)}
+.chat-title-float.scrolled{
+  opacity:0;
+}
+
+/* 消息区 */
+.messages{
+  flex:1;overflow-y:auto;
+  padding:40px 24px 16px;
+  display:flex;flex-direction:column;align-items:center;
+}
+.messages-inner{
+  width:100%;max-width:var(--chat-width);
+  display:flex;flex-direction:column;gap:20px;
+}
+
+/* 空状态 */
+.empty-chat{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  flex:1;text-align:center;padding:40px 20px;
+}
+.empty-mark{
+  width:56px;height:56px;border-radius:14px;
+  background:linear-gradient(135deg,#5E6AD2,#8B5CF6);
+  display:flex;align-items:center;justify-content:center;
+  font-size:26px;font-weight:700;color:#fff;
+  margin-bottom:16px;
+}
+.empty-title{
+  font-size:18px;font-weight:600;color:var(--text);
+  margin-bottom:8px;
+}
+.empty-desc{font-size:13px;color:var(--text-3);line-height:1.55;max-width:360px}
+
+/* ============ 回合卡片 ============ */
+.turn{margin-bottom:16px;display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.msg{max-width:85%;display:flex;flex-direction:column;gap:4px}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.user .bubble{
+    background:#e94560;
+    color:#fff;
+    border-radius:16px 16px 4px 16px;
+    padding:10px 14px;
+    font-size:12px;
+    line-height:1.6;
+    letter-spacing:0;
+    word-break:break-word;
+}
+.msg.assistant .bubble{
+    background:rgba(255,255,255,.07);
+    color:#e0e0e0;
+    border-radius:16px 16px 16px 4px;
+    padding:10px 14px;
+    font-size:12px;
+    line-height:1.6;
+    letter-spacing:0;
+    word-break:break-word;
+}
+
+/* ★ 段间距压到 4px（弹窗无段间距的关键） */
+.msg.assistant .bubble p{
+    margin:0;
+}
+.msg.assistant .bubble p + p{
+    margin-top:4px;
+}
+.msg.assistant .bubble ul,
+.msg.assistant .bubble ol{
+    margin:4px 0;
+    padding-left:20px;
+}
+.msg.assistant .bubble li{
+    margin:1px 0;
+}
+
+/* 代码：字号 11 对齐弹窗，行高 1.6 */
+.msg.assistant .bubble pre{
+    background:#1a1a2e;
+    padding:8px 12px;
+    border-radius:6px;
+    overflow-x:auto;
+    font-size:11px;
+    line-height:1.6;
+    margin:6px 0;
+    font-family:"SF Mono",Consolas,monospace;
+}
+.msg.assistant .bubble code{
+    background:rgba(255,255,255,.1);
+    padding:1px 6px;
+    border-radius:3px;
+    font-size:12px;
+    font-family:"SF Mono",Consolas,monospace;
+}
+
+/* 表格 / 引用 / 标题对齐弹窗 */
+.msg.assistant .bubble table{
+    border-collapse:collapse;
+    margin:6px 0;
+    font-size:12px;
+}
+.msg.assistant .bubble th,
+.msg.assistant .bubble td{
+    border:1px solid rgba(255,255,255,.15);
+    padding:4px 10px;
+}
+.msg.assistant .bubble th{background:rgba(255,255,255,.04)}
+.msg.assistant .bubble blockquote{
+    border-left:3px solid rgba(255,255,255,.2);
+    padding:4px 12px;
+    color:#aaa;
+    margin:6px 0;
+    font-size:12px;
+}
+.msg.assistant .bubble h1,
+.msg.assistant .bubble h2,
+.msg.assistant .bubble h3{font-size:13px;margin:8px 0 4px;font-weight:600;}
+.msg.assistant .bubble a{color:#4a90d9;text-decoration:underline}
+.msg .time{font-size:10px;color:#555;padding:0 4px;letter-spacing:0.3px;}
+/* ============ 输入区 ============ */
+.input-wrap{
+  padding:0 24px 16px;
+  flex-shrink:0;
+  display:flex;flex-direction:column;align-items:center;
+}
+.input-inner{
+  width:100%;max-width:var(--chat-width);
+  display:flex;flex-direction:column;gap:6px;
+}
+#filePreview{display:flex;flex-wrap:wrap;gap:4px;width:100%}
+#filePreview span{
+  background:var(--surface-2);color:var(--text-2);
+  padding:3px 10px;border-radius:5px;font-size:11px;
+  display:inline-flex;align-items:center;gap:6px;
+  border:1px solid var(--border);
+}
+.input-row{display:flex;gap:8px;align-items:flex-end}
+.icon-btn-round{
+  width:38px;height:38px;border-radius:50%;
+  background:var(--surface);
+  border:1px solid var(--border);
+  color:var(--text-3);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:.15s;flex-shrink:0;
+}
+.icon-btn-round:hover{
+  border-color:var(--border-strong);
+  color:var(--text-2);
+  background:var(--surface-2);
+}
+.icon-btn-round svg{width:16px;height:16px;stroke-width:1.8}
+.send-btn{
+  background:var(--brand);border-color:var(--brand);color:#fff;
+}
+.send-btn:hover:not(:disabled){
+  background:var(--brand-hover);border-color:var(--brand-hover);color:#fff;
+}
+.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.send-btn svg{width:16px;height:16px;stroke-width:2}
+.input-textarea{
+  flex:1;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:10px 14px;
+  font-size:13px;color:var(--text);
+  resize:none;outline:none;
+  min-height:38px;max-height:140px;
+  line-height:1.5;font-family:inherit;
+  transition:.15s;
+}
+.input-textarea:focus{
+  border-color:var(--brand);
+  box-shadow:0 0 0 3px rgba(94,106,210,0.15);
+}
+.input-textarea::placeholder{color:var(--text-4)}
+
+/* ============ 插件自动补全（/ 前缀） ============ */
+.input-inner{position:relative}
+.cmd-hint{
+  position:absolute;left:46px;right:0;bottom:calc(100% + 6px);
+  z-index:60;min-width:240px;max-height:264px;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.30);
+  padding:4px;
+}
+.cmd-item{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;border-radius:7px;cursor:pointer;
+}
+.cmd-item:hover{background:var(--surface-2)}
+.cmd-item.sel{background:var(--brand-soft)}
+.cmd-item .cmd-name{
+  font-family:var(--font-mono);font-size:12px;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  flex:0 0 auto;max-width:46%;
+}
+.cmd-item.sel .cmd-name{color:var(--brand)}
+.cmd-item .cmd-desc{
+  flex:1 1 auto;min-width:0;
+  font-size:11px;color:var(--text-3);line-height:1.35;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.cmd-item.sel .cmd-desc{color:var(--text-2)}
+.cmd-item .cmd-desc:empty{display:none}
+
+/* ============ 工具链 ============ */
+.tool-chain{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  padding:2px 0;
+}
+.tool-node{
+  display:inline-flex;flex-direction:column;align-items:flex-start;
+  gap:2px;padding:6px 11px;border-radius:8px;
+  font-size:11px;border:1px solid;
+  cursor:pointer;transition:.2s;max-width:280px;
+  background:var(--surface);
+}
+.tool-node .tool-think{
+  font-size:10px;color:var(--text-3);font-style:italic;
+  line-height:1.3;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:100%;
+}
+.tool-node .tool-name-row{
+  display:flex;align-items:center;gap:6px;
+  font-family:var(--font-mono);
+}
+.tool-node .tool-name{font-weight:500;font-size:11px}
+.tool-node .dur{font-size:10px;opacity:.7}
+
+.tool-node.running{
+  border-color:rgba(94,106,210,0.5);color:#8E97E5;
+  background:var(--brand-soft);animation:pulse 1.2s ease-in-out infinite;
+}
+.tool-node.ok{
+  border-color:rgba(76,183,130,0.4);color:var(--ok);background:var(--ok-soft);
+}
+.tool-node.error{
+  border-color:rgba(229,72,77,0.4);color:var(--err);background:var(--err-soft);
+}
+.tool-node.interrupted{
+  border-color:rgba(217,164,65,0.4);color:var(--warn);background:var(--warn-soft);
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.tool-arrow{color:var(--text-4);font-size:11px}
+
+.thinking-line{
+  font-size:12px;color:var(--text-3);font-style:italic;
+  padding:2px 0;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;animation:blink 1.5s infinite;
+  transition:opacity .3s;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ============ Webview 右侧 split ============ */
+.webview-panel{
+  display:none;
+  width:50%;
+  flex-shrink:0;
+  background:var(--surface);
+  border-left:1px solid var(--border);
+  flex-direction:column;
+  z-index:15;
+  /* 让出底部状态栏高度：webview 上移，底部不被 footer 遮住 */
+  height:calc(100vh - 22px);
+}
+.webview-panel.show{display:flex}
+.webview-header{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:40px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;background:var(--surface);
+}
+.webview-title{
+  flex:1;font-size:11px;font-weight:500;
+  color:var(--text-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);
+}
+.webview-actions{display:flex;gap:4px}
+.webview-actions button{
+  width:26px;height:26px;border-radius:var(--radius-sm);
+  background:transparent;border:none;
+  color:var(--text-3);cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:.15s;
+}
+.webview-actions button:hover{background:var(--surface-2);color:var(--text)}
+.webview-actions button svg{width:13px;height:13px;stroke-width:1.8}
+.webview-body{flex:1;overflow:hidden;background:var(--bg)}
+.webview-body iframe{
+  width:100%;height:100%;border:none;background:var(--bg);
+}
+
+/* ============ 弹窗 ============ */
+.modal-overlay{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);
+  z-index:1000;align-items:center;justify-content:center;
+}
+.modal-overlay.show{display:flex}
+.modal{
+  background:var(--surface);
+  border:1px solid var(--border-strong);
+  border-radius:14px;
+  width:90%;max-width:720px;max-height:80vh;
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5);
+}
+.modal-header{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 20px;border-bottom:1px solid var(--border);
+  font-size:13px;font-weight:600;color:var(--text);
+}
+.modal-actions{display:flex;gap:8px}
+.modal-actions button{
+  padding:5px 12px;border-radius:var(--radius-sm);
+  border:1px solid var(--border);background:transparent;
+  color:var(--text-2);cursor:pointer;font-size:12px;
+  font-family:inherit;transition:.15s;font-weight:500;
+  height:28px;display:inline-flex;align-items:center;
+}
+.modal-actions button:hover{border-color:var(--border-strong);color:var(--text);background:var(--surface-2)}
+.modal-actions .btn-save{
+  background:var(--brand);border-color:var(--brand);color:#fff;
+}
+.modal-actions .btn-save:hover{background:var(--brand-hover);border-color:var(--brand-hover)}
+.modal-body{flex:1;display:flex;overflow:hidden;min-height:300px}
+.modal-editor{
+  flex:1;background:var(--surface);border:none;outline:none;
+  padding:18px;color:var(--text);
+  font-family:var(--font-mono);font-size:12px;
+  resize:none;line-height:1.6;
+}
+.modal-input{
+  width:100%;background:var(--surface-2);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  padding:9px 12px;color:var(--text);font-size:13px;
+  outline:none;font-family:inherit;transition:.15s;
+}
+.modal-input:focus{border-color:var(--brand);background:var(--bg)}
+
+/* ============ 底部状态栏（28px） ============ */
+.footer-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:0 12px;height:22px;
+  background:var(--surface);
+  border-top:1px solid var(--border);
+  flex-shrink:0;font-size:9px;color:var(--text-3);
+   line-height:1;
+  overflow-x:auto;
+  position:absolute;bottom:0;left:0;right:0;
+  z-index:20;
+}
+/* 作用域分组：global（用户级/实例级） | session（会话级） */
+.footer-bar .fb-group{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:0 5px;border-radius:4px;transition:background .2s;
+}
+.footer-bar .fb-group[data-scope="session"]{background:var(--surface-2)}
+.footer-bar .fb-items{display:inline-flex;align-items:center;gap:4px}
+.footer-bar .fb-div{
+  display:inline-block;width:1px;height:11px;flex-shrink:0;
+  background:var(--border-strong);
+}
+@keyframes fbPulse{
+  0%{background:var(--surface-2)}
+  40%{background:var(--brand-soft)}
+  100%{background:var(--surface-2)}
+}
+.footer-bar .fb-group.pulse{animation:fbPulse .5s ease-out}
+.footer-bar .sep{color:var(--border-strong)}
+.footer-bar .spacer{flex:1}
+.footer-bar .dot{
+  display:inline-block;width:5px;height:5px;
+  border-radius:50%;margin-right:4px;
+}
+.footer-bar .dot.green{background:var(--ok)}
+.footer-bar .dot.red{background:var(--err)}
+.footer-bar #wsStatus .dot{margin-right:0}
+/* webview 打开/最大化：状态条始终保持整条，webview 面板整体上移让出状态栏高度（见 .webview-panel 的 height） */
+.footer-btn{
+  background:transparent;border:1px solid var(--border);
+  border-radius:4px;color:var(--text-2);
+  cursor:pointer;font-size:10px;padding:0 7px;
+  white-space:nowrap;transition:.15s;font-family:inherit;
+  height:20px;display:inline-flex;align-items:center;gap:3px;
+}
+.footer-btn:hover{
+  background:var(--surface-2);color:var(--text);
+  border-color:var(--border-strong);
+}
+.footer-btn.icon-only{
+  width:22px;padding:0;justify-content:center;font-size:12px;
+}
+.footer-btn.icon-only:hover{color:var(--text-2)}
+.footer-btn.icon-only.letter{
+  font-weight:700;font-size:11px;letter-spacing:.5px;
+  color:var(--text-2);font-family:ui-monospace,Menlo,Consolas,monospace;
+}
+.footer-btn.icon-only.letter:hover{color:var(--brand);border-color:var(--brand)}
+
+/* 活动高亮（E/T/H/A/S/M） */
+.footer-btn.icon-only.letter.active{
+  color:var(--brand);border-color:var(--brand);background:var(--brand-soft);
+}
+.footer-btn.icon-only.letter.active:hover{color:var(--brand-hover);border-color:var(--brand-hover)}
+/* 活动详情气泡（hover 显示各模块实时状态） */
+.footer-btn.icon-only.letter{position:relative}
+.footer-btn.icon-only.letter::after{
+  content:attr(data-activity-detail);
+  position:absolute;bottom:130%;left:50%;transform:translateX(-50%);
+  background:var(--surface-3);color:var(--text);
+  border:1px solid var(--border-strong);border-radius:4px;
+  padding:4px 8px;font-size:10px;white-space:nowrap;
+  opacity:0;pointer-events:none;transition:.15s;z-index:3000;
+  font-family:var(--font-sans);letter-spacing:0;font-weight:400;font-style:normal;
+}
+.footer-btn.icon-only.letter[data-activity-detail]:hover::after{opacity:1}
+.footer-btn .fb-tag{
+  font-weight:700;font-size:10px;letter-spacing:.5px;color:var(--text-2);
+  font-family:ui-monospace,Menlo,Consolas,monospace;
+}
+.stat-sep{color:var(--text-4);margin:0 4px}
+
+/* 面板底部留出状态栏高度 */
+.panel{padding-bottom:22px}
+
+/* ============ Toast ============ */
+.toast{
+  position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
+  background:var(--surface-3);color:var(--text);
+  padding:8px 18px;border-radius:8px;font-size:12px;
+  z-index:2000;transition:opacity .3s;
+  border:1px solid var(--border-strong);
+  pointer-events:none;
+}
+.toast.hide{opacity:0}
+
+/* ============ 应用面板 ============ */
+.app-panel-body{flex:1;overflow-y:auto;padding:40px 24px 16px;display:flex;flex-direction:column;align-items:center}
+.app-section-title{
+  font-size:13px;font-weight:600;color:var(--text-2);
+  margin-bottom:14px;
+  width:100%;max-width:var(--chat-width);
+}
+.app-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+  gap:10px;width:100%;max-width:var(--chat-width);
+}
+.app-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:16px 14px;text-align:center;cursor:pointer;
+  transition:.18s;
+}
+.app-card:hover{
+  border-color:var(--brand);
+  background:var(--surface-2);
+}
+.app-card .icon{font-size:22px;margin-bottom:6px}
+.app-card .name{font-size:12px;color:var(--text);font-weight:500}
+
+.empty-state{
+  color:var(--text-3);font-size:12px;
+  text-align:center;padding:30px 0;
+}
+.loading{
+  color:var(--text-3);font-size:12px;
+  text-align:center;padding:20px 0;
+}
+
+.detail-block{
+  background:var(--surface-2);
+  border:1px solid var(--border);
+  border-radius:8px;padding:12px;
+}
+.detail-block-title{
+  font-size:12px;font-weight:600;
+  margin-bottom:8px;color:var(--text-2);
+}
+.detail-pre{
+  background:var(--bg);border-radius:6px;
+  padding:10px;font-size:11px;
+  font-family:var(--font-mono);
+  white-space:pre-wrap;word-break:break-all;
+  max-height:40vh;overflow-y:auto;
+  color:#A5D6FF;margin:0;line-height:1.55;
+  border:1px solid var(--border);
+}
+
+#loadMoreTip{
+  text-align:center;color:var(--text-4);
+  font-size:11px;padding:8px;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,0.08);border-radius:8px;
+}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.15)}
+
+/* ============ 移动端 ============ */
+.side-overlay{
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,0.6);z-index:19;
+}
+.side-overlay.show{display:block}
+@media(max-width:768px){
+  .sidebar{
+    position:fixed;left:0;top:0;bottom:26px;
+    width:280px;height:auto;
+    transform:translateX(-100%);
+    transition:transform .3s;
+    box-shadow:4px 0 30px rgba(0,0,0,0.4);
+    z-index:30;
+  }
+  /* 抽屉与遮罩停在状态栏上沿，保证 footer（含左侧）始终可见、不被压暗 */
+  .side-overlay{inset:0 0 26px 0}
+  .sidebar.open{transform:translateX(0)}
+  .sidebar.collapsed{width:280px}
+  .sidebar.collapsed .sidebar-search,
+  .sidebar.collapsed .new-conv-btn,
+  .sidebar.collapsed .conv-list,
+  .sidebar.collapsed .footer-nav-btn .txt,
+  .sidebar.collapsed .action-btn .txt{display:initial}
+  .sidebar.collapsed .sidebar-footer{flex-direction:row;padding:6px}
+  .sidebar.collapsed .footer-nav-btn{flex:1;width:auto;height:32px;font-size:11px;border-radius:6px;border-left:none}
+  .sidebar.collapsed .sidebar-actions{flex-direction:row;padding:6px}
+  .sidebar.collapsed .action-btn{flex:1;width:auto;height:26px;font-size:11px;border-radius:6px;border:1px solid var(--border)}
+  .sidebar.collapsed .brand-name,
+  .sidebar.collapsed .lang-toggle{display:flex}
+  .sidebar.collapsed .sidebar-brand{flex-direction:row;padding:0 12px;height:48px}
+  .sidebar.collapsed .collapse-btn{display:none}
+  .messages{padding:36px 14px 12px}
+  .msg{max-width:95%}
+  .input-wrap{padding:0 14px 40px}
+  .chat-title-float{padding:0 14px}
+  .footer-bar{font-size:9px;gap:5px;padding:0 8px;height:26px}
+  .footer-btn{padding:0 6px;font-size:9px;height:18px}
+  .footer-btn.icon-only{width:24px;font-size:11px}
+  .app-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+  .empty-title{font-size:16px}
+  .webview-panel{display:none !important}
+  .panel{padding-bottom:26px}
+}
+
+/* 主区顶部移动端悬浮菜单按钮 */
+.mobile-menu-btn{
+  display:none;
+  position:absolute;top:8px;left:12px;z-index:10;
+  width:32px;height:32px;border-radius:6px;
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text-3);cursor:pointer;
+  align-items:center;justify-content:center;font-size:16px;
+}
+@media(max-width:768px){
+  .mobile-menu-btn{display:inline-flex}
+  .chat-title-float{padding-left:52px}
+}
+/* webview 最大化 */
+.webview-panel.maximized {
+  width: 100%;
+  border-left: none;
+}
+.main.webview-max .panel {
+  display: none !important;
+}
+
+/* 系统应用卡片 */
+.sys-app-group{font-size:11px;letter-spacing:.08em;color:var(--text-4);margin:14px 4px 6px}
+.sys-app-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:.15s}
+.sys-app-card:hover{border-color:var(--brand);background:var(--surface-2)}
+.sys-app-icon{font-size:20px;width:28px;text-align:center;color:var(--brand)}
+.sys-app-info{min-width:0}
+.sys-app-name{font-size:13px;font-weight:600;color:var(--text)}
+.sys-app-desc{font-size:11px;color:var(--text-3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<div class="side-overlay" id="sideOverlay" onclick="toggleSidebar()"></div>
+
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <a href="/" class="brand-mark" title="AICP Home">A</a>
+    <span class="brand-name">AICP <span class="sub">BIO-1</span></span>
+    <div class="lang-toggle" id="langToggle">
+      <button data-lang="zh">中</button>
+      <button data-lang="en" class="active">EN</button>
+    </div>
+    <button class="collapse-btn" onclick="toggleSidebarDesktop()" title="Collapse">☰</button>
+  </div>
+
+  <div class="sidebar-search">
+    <input type="text" id="convSearchInput" data-i18n-ph="sidebar.search" placeholder="Search conversations..." oninput="filterConversations(this.value)">
+  </div>
+  <button class="new-conv-btn" onclick="createNewConversation()"><span data-i18n="sidebar.new">+ New chat</span></button>
+  <div class="conv-list" id="convList">
+    <div class="empty-state" data-i18n="common.loading">Loading...</div>
+  </div>
+
+  <div class="sidebar-footer">
+    <button class="footer-nav-btn active" data-panel="chat" onclick="switchPanel('chat')" title="Chat">💬<span class="txt" data-i18n="sidebar.chat">Chat</span></button>
+    <button class="footer-nav-btn" data-panel="apps" onclick="switchPanel('apps')" title="Apps">📦<span class="txt" data-i18n="sidebar.apps">Apps</span></button>
+    <button class="footer-nav-btn" onclick="openSystemApps()" title="System">⚙️<span class="txt" data-i18n="sidebar.system">System</span></button>
+  </div>
+
+  <div class="sidebar-actions">
+    <button class="action-btn" onclick="restartSystem()" title="Restart">↻<span class="txt" data-i18n="nav.restart">Restart</span></button>
+    <button class="action-btn" onclick="logout()" title="Logout">⏻<span class="txt" data-i18n="nav.logout">Logout</span></button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="panel active" id="panel-chat">
+    <button class="mobile-menu-btn" onclick="toggleSidebar()">☰</button>
+    <div class="chat-title-float" id="chatTitleFloat">
+      <div class="title-text"><span id="chatTitle" data-i18n="chat.new">New chat</span><span class="rename-hint" onclick="renameCurrentConversation()" title="Rename">✏</span></div>
+    </div>
+    <div class="messages" id="chatMessages">
+      <div class="empty-chat">
+        <div class="empty-mark">A</div>
+        <div class="empty-title">AICP BIO-1</div>
+        <div class="empty-desc" data-i18n="chat.emptyDesc">Describe what you need, or click ☰ to switch conversations.</div>
+      </div>
+    </div>
+    <div class="input-wrap">
+      <div class="input-inner">
+        <div id="filePreview"></div>
+        <div class="input-row">
+          <button class="icon-btn-round" onclick="document.getElementById('fileInput').click()" title="Attach">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFiles(this.files)">
+          <textarea id="msgInput" class="input-textarea" rows="1" data-i18n-ph="chat.placeholder" placeholder="Type your request..."></textarea>
+          <button id="sendBtn" class="icon-btn-round send-btn" onclick="sendMessage()" title="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          </button>
+        </div>
+        <div class="cmd-hint" id="cmdHint" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-apps">
+    <div class="app-panel-body">
+      <div class="app-section-title" data-i18n="apps.title">My Apps</div>
+      <div class="app-grid" id="appGrid"><div class="loading" data-i18n="common.loading">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="webview-panel" id="webviewPanel">
+    <div class="webview-header">
+      <span class="webview-title" id="webviewTitle">Preview</span>
+      <div class="webview-actions">
+        <!-- ★ 新增：最大化按钮，放在第一个 -->
+        <button onclick="toggleWebviewMax()" id="webviewMaxBtn" title="Maximize">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+        <!-- ★ 原有：刷新 -->
+        <button onclick="reloadWebview()" title="Reload">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
+        <!-- ★ 原有：在浏览器打开 -->
+        <button onclick="openWebviewExternal()" title="Open in browser">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </button>
+        <!-- ★ 原有：关闭 -->
+        <button onclick="closeWebview()" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="webview-body">
+      <iframe id="webviewFrame" src="about:blank"></iframe>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <span class="fb-group" data-scope="global">
+      <span class="fb-items" id="fbGlobalItems">
+        <button class="footer-btn" id="modelBtn" onclick="openModelModal()"><span class="fb-tag">model</span> <span id="currentModelDisplay">...</span></button>
+        <button class="footer-btn icon-only letter" data-activity="exp" onclick="openStateModal('exp')" data-i18n-title="footer.expTitle" title="Experience">E</button>
+        <button class="footer-btn icon-only letter" data-activity="cron" onclick="openCronModal()" data-i18n-title="footer.cronTitle" title="Heartbeat Tasks">H</button>
+        <button class="footer-btn icon-only letter" data-activity="mcp" onclick="openMcpPage()" data-i18n-title="footer.mcpTitle" title="MCP Client">M</button>
+      </span>
+      <span id="sourceDisplay" data-i18n="footer.local">Local</span>
+    </span>
+    <span class="fb-div"></span>
+    <span class="fb-group" data-scope="session">
+      <span id="sessionDisplay" data-i18n="footer.session">Session: -</span>
+      <span class="fb-items" id="fbSessionItems">
+        <button class="footer-btn icon-only letter" data-activity="task" onclick="openStateModal('task')" data-i18n-title="footer.boardTitle" title="Task Board">T</button>
+        <button class="footer-btn icon-only letter" data-activity="sub" onclick="openSubTaskModal()" data-i18n-title="footer.subTitle" title="Sub Tasks">A</button>
+        <button class="footer-btn icon-only letter" data-activity="skill" onclick="openSkillsPage()" data-i18n-title="footer.skillTitle" title="Skills">S<span id="skillBadge" style="margin-left:2px;color:#4CB782;display:none;">●</span></button>
+      </span>
+      <span class="stat-sep">|</span>
+      <span id="statsInline" style="display:none"><span class="fb-tag">ST</span> <span id="statCtx">0K</span><span class="stat-sep">|</span><span id="statRound">0</span><span class="stat-sep">|</span><span id="statDepth">0/40</span></span>
+    </span>
+    <span class="spacer"></span>
+    <span id="wsStatus" title="WebSocket"><span class="dot green"></span></span>
+  </div>
+</div>
+
+<!-- 工具详情 -->
+<div class="modal-overlay" id="callDetailOverlay" onclick="if(event.target===this)closeCallDetail()">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <span id="callDetailTitle" data-i18n="modal.callDetail">Tool Detail</span>
+      <button onclick="closeCallDetail()">✕</button>
+    </div>
+    <div class="modal-body" id="callDetailBody" style="padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:12px"></div>
+  </div>
+</div>
+
+<!-- 经验/看板 -->
+<div class="modal-overlay" id="stateModalOverlay" onclick="if(event.target===this)closeStateModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="stateModalTitle" data-i18n="modal.expTitle">Experience</span>
+      <div class="modal-actions">
+        <button onclick="reloadState()">↻</button>
+        <button onclick="saveState()" class="btn-save" data-i18n="common.save">Save</button>
+        <button onclick="clearState()" ...>Clear</button>
+        <button onclick="closeStateModal()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body"><textarea id="stateEditor" class="modal-editor"></textarea></div>
+  </div>
+</div>
+
+<!-- 心跳 -->
+<div class="modal-overlay" id="cronModalOverlay" onclick="if(event.target===this)closeCronModal()">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <span data-i18n="modal.cronTitle">Heartbeat Tasks</span>
+      <div class="modal-actions"><button onclick="reloadCron()">↻</button><button onclick="closeCronModal()">✕</button></div>
+    </div>
+    <div class="modal-body" style="padding:16px;overflow-y:auto;display:block"><div id="cronList"></div></div>
+  </div>
+</div>
+
+<!-- 重命名 -->
+<div class="modal-overlay" id="renameModalOverlay" onclick="if(event.target===this)closeRenameModal()">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header"><span data-i18n="modal.renameTitle">Rename conversation</span><button onclick="closeRenameModal()">✕</button></div>
+    <div class="modal-body" style="padding:16px;display:block">
+      <input type="text" id="renameInput" class="modal-input" data-i18n-ph="modal.renamePh" placeholder="Conversation title">
+      <div style="margin-top:12px;text-align:right">
+        <button onclick="confirmRename()" style="padding:6px 14px;border-radius:6px;border:1px solid var(--brand);background:var(--brand);color:#fff;cursor:pointer;font-size:12px;font-weight:500;font-family:inherit" data-i18n="common.save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 模型切换 -->
+<div class="modal-overlay" id="modelModalOverlay" onclick="if(event.target===this)closeModelModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span data-i18n="modal.modelTitle">Switch model</span>
+      <div class="modal-actions">
+        <button onclick="reloadModel(true)" title="reload">&#10227;</button>
+        <button class="btn-save" id="modelConfirmBtn" onclick="confirmModelSwitch()">&#10003; Save</button>
+        <button onclick="closeModelModal()">&#10005;</button>
+      </div>
+    </div>
+    <div class="modal-body" style="padding:14px 16px;overflow-y:auto;display:block">
+      <div id="mpLabelProvider" style="font-size:11px;color:var(--text-3);margin-bottom:5px"></div>
+      <select id="modelProviderSel" onchange="providerChanged()" class="modal-input" style="width:100%;padding:7px 10px;font-size:12px;margin-bottom:12px"></select>
+      <div id="mpLabelModel" style="font-size:11px;color:var(--text-3);margin-bottom:5px"></div>
+      <select id="modelSel" onchange="pickModel(this.value)" class="modal-input" style="width:100%;padding:7px 10px;font-size:12px"></select>
+      <div id="modelSourceTip" style="font-size:11px;color:var(--text-3);margin-top:8px"></div>
+      <div id="mpLabelParams" style="font-size:11px;color:var(--text-3);margin:12px 0 5px"></div>
+      <div style="display:flex;gap:10px">
+        <div style="flex:1">
+          <div style="font-size:10px;color:var(--text-3);margin-bottom:3px">max_tokens</div>
+          <input id="mpMaxTokens" type="number" min="1" step="256" class="modal-input" style="width:100%;padding:7px 10px;font-size:12px" />
+        </div>
+        <div style="flex:1">
+          <div style="font-size:10px;color:var(--text-3);margin-bottom:3px">temperature</div>
+          <input id="mpTemperature" type="number" min="0" max="2" step="0.1" class="modal-input" style="width:100%;padding:7px 10px;font-size:12px" />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 当前技能 -->
+<div class="modal-overlay" id="skillModalOverlay" onclick="if(event.target===this)closeSkillModal()">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <span data-i18n="modal.skillTitle">Current Skill</span>
+      <div class="modal-actions">
+        <button onclick="reloadSkill()">↻</button>
+        <button onclick="saveSkill()" class="btn-save" data-i18n="common.save">Save</button>
+        <button onclick="clearSkill()" style="border-color:rgba(229,72,77,0.3);color:var(--err)" data-i18n="common.clear">Clear</button>
+        <button onclick="closeSkillModal()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" style="min-height:360px">
+      <textarea id="skillEditor" class="modal-editor" data-i18n-ph="modal.skillPh" placeholder="No skill loaded..."></textarea>
+    </div>
+  </div>
+</div>
+<!-- 分身 -->
+<div class="modal-overlay" id="subTaskModalOverlay" onclick="if(event.target===this)closeSubTaskModal()">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header">
+      <span data-i18n="modal.subTitle">Sub Tasks</span>
+      <div class="modal-actions"><button onclick="reloadSubTasks()">↻</button><button onclick="closeSubTaskModal()">✕</button></div>
+    </div>
+    <div class="modal-body" style="padding:0;overflow:hidden;display:flex;min-height:400px">
+      <div id="subTaskList" style="width:280px;border-right:1px solid var(--border);overflow-y:auto;padding:8px"></div>
+      <div id="subTaskDetail" style="flex:1;overflow-y:auto;padding:12px 16px"><div class="empty-state" data-i18n="modal.selectSub">Select a sub task</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- 系统应用弹窗 -->
+<div class="modal-overlay" id="sysAppsModalOverlay" onclick="if(event.target===this)closeSysApps()">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-header"><span data-i18n="modal.sysAppsTitle">System Apps</span><button onclick="closeSysApps()">✕</button></div>
+    <div class="modal-body" style="padding:16px;overflow-y:auto;display:block"><div id="sysAppsList"></div></div>
+  </div>
+</div>
+
+<script>
+// ============ i18n ============
+var I18N = {
+  zh: {
+    'nav.restart':'重启','nav.logout':'退出',
+    'sidebar.search':'搜索对话...','sidebar.new':'+ 新对话',
+    'sidebar.chat':'对话','sidebar.apps':'应用','sidebar.system':'系统',
+    'chat.new':'新对话','chat.emptyDesc':'描述你的需求，或点左上角 ☰ 切换对话',
+    'chat.placeholder':'输入需求...',
+    'apps.title':'我的应用',
+    'footer.session':'会话: -','footer.local':'本地',
+    'footer.exp':'经验','footer.board':'看板','footer.cron':'心跳','footer.skill':'技能','footer.sub':'分身',
+    'footer.expTitle':'经验背包','footer.boardTitle':'任务看板','footer.cronTitle':'心跳任务','footer.subTitle':'分身任务','footer.skillTitle':'技能管理','footer.mcpTitle':'MCP 客户端',
+    'footer.ws':'已连接',
+    'footer.scopeUser':'全局','footer.scopeSession':'本会话','footer.scopeSystem':'实例',
+    'modal.callDetail':'工具详情','modal.expTitle':'经验背包','modal.cronTitle':'心跳任务',
+    'modal.renameTitle':'重命名对话','modal.renamePh':'对话标题',
+    'modal.modelTitle':'切换模型','modal.skillTitle':'当前技能','modal.skillPh':'当前没有加载技能...',
+    'modal.subTitle':'分身任务','modal.selectSub':'← 选择一个分身任务',
+    'modal.sysAppsTitle':'系统应用',
+    'common.loading':'加载中...','common.save':'保存','common.clear':'清空',
+    'msg.inputRequired':'请输入内容','msg.titleRequired':'标题不能为空','msg.deleted':'✅ 已删除',
+    'msg.renamed':'✅ 已重命名','msg.saved':'✅ 已保存','msg.cleared':'✅ 已清空',
+    'msg.switched':'✅ 已切换到','msg.alreadyCurrent':'已经是当前模型',
+    'msg.createFail':'创建失败: ','msg.deleteFail':'删除失败: ','msg.renameFail':'重命名失败: ',
+    'msg.saveFail':'保存失败: ','msg.clearFail':'清空失败: ','msg.switchFail':'切换失败: ',
+    'msg.networkError':'网络错误: ','msg.confirmDelete':'删除这个对话？',
+    'msg.confirmRestart':'确认重启？','msg.confirmClearSkill':'确定清空当前技能？',
+    'msg.restarting':'系统正在重启...','msg.noConversations':'暂无对话',
+    'msg.noApps':'暂无应用','msg.noSystemApps':'暂无系统应用',
+    'msg.noCron':'暂无心跳任务','msg.noModels':'未找到可用模型','msg.noSubTasks':'暂无分身任务',
+    'msg.loadFail':'加载失败: ','msg.loadFailShort':'加载失败',
+    'msg.untitled':'(无标题)','msg.selectConv':'先选择对话',
+    'msg.archived':'已归档','msg.archivedWarn':'该会话已达上限，已归档，无法继续对话',
+    'group.system':'系统','group.tools':'工具','group.apps':'应用'
+  },
+  en: {
+    'nav.restart':'Restart','nav.logout':'Logout',
+    'sidebar.search':'Search conversations...','sidebar.new':'+ New chat',
+    'sidebar.chat':'Chat','sidebar.apps':'Apps','sidebar.system':'System',
+    'chat.new':'New chat','chat.emptyDesc':'Describe what you need, or click ☰ to switch conversations.',
+    'chat.placeholder':'Type your request...',
+    'apps.title':'My Apps',
+    'footer.session':'Session: -','footer.local':'Local',
+    'footer.exp':'Exp','footer.board':'Board','footer.cron':'Cron','footer.skill':'Skill','footer.sub':'Sub',
+    'footer.expTitle':'Experience','footer.boardTitle':'Task Board','footer.cronTitle':'Heartbeat Tasks','footer.subTitle':'Sub Tasks','footer.skillTitle':'Skills','footer.mcpTitle':'MCP Client',
+    'footer.ws':'Connected',
+    'footer.scopeUser':'Global','footer.scopeSession':'This session','footer.scopeSystem':'Instance',
+    'modal.callDetail':'Tool Detail','modal.expTitle':'Experience','modal.cronTitle':'Heartbeat Tasks',
+    'modal.renameTitle':'Rename conversation','modal.renamePh':'Conversation title',
+    'modal.modelTitle':'Switch model','modal.skillTitle':'Current Skill','modal.skillPh':'No skill loaded...',
+    'modal.subTitle':'Sub Tasks','modal.selectSub':'← Select a sub task',
+    'modal.sysAppsTitle':'System Apps',
+    'common.loading':'Loading...','common.save':'Save','common.clear':'Clear',
+    'msg.inputRequired':'Please enter content','msg.titleRequired':'Title cannot be empty','msg.deleted':'✅ Deleted',
+    'msg.renamed':'✅ Renamed','msg.saved':'✅ Saved','msg.cleared':'✅ Cleared',
+    'msg.switched':'✅ Switched to','msg.alreadyCurrent':'Already current model',
+    'msg.createFail':'Create failed: ','msg.deleteFail':'Delete failed: ','msg.renameFail':'Rename failed: ',
+    'msg.saveFail':'Save failed: ','msg.clearFail':'Clear failed: ','msg.switchFail':'Switch failed: ',
+    'msg.networkError':'Network error: ','msg.confirmDelete':'Delete this conversation?',
+    'msg.confirmRestart':'Confirm restart?','msg.confirmClearSkill':'Clear current skill?',
+    'msg.restarting':'System restarting...','msg.noConversations':'No conversations',
+    'msg.noApps':'No apps','msg.noSystemApps':'No system apps',
+    'msg.noCron':'No heartbeat tasks','msg.noModels':'No models available','msg.noSubTasks':'No sub tasks',
+    'msg.loadFail':'Load failed: ','msg.loadFailShort':'Load failed',
+    'msg.untitled':'(Untitled)','msg.selectConv':'Select a conversation first',
+    'msg.archived':'Archived','msg.archivedWarn':'This conversation has reached the size limit and is archived. Cannot continue.',
+    'group.system':'System','group.tools':'Tools','group.apps':'Apps'
+  }
+};
+
+var _lang = localStorage.getItem('aicp_lang') || 'en';
+function t(key){ return (I18N[_lang] && I18N[_lang][key]) || key; }
+
+function applyLang(lang){
+  _lang = lang;
+  localStorage.setItem('aicp_lang', lang);
+  document.documentElement.lang = (lang === 'zh' ? 'zh-CN' : 'en');
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    var k = el.getAttribute('data-i18n');
+    var v = I18N[lang] && I18N[lang][k];
+    if (v !== undefined) el.textContent = v;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
+    var k = el.getAttribute('data-i18n-ph');
+    var v = I18N[lang] && I18N[lang][k];
+    if (v !== undefined) el.placeholder = v;
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(function(el){
+    var k = el.getAttribute('data-i18n-title');
+    var v = I18N[lang] && I18N[lang][k];
+    if (v !== undefined) el.title = v;
+  });
+  document.querySelectorAll('#langToggle button').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-lang') === lang);
+  });
+  if (typeof renderConversationList === 'function' && typeof conversations !== 'undefined') {
+    renderConversationList(conversations);
+  }
+  var sd = document.getElementById('sourceDisplay');
+  if (sd) sd.textContent = getSource() === 'local' ? t('footer.local') : (lang === 'zh' ? '远程' : 'Remote');
+  // 通知 webview iframe 内的页面（如 settings.html）切换语种。
+  // 同一文档树内的 localStorage.setItem 不会触发子页面的 storage 事件，只能靠 postMessage。
+  notifyWebviewLang(lang);
+  // webview 面板标题随语种刷新（如 System Settings → 系统设置）
+  refreshWebviewTitle();
+}
+function notifyWebviewLang(lang){
+  try {
+    var frame = document.getElementById('webviewFrame');
+    if (frame && frame.contentWindow) frame.contentWindow.postMessage({type:'aicp_lang', lang:lang}, '*');
+  } catch(e) {}
+}
+/* 系统应用页面清单缓存（用于面板标题随语种刷新） */
+var _sysPagesCache = [];
+/* webview 面板标题按当前语种重新计算（切语种后标题不应停留在旧语言） */
+function refreshWebviewTitle(){
+  var panel = document.getElementById('webviewPanel');
+  var titleEl = document.getElementById('webviewTitle');
+  if (!panel || !titleEl) return;
+  var url = panel.dataset.url;
+  if (!url) return;
+  for (var i = 0; i < _sysPagesCache.length; i++) {
+    var p = _sysPagesCache[i];
+    if (!p || !p.url) continue;
+    var abs;
+    try { abs = new URL(p.url, location.href).href; } catch(e) { continue; }
+    if (abs !== url) continue;
+    var fallback = (p.path || '').replace(/\.html$/, '').split('/').pop();
+    var name = (_lang === 'en') ? (p.title_en || p.title || fallback) : (p.title || fallback);
+    if (name) titleEl.textContent = name;
+    return;
+  }
+}
+// 接收 iframe 内页面（如 settings.html）自己的语言切换，反向同步到外层
+window.addEventListener('message', function(e){
+  if (!e.data || e.data.type !== 'aicp_lang') return;
+  var lang = e.data.lang;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === _lang) return;
+  applyLang(lang);
+});
+function setWebviewMax(isMax) {
+    var panel = document.getElementById('webviewPanel');
+    var main = document.querySelector('.main');
+    if (!panel || !main) return;
+    panel.classList.toggle('maximized', isMax);
+    main.classList.toggle('webview-max', isMax);
+    // 最大化时左侧栏应自动收起，让 webview 真正占满窗口
+    var sb = document.getElementById('sidebar');
+    if (sb) {
+        if (isMax) {
+            if (!sb.classList.contains('collapsed')) {
+                sb.classList.add('collapsed');
+                _webviewMaxCollapsedSidebar = true;
+            } else {
+                _webviewMaxCollapsedSidebar = false;
+            }
+        } else if (_webviewMaxCollapsedSidebar) {
+            sb.classList.remove('collapsed');
+            _webviewMaxCollapsedSidebar = false;
+        }
+    }
+
+    var btn = document.getElementById('webviewMaxBtn');
+    if (btn) {
+        btn.innerHTML = isMax
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+        btn.title = isMax ? 'Restore' : 'Maximize';
+    }
+}
+function isWebviewMaxed() {
+    var panel = document.getElementById('webviewPanel');
+    return !!(panel && panel.classList.contains('maximized'));
+}
+function toggleWebviewMax() {
+    setWebviewMax(!isWebviewMaxed());
+}
+document.getElementById('langToggle').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-lang]');
+  if (!b) return;
+  applyLang(b.getAttribute('data-lang'));
+});
+
+// ============ 全局状态 ============
+var currentConversationId = null;
+var conversations = [];
+var conversationsFiltered = [];
+var currentSideTab = 'chat';
+var currentStateType = 'exp';
+var currentTurn = null;
+var toolNodes = {};
+var thinkingLine = null;
+var _convListCache = { list: [], ts: 0 };
+var sessionCache = {};
+var CACHE_TTL = 5 * 60 * 1000;
+var _allModels = [];
+var _currentModel = '';
+var _switching = false;
+var _subTasks = {};
+var _selectedSubTask = null;
+var subSessions = {};
+var subSessionBuffers = {};
+var _userId = 'local';
+var _lastThink = '';
+var _webviewOpenedSidebarCollapsed = false;
+// 记录「webview 最大化」这一动作是否是我们主动收起的侧栏（退出全屏时才恢复）
+var _webviewMaxCollapsedSidebar = false;
+
+async function initUser() {
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action: 'whoami'});
+        var data = await res.json();
+        if (data.ok) _userId = data.user_id || 'local';
+    } catch(e) {}
+    connectWS();
+    loadConversations();
+}
+
+// ============ 工具函数 ============
+function getToken() {
+    var m = document.cookie.match(/aicp_token=([^;]+)/);
+    if (m) return m[1];
+    return localStorage.getItem('aicp_token') || '';
+}
+function getSource() {
+    var h = location.hostname;
+    return (h === 'localhost' || h === '127.0.0.1') ? 'local' : 'remote';
+}
+function escapeHtml(t) {
+    if (t == null) return '';
+    var d = document.createElement('div');
+    d.textContent = String(t);
+    return d.innerHTML;
+}
+function renderMarkdown(content) {
+    if (content == null) return '';
+    var text = String(content);
+    if (typeof marked !== 'undefined') {
+        var html = marked.parse(text, {breaks:true, gfm:true, headerIds:false});
+        if (typeof DOMPurify !== 'undefined') {
+            return DOMPurify.sanitize(html, {ADD_ATTR:['target']});
+        }
+        return html;
+    }
+    return escapeHtml(text).replace(/\n/g,'<br>');
+}
+function showToast(msg) {
+    var t = document.querySelector('.toast');
+    if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.remove('hide');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function(){ t.classList.add('hide'); }, 3000);
+}
+function formatTime(ts) {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}); } catch(e){ return ''; }
+}
+function formatConvTime(ts) {
+    try {
+        var d = new Date(ts);
+        var now = new Date();
+        var sameDay = d.toDateString() === now.toDateString();
+        var yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+        var isYesterday = d.toDateString() === yesterday.toDateString();
+        if (_lang === 'zh') {
+            if (sameDay) return d.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false});
+            if (isYesterday) return '昨天 ' + d.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false});
+            return d.toLocaleDateString('zh-CN', {month: '2-digit', day: '2-digit'}) + ' ' + d.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit', hour12: false});
+        } else {
+            if (sameDay) return d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+            if (isYesterday) return 'Yesterday ' + d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+            return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' ' + d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+        }
+    } catch(e) { return ''; }
+}
+function shortTarget(target) {
+    if (!target) return '?';
+    var parts = target.split('/');
+    if (parts.length <= 2) return target;
+    return parts.slice(-2).join('/');
+}
+function apiFetch(url, body) {
+    var headers = {'Content-Type':'application/json'};
+    var token = getToken();
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(url, {method:'POST', headers:headers, body: JSON.stringify(body)});
+}
+
+// ============ 侧栏 ============
+function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('sideOverlay').classList.toggle('show');
+}
+function toggleSidebarDesktop() {
+    var sb = document.getElementById('sidebar');
+    if (!sb) return;
+    sb.classList.toggle('collapsed');
+}
+function isSidebarCollapsed() {
+    var sb = document.getElementById('sidebar');
+    return sb && sb.classList.contains('collapsed');
+}
+function switchPanel(name) {
+    // webview 最大化时 .main.webview-max .panel 被 CSS 强制隐藏，聊天/应用面板看不到 → 先退出全屏
+    if (isWebviewMaxed()) setWebviewMax(false);
+    var sb = document.getElementById('sidebar');
+    if (sb && sb.classList.contains('collapsed') && currentSideTab === name) {
+        sb.classList.remove('collapsed');
+        return;
+    }
+    document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
+    document.querySelectorAll('.footer-nav-btn').forEach(function(n){n.classList.remove('active');});
+    var panel = document.getElementById('panel-' + name);
+    if (panel) panel.classList.add('active');
+    var nav = document.querySelector('.footer-nav-btn[data-panel="'+name+'"]');
+    if (nav) nav.classList.add('active');
+    currentSideTab = name;
+    if (name === 'apps') loadApps();
+}
+
+// ============ Webview ============
+function isSameOriginUrl(url) {
+    try { var u = new URL(url, location.href); return u.origin === location.origin; }
+    catch(e) { return false; }
+}
+function openWebview(url, title) {
+    if (!url) return;
+    var panel = document.getElementById('webviewPanel');
+    var frame = document.getElementById('webviewFrame');
+    var titleEl = document.getElementById('webviewTitle');
+    if (!isSidebarCollapsed()) {
+        var sb = document.getElementById('sidebar');
+        if (sb) { sb.classList.add('collapsed'); _webviewOpenedSidebarCollapsed = true; }
+    } else { _webviewOpenedSidebarCollapsed = false; }
+    frame.src = url;
+    titleEl.textContent = title || url;
+    panel.classList.add('show');
+    // webview 面板整体上移让出底部状态栏高度（见 .webview-panel 的 height），状态条保持整条
+    panel.dataset.url = url;
+    panel.dataset.title = title || url;
+}
+function closeWebview() {
+    var panel = document.getElementById('webviewPanel');
+    if (!panel) return;
+    panel.classList.remove('show');
+    setWebviewMax(false);   // 统一复位全屏状态（含最大化按钮图标/标题）
+    
+    document.getElementById('webviewFrame').src = 'about:blank';
+    panel.dataset.url = '';
+    if (_webviewOpenedSidebarCollapsed) {
+        var sb = document.getElementById('sidebar');
+        if (sb) sb.classList.remove('collapsed');
+        _webviewOpenedSidebarCollapsed = false;
+    }
+}
+function reloadWebview() {
+    var panel = document.getElementById('webviewPanel');
+    if (panel.dataset.url) document.getElementById('webviewFrame').src = panel.dataset.url;
+}
+// 切换对话时刷新 skills.html 子页面（带上新的 session_id），其它页面不动
+function refreshSkillsWebview() {
+    var panel = document.getElementById('webviewPanel');
+    if (!panel || !panel.classList.contains('show')) return;
+    var url = panel.dataset.url || '';
+    if (url.indexOf('skills.html') < 0) return;
+    var frame = document.getElementById('webviewFrame');
+    if (!frame) return;
+    var base = url.split('?')[0];
+    var cleanUrl = base + '?session_id=' + encodeURIComponent(currentConversationId || '');
+    panel.dataset.url = cleanUrl;
+    // 加时间戳强制 iframe 重新加载（即使 session_id 没变也要刷新）
+    frame.src = cleanUrl + '&_t=' + Date.now();
+}
+function openWebviewExternal() {
+    var panel = document.getElementById('webviewPanel');
+    if (panel.dataset.url) window.open(panel.dataset.url, '_blank', 'noopener');
+}
+function bindBubbleLinks() {
+    var msgs = document.getElementById('chatMessages');
+    if (!msgs) return;
+    msgs.addEventListener('click', function(e){
+        var a = e.target.closest('a');
+        if (!a) return;
+        var href = a.getAttribute('href');
+        if (!href || href.startsWith('#')) return;
+        e.preventDefault();
+        if (isSameOriginUrl(href)) openWebview(new URL(href, location.href).href, a.textContent || href);
+        else window.open(href, '_blank', 'noopener');
+    });
+}
+
+// ============ 对话列表 ============
+async function loadConversations() {
+    var box = document.getElementById('convList');
+    var now = Date.now();
+    var lastId = localStorage.getItem('aicp_last_conversation');
+    if (_convListCache.list.length > 0 && (now - _convListCache.ts) < CACHE_TTL) {
+        conversations = _convListCache.list;
+        conversationsFiltered = conversations;
+        renderConversationList(conversations);
+        var target = conversations.find(function(c){ return c.id === lastId; }) || conversations[0];
+        if (target) { selectConversation(target.id); } else { await createNewConversation(); return; }
+        refreshConversations(true);
+        return;
+    }
+    box.innerHTML = '<div class="empty-state">' + t('common.loading') + '</div>';
+    await refreshConversations(false);
+}
+
+async function refreshConversations(silent) {
+    var box = document.getElementById('convList');
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'list_conversations', include_archived: true});
+        var data = await res.json();
+        if (!data.ok) {
+            if (box) box.innerHTML = '<div class="empty-state">' + t('msg.loadFail') + escapeHtml(data.error || '?') + '</div>';
+            return;
+        }
+        conversations = data.conversations || [];
+        Object.keys(subSessions).forEach(function(sid) {
+            var exists = conversations.some(function(c){ return c.id === sid; });
+            if (!exists) { conversations.push(subSessions[sid]); }
+            else {
+                var idx = conversations.findIndex(function(c){ return c.id === sid; });
+                if (idx >= 0 && subSessions[sid].status) conversations[idx].status = subSessions[sid].status;
+            }
+        });
+        conversations = conversations.filter(function(c) {
+            if (c.id.startsWith('sub_')) return !c._deleted;
+            return true;
+        });
+        conversationsFiltered = conversations;
+        _convListCache = { list: conversations, ts: Date.now() };
+        renderConversationList(conversations);
+        if (silent) return;
+        var lastId = localStorage.getItem('aicp_last_conversation');
+        var target = conversations.find(function(c){ return c.id === lastId; }) || conversations[0];
+        if (target) { selectConversation(target.id); } else { await createNewConversation(); }
+    } catch(e) {
+        console.error('refreshConversations:', e);
+        if (box) box.innerHTML = '<option>' + escapeHtml(t('msg.loadFail') + ' ' + e.message) + '</option>';
+    }
+}
+
+function renderConversationList(list) {
+    var sorted = (list || []).slice().sort(function(a, b) {
+        var aSub = a.id && a.id.startsWith('sub_') ? 1 : 0;
+        var bSub = b.id && b.id.startsWith('sub_') ? 1 : 0;
+        if (aSub !== bSub) return aSub - bSub;
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
+    list = sorted;
+    var box = document.getElementById('convList');
+    if (!list || list.length === 0) {
+        box.innerHTML = '<div class="empty-state">' + t('msg.noConversations') + '</div>';
+        return;
+    }
+    var html = '';
+    list.forEach(function(c) {
+        var active = (c.id === currentConversationId) ? ' active' : '';
+        var isSub = c.is_sub || c.id.startsWith('sub_');
+        var isArchived = c.archived;
+        var title = c.title || t('msg.untitled');
+        var preview = c.last_preview || '';
+        var meta = '';
+        if (c.updated_at) meta += formatConvTime(c.updated_at);
+        if (c.message_count) meta += ' · ' + c.message_count;
+        if (isSub) {
+            var icon = {running: '⏳', done: '✅', failed: '❌'}[c.status] || '🤖';
+            meta = icon + (meta ? ' · ' + meta : '');
+        }
+        var archivedClass = isArchived ? ' conv-archived' : '';
+        var lockIcon = isArchived ? '<span class="conv-lock" title="' + t('msg.archived') + '">🔒</span>' : '';
+        html += '<div class="conv-item' + active + (isSub ? ' conv-sub' : '') + archivedClass + '" data-id="' + escapeHtml(c.id) + '" onclick="selectConversation(\'' + escapeHtml(c.id) + '\')">';
+        html += '  <span class="conv-del" onclick="event.stopPropagation();deleteConversation(\'' + escapeHtml(c.id) + '\')">✕</span>';
+        html += '  <div class="conv-title">' + (isSub ? '🤖 ' : '') + escapeHtml(title) + lockIcon + '</div>';
+        if (preview) html += '  <div class="conv-preview">' + escapeHtml(preview) + '</div>';
+        if (meta) html += '  <div class="conv-meta">' + escapeHtml(meta) + '</div>';
+        html += '</div>';
+    });
+    box.innerHTML = html;
+}
+
+function filterConversations(q) {
+    q = (q || '').toLowerCase().trim();
+    if (!q) { conversationsFiltered = conversations; renderConversationList(conversations); return; }
+    var f = conversations.filter(function(c){
+        return (c.title||'').toLowerCase().indexOf(q) >= 0 || (c.last_preview||'').toLowerCase().indexOf(q) >= 0;
+    });
+    conversationsFiltered = f;
+    renderConversationList(f);
+}
+
+async function createNewConversation() {
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'new_conversation'});
+        var data = await res.json();
+        if (data.ok) {
+            currentConversationId = data.conversation_id;
+            // 静默刷新：refreshConversations(false) 会按 localStorage 里的旧 id 重新选中旧对话，把新对话顶掉
+            await refreshConversations(true);
+            selectConversation(currentConversationId);
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sideOverlay').classList.remove('show');
+        } else {
+            showToast(t('msg.createFail') + (data.error || ''));
+        }
+    } catch(e) { showToast(t('msg.createFail') + e.message); }
+}
+
+async function selectConversation(id) {
+    if (thinkingLine && thinkingLine.parentNode) {
+        thinkingLine.remove();
+    }
+    currentConversationId = id;
+    localStorage.setItem('aicp_last_conversation', id);
+    // webview 开着 skills.html 时，切换对话要刷新子页面（换成新对话的 session_id）
+    refreshSkillsWebview();
+    switchPanel('chat');
+    renderConversationList(conversations);
+    var cur = conversations.find(function(c){ return c.id === id; }) || {};
+    document.getElementById('chatTitle').textContent = cur.title || t('chat.new');
+    document.getElementById('sessionDisplay').textContent = (t('footer.session').split(':')[0]) + ': ' + id.slice(0, 12);
+    currentTurn = null;
+    toolNodes = {};
+    thinkingLine = null;
+    await loadConversationFlow(id);
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sideOverlay').classList.remove('show');
+    // ★ 切换对话只刷新会话级状态（T/A/S），全局区（E/H/M/model）保持不动
+    refreshSessionActivity();
+    pulseSessionGroup();
+}
+
+function prependFlowAsTurns(flow) {
+    var msgs = document.getElementById('chatMessages');
+    var inner = msgs.querySelector('.messages-inner') || msgs;
+    var oldScrollHeight = msgs.scrollHeight;
+    var oldScrollTop = msgs.scrollTop;
+    var turns = [];
+    var current = null;
+    flow.forEach(function(e) {
+        if (e.from === 'user') { current = { user: e, items: [] }; turns.push(current); }
+        else if (current) { current.items.push(e); }
+    });
+    if (turns.length === 0) return;
+    var frag = document.createDocumentFragment();
+    turns.forEach(function(t) {
+        var node = buildTurnNode(t);
+        if (node) frag.appendChild(node);
+    });
+    if (inner.firstChild) inner.insertBefore(frag, inner.firstChild);
+    else inner.appendChild(frag);
+    msgs.scrollTop = oldScrollTop + (msgs.scrollHeight - oldScrollHeight);
+}
+
+async function loadConversationFlow(id, beforeTs) {
+    var msgs = document.getElementById('chatMessages');
+    var isLoadMore = !!beforeTs;
+    if (!isLoadMore) {
+        msgs.innerHTML = '<div class="empty-chat"><div class="empty-mark">A</div><div class="empty-desc">' + t('common.loading') + '</div></div>';
+        msgs.dataset.oldestTs = '';
+        msgs.dataset.hasMore = '0';
+        currentTurn = null;
+        toolNodes = {};
+        thinkingLine = null;
+    }
+    try {
+        var body = { action: 'get_session', session_id: id, limit: 10 };
+        if (beforeTs) body.before_ts = beforeTs;
+        var res = await apiFetch('/api/builtins/agents/main_agent', body);
+        var data = await res.json();
+        if (!data.ok || !data.flow) {
+            if (!isLoadMore) {
+                msgs.innerHTML = '<div class="empty-chat"><div class="empty-desc">' + t('msg.loadFail') + escapeHtml(data.error || '?') + '</div></div>';
+            }
+            return;
+        }
+        if (data.flow.length === 0) {
+            if (!isLoadMore) {
+                msgs.innerHTML = '<div class="empty-chat"><div class="empty-mark">A</div><div class="empty-title">AICP BIO-1</div><div class="empty-desc">' + t('chat.emptyDesc') + '</div></div>';
+            }
+            msgs.dataset.hasMore = '0';
+            return;
+        }
+        sessionCache[id] = { flow: data.flow, ts: Date.now() };
+        if (isLoadMore) {
+            prependFlowAsTurns(data.flow);
+            if (data.has_more) {
+                msgs.dataset.oldestTs = data.oldest_ts || '';
+                msgs.dataset.hasMore = '1';
+            } else { msgs.dataset.hasMore = '0'; }
+        } else {
+            renderFlowAsTurns(data.flow);
+            if (data.has_more) {
+                msgs.dataset.oldestTs = data.oldest_ts || '';
+                msgs.dataset.hasMore = '1';
+                var inner = msgs.querySelector('.messages-inner');
+                if (inner) {
+                    inner.insertAdjacentHTML('afterbegin', '<div id="loadMoreTip">↑ ' + (_lang === 'zh' ? '往上滚动加载更早的记录（共 ' + (data.round_count || '?') + ' 轮）' : 'Scroll up to load earlier (' + (data.round_count || '?') + ' rounds)') + '</div>');
+                }
+            } else { msgs.dataset.hasMore = '0'; }
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+    } catch (e) {
+        if (!isLoadMore) {
+            msgs.innerHTML = '<div class="empty-chat"><div class="empty-desc">' + t('msg.loadFail') + escapeHtml(e.message) + '</div></div>';
+        } else { msgs.dataset.hasMore = '1'; }
+    }
+}
+
+function buildTurnNode(turnData) {
+    if (!turnData || !turnData.user) return null;
+    var turn = document.createElement('div');
+    turn.className = 'turn';
+    var div = document.createElement('div');
+    div.className = 'msg user';
+    div.innerHTML = '<div class="bubble">' + escapeHtml(turnData.user.content || '') + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + formatTime(turnData.user.timestamp) + '</div>';
+    turn.appendChild(div);
+    var chain = document.createElement('div');
+    chain.className = 'tool-chain';
+    var hasChain = false;
+    var toolMap = {};
+    var lastThink = '';
+    turnData.items.forEach(function(e) {
+        if (e.from === 'ai' && e.think) lastThink = e.think;
+        if (e.from === 'ai' && e.call === 'reply' && e.content) {
+            var a = document.createElement('div');
+            a.className = 'msg assistant';
+            a.innerHTML = '<div class="bubble">' + renderMarkdown(e.content) + '</div><div class="time">' + (_lang === 'zh' ? '系统 · ' : 'AI · ') + formatTime(e.timestamp) + '</div>';
+            turn.appendChild(a);
+        }
+        if (e.from === 'system' && e.action === 'call_start') {
+            hasChain = true;
+            var d = e.detail || {};
+            var node = document.createElement('div');
+            node.className = 'tool-node ok';
+            node.dataset.callId = d.call_id || '';
+            node.onclick = function() { showCallDetail(d.call_id); };
+            node.innerHTML =
+                '<div class="tool-think">' + escapeHtml((lastThink || '').slice(0, 60)) + '</div>' +
+                '<div class="tool-name-row">' +
+                    '<span class="tool-name">' + escapeHtml(shortTarget(d.target)) + '</span>' +
+                    '<span class="dur"></span>' +
+                '</div>';
+            toolMap[d.call_id] = node;
+            lastThink = '';
+            if (chain.children.length > 0) {
+                var arrow = document.createElement('span');
+                arrow.className = 'tool-arrow';
+                arrow.textContent = '→';
+                chain.appendChild(arrow);
+            }
+            chain.appendChild(node);
+        }
+        if (e.from === 'system' && e.action === 'call_end') {
+            var d2 = e.detail || {};
+            if (toolMap[d2.call_id]) {
+                var dur = toolMap[d2.call_id].querySelector('.dur');
+                if (dur && d2.duration_ms != null) dur.textContent = (d2.duration_ms / 1000).toFixed(1) + 's';
+            }
+        }
+        if (e.from === 'system' && e.action === 'call_error') {
+            var d3 = e.detail || {};
+            if (toolMap[d3.call_id]) {
+                toolMap[d3.call_id].classList.remove('ok');
+                toolMap[d3.call_id].classList.add('error');
+            }
+        }
+    });
+    if (hasChain) turn.insertBefore(chain, turn.children[1] || null);
+    return turn;
+}
+
+async function refreshConversationFlow(id, silent) {
+    var msgs = document.getElementById('chatMessages');
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id:id});
+        var data = await res.json();
+        if (data.ok && data.flow) {
+            if (data.flow.length > 0) sessionCache[id] = { flow: data.flow, ts: Date.now() };
+            else delete sessionCache[id];
+            if (!silent) {
+                renderFlowAsTurns(data.flow);
+                if (data.flow.length === 0) {
+                    msgs.innerHTML = '<div class="empty-chat"><div class="empty-mark">A</div><div class="empty-title">AICP BIO-1</div><div class="empty-desc">' + t('chat.emptyDesc') + '</div></div>';
+                }
+            }
+        } else if (!silent) {
+            msgs.innerHTML = '<div class="empty-chat"><div class="empty-desc">' + t('msg.loadFail') + escapeHtml(data.error || '?') + '</div></div>';
+        }
+    } catch(e) {
+        if (!silent) {
+            msgs.innerHTML = '<div class="empty-chat"><div class="empty-desc">' + t('msg.loadFail') + escapeHtml(e.message) + '</div></div>';
+        }
+    }
+}
+
+async function deleteConversation(id) {
+    if (!confirm(t('msg.confirmDelete'))) return;
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'delete_conversation', conversation_id:id});
+        var data = await res.json();
+        if (data.ok) {
+            if (currentConversationId === id) currentConversationId = null;
+            delete sessionCache[id];
+            delete subSessions[id];
+            delete subSessionBuffers[id];
+            _convListCache.ts = 0;
+            await loadConversations();
+            showToast(t('msg.deleted'));
+        }
+    } catch(e) { showToast(t('msg.deleteFail') + e.message); }
+}
+
+function renameCurrentConversation() {
+    if (!currentConversationId) { showToast(t('msg.selectConv')); return; }
+    var cur = (conversations.find(function(c){return c.id===currentConversationId;})||{}).title || '';
+    document.getElementById('renameInput').value = cur;
+    document.getElementById('renameModalOverlay').classList.add('show');
+    document.getElementById('renameInput').focus();
+}
+function closeRenameModal() { document.getElementById('renameModalOverlay').classList.remove('show'); }
+async function confirmRename() {
+    var tt = document.getElementById('renameInput').value.trim();
+    if (!tt) { showToast(t('msg.titleRequired')); return; }
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'rename_conversation', conversation_id:currentConversationId, title:tt});
+        var data = await res.json();
+        if (data.ok) {
+            closeRenameModal();
+            document.getElementById('chatTitle').textContent = tt;
+            _convListCache.ts = 0;
+            await loadConversations();
+            showToast(t('msg.renamed'));
+        }
+    } catch(e) { showToast(t('msg.renameFail') + e.message); }
+}
+
+// ============ 消息渲染 ============
+function ensureMessagesInner() {
+    var msgs = document.getElementById('chatMessages');
+    var inner = msgs.querySelector('.messages-inner');
+    if (!inner) {
+        inner = document.createElement('div');
+        inner.className = 'messages-inner';
+        var empt = msgs.querySelector('.empty-chat');
+        if (empt) { msgs.innerHTML = ''; msgs.appendChild(empt); }
+        msgs.appendChild(inner);
+    }
+    return inner;
+}
+
+function addUserMessage(content) {
+    if (thinkingLine && thinkingLine.parentNode) {
+        thinkingLine.remove();
+        thinkingLine = null;
+    }
+    var msgs = document.getElementById('chatMessages');
+    var empty = msgs.querySelector('.empty-chat');
+    if (empty) empty.remove();
+    var inner = ensureMessagesInner();
+    var turn = document.createElement('div');
+    turn.className = 'turn';
+    var div = document.createElement('div');
+    div.className = 'msg user';
+    div.innerHTML = '<div class="bubble">' + escapeHtml(content) + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + new Date().toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}) + '</div>';
+    turn.appendChild(div);
+    inner.appendChild(turn);
+    currentTurn = turn;
+    toolNodes = {};
+    thinkingLine = null;
+    requestAnimationFrame(function() { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+function addAssistantMessage(content) {
+    if (!content) return;
+    var msgs = document.getElementById('chatMessages');
+    if (!currentTurn || !document.body.contains(currentTurn)) {
+        var inner = ensureMessagesInner();
+        currentTurn = document.createElement('div');
+        currentTurn.className = 'turn';
+        inner.appendChild(currentTurn);
+        toolNodes = {};
+        thinkingLine = null;
+    }
+    var div = document.createElement('div');
+    div.className = 'msg assistant';
+    div.innerHTML = '<div class="bubble">' + renderMarkdown(content) + '</div><div class="time">' + (_lang === 'zh' ? '系统 · ' : 'AI · ') + new Date().toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}) + '</div>';
+    currentTurn.appendChild(div);
+    requestAnimationFrame(function() { msgs.scrollTop = msgs.scrollHeight; });
+}
+
+// ============ 工具链 ============
+function getOrCreateToolChain() {
+    if (!currentTurn) {
+        var msgs = document.getElementById('chatMessages');
+        var empty = msgs.querySelector('.empty-chat');
+        if (empty) empty.remove();
+        var inner = ensureMessagesInner();
+        currentTurn = document.createElement('div');
+        currentTurn.className = 'turn';
+        inner.appendChild(currentTurn);
+        toolNodes = {};
+        thinkingLine = null;
+    }
+    var chain = currentTurn.querySelector('.tool-chain');
+    if (!chain) {
+        chain = document.createElement('div');
+        chain.className = 'tool-chain';
+        currentTurn.appendChild(chain);
+    }
+    return chain;
+}
+var _scrollPending = false;
+var _stickToBottom = true;   // 用户上翻历史时不再强制拉回底部
+// 统一置底：rAF 合并，避免 thinking 行插入/增长后被底部裁掉
+function scrollToBottom() {
+    var msgs = document.getElementById('chatMessages');
+    if (!msgs) return;
+    if (!_stickToBottom) return;
+    if (_scrollPending) return;
+    _scrollPending = true;
+    requestAnimationFrame(function() {
+        msgs.scrollTop = msgs.scrollHeight;
+        // 第二帧再兜一次：thinking 行/工具节点刚插入时高度可能还没稳定
+        requestAnimationFrame(function() {
+            msgs.scrollTop = msgs.scrollHeight;
+            _scrollPending = false;
+        });
+    });
+}
+
+// 断线重连后补拉：服务端 flow 是权威（内存态实时更新），本地 DOM 条目少于服务端时重渲染当前会话
+async function resyncCurrentConversation() {
+    if (!currentConversationId) return;
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id: currentConversationId, limit: 50});
+        var data = await res.json();
+        if (!data.ok || !data.flow) return;
+        var flow = data.flow || [];
+        var serverCount = 0;
+        flow.forEach(function(e){
+            if (e.from === 'user') serverCount++;
+            else if (e.from === 'ai' && e.call === 'reply' && e.content) serverCount++;
+        });
+        var msgs = document.getElementById('chatMessages');
+        if (!msgs) return;
+        var localCount = msgs.querySelectorAll('.msg.user').length + msgs.querySelectorAll('.msg.assistant').length;
+        if (serverCount <= localCount) return;
+        renderFlowAsTurns(flow);
+        scrollToBottom();
+    } catch(e) { console.warn('resync failed:', e); }
+}
+
+function initAutoScroll() {
+    var msgs = document.getElementById('chatMessages');
+    if (!msgs || msgs.__autoScrollBound) return;
+    msgs.__autoScrollBound = true;
+    var mo = new MutationObserver(function(){ scrollToBottom(); });
+    mo.observe(msgs, { childList: true, subtree: true, characterData: true });
+    msgs.addEventListener('scroll', function(){
+        _stickToBottom = (msgs.scrollTop + msgs.clientHeight) >= (msgs.scrollHeight - 48);
+    });
+}
+
+function ensureThinkingLine() {
+    if (!currentTurn) return null;
+    if (thinkingLine && thinkingLine.parentNode) return thinkingLine;
+    thinkingLine = null;
+    var chain = getOrCreateToolChain();
+    if (!chain) return null;
+    thinkingLine = document.createElement('div');
+    thinkingLine.className = 'thinking-line';
+    thinkingLine.textContent = _lang === 'zh' ? '💭 正在思考...' : '💭 Thinking...';
+    thinkingLine.dataset.full = '';
+    currentTurn.insertBefore(thinkingLine, chain.nextSibling);
+    scrollToBottom();
+    return thinkingLine;
+}
+function updateThinkingLine(chunk) {
+    var line = ensureThinkingLine();
+    if (!line) return;
+    var full = (line.dataset.full || '') + chunk;
+    line.dataset.full = full;
+    line.textContent = '💭 ' + (full.length > 80 ? '...' + full.slice(-80) : full);
+    try {
+        var m = chunk.match(/🧩\s*(\{[\s\S]*\})/);
+        if (m) { var obj = JSON.parse(m[1]); if (obj && obj.think) _lastThink = obj.think; }
+    } catch(e) {}
+}
+function removeThinkingLine() {
+    if (thinkingLine) {
+        thinkingLine.style.opacity = '0';
+        var toRemove = thinkingLine;
+        setTimeout(function(){ if (toRemove.parentNode) toRemove.remove(); }, 300);
+        thinkingLine = null;
+    }
+}
+function handleToolStart(data) {
+    var line = ensureThinkingLine();
+    if (line) {
+        line.textContent = '💭 ' + (_lang === 'zh' ? '调用 ' + shortTarget(data.target) + '...' : 'Calling ' + shortTarget(data.target) + '...');
+        line.dataset.full = '';
+    }
+    var chain = getOrCreateToolChain();
+    if (!chain) return;
+    var node = document.createElement('div');
+    node.className = 'tool-node running';
+    node.dataset.callId = data.call_id;
+    var think = data.think || _lastThink || '';
+    node.innerHTML =
+        '<div class="tool-think">' + escapeHtml(think.slice(0, 60)) + '</div>' +
+        '<div class="tool-name-row">' +
+            '<span class="tool-name">' + escapeHtml(shortTarget(data.target)) + '</span>' +
+            '<span class="dur"></span>' +
+        '</div>';
+    node.onclick = function(){ showCallDetail(data.call_id); };
+    if (chain.children.length > 0) {
+        var arrow = document.createElement('span');
+        arrow.className = 'tool-arrow';
+        arrow.textContent = '→';
+        chain.appendChild(arrow);
+    }
+    chain.appendChild(node);
+    toolNodes[data.call_id] = node;
+    _lastThink = '';
+    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+}
+function handleToolEnd(data) {
+    var node = toolNodes[data.call_id];
+    if (!node) return;
+    node.classList.remove('running');
+    node.classList.add(data.status === 'ok' ? 'ok' : 'error');
+    var dur = node.querySelector('.dur');
+    if (dur && data.duration_ms != null) dur.textContent = (data.duration_ms/1000).toFixed(1) + 's';
+    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+}
+function handleReplyEnd(data) {
+    removeThinkingLine();
+    var chain = getOrCreateToolChain();
+    if (!chain) return;
+    var replyNode = document.createElement('div');
+    replyNode.className = 'tool-node ok';
+    var n = data.tool_count || 1;
+    replyNode.innerHTML =
+        '<div class="tool-think"></div>' +
+        '<div class="tool-name-row">' +
+            '<span class="tool-name">💬 reply</span>' +
+            '<span class="dur">' + (_lang === 'zh' ? '共 ' + n + ' 步' : n + ' steps') + '</span>' +
+        '</div>';
+    if (chain.children.length > 0) {
+        var arrow = document.createElement('span');
+        arrow.className = 'tool-arrow';
+        arrow.textContent = '→';
+        chain.appendChild(arrow);
+    }
+    chain.appendChild(replyNode);
+    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+    refreshActivity();
+}
+// ============ 活动状态（E/T/H/A/S/M 高亮，按作用域分组） ============
+// user 级：E          session 级：T / A / S
+// system 级（实例共享）：H / M  → 与 user 级同放"全局区"
+var _activityRetry = 0;
+var _activityTimer = null;
+var _activityScopeI18n = { user: 'footer.scopeUser', session: 'footer.scopeSession', system: 'footer.scopeSystem' };
+function activityGroup(scope){ return scope === 'session' ? 'session' : 'global'; }
+function activityScopeLabel(scope){ return t(_activityScopeI18n[scope] || 'footer.scopeUser'); }
+function applyActivity(modules, groupFilter) {
+    if (!modules) return;
+    var globalBox = document.getElementById('fbGlobalItems');
+    var sessionBox = document.getElementById('fbSessionItems');
+    document.querySelectorAll('.footer-btn.icon-only.letter[data-activity]').forEach(function(el){
+        var k = el.getAttribute('data-activity');
+        var m = modules[k];
+        if (!m) return;
+        var scope = m.scope || 'user';
+        var group = activityGroup(scope);
+        // 按后端返回的 scope 归位 —— 前端不需要知道字母含义
+        var box = (group === 'session') ? sessionBox : globalBox;
+        if (box && el.parentNode !== box) box.appendChild(el);
+        if (groupFilter && group !== groupFilter) return;  // 只刷新指定作用域，另一组保持不动
+        el.classList.toggle('active', !!m.active);
+        if (m.detail) el.setAttribute('data-activity-detail', activityScopeLabel(scope) + ' · ' + m.detail);
+        else el.removeAttribute('data-activity-detail');
+    });
+}
+async function refreshActivity(groupFilter) {
+    try {
+        var ctl = new AbortController();
+        var to = setTimeout(function(){ try{ ctl.abort(); }catch(e){} }, 6000);
+        // ★ 必须带 session_id：task / sub / skill 都是会话级，没传就永远 active=false
+        var res = await apiFetch('/api/builtins/tools/activity_status', {
+            payload: { action: 'snapshot', user_id: _userId },
+            meta: { session_id: currentConversationId }
+        });
+        clearTimeout(to);
+        if (!res || !res.ok) return;
+        var data = await res.json();
+        if (!data || !data.ok) return;
+        _activityRetry = 0;
+        applyActivity(data.data && data.data.modules, groupFilter);
+    } catch(e) {
+        // 失败保留上一次高亮，按退避重试
+        var delays = [5000, 15000, 45000];
+        if (_activityRetry >= delays.length) return;
+        var d = delays[_activityRetry++];
+        if (_activityTimer) clearTimeout(_activityTimer);
+        _activityTimer = setTimeout(function(){ refreshActivity(groupFilter); }, d);
+    }
+}
+function refreshGlobalActivity(){ return refreshActivity('global'); }
+function refreshSessionActivity(){ return refreshActivity('session'); }
+function pulseSessionGroup(){
+    var g = document.querySelector('.footer-bar .fb-group[data-scope="session"]');
+    if (!g) return;
+    g.classList.remove('pulse');
+    void g.offsetWidth;
+    g.classList.add('pulse');
+    setTimeout(function(){ g.classList.remove('pulse'); }, 600);
+}
+function handleInterrupting() {
+    var chain = getOrCreateToolChain();
+    if (!chain) return;
+    var node = document.createElement('div');
+    node.className = 'tool-node running';
+    node.id = 'interrupt-node';
+    node.innerHTML =
+        '<div class="tool-think"></div>' +
+        '<div class="tool-name-row"><span class="tool-name">⏸ ' + (_lang === 'zh' ? '中断中...' : 'Interrupting...') + '</span></div>';
+    chain.appendChild(node);
+}
+function handleInterrupted() {
+    removeThinkingLine();
+    var node = document.getElementById('interrupt-node');
+    if (node) {
+        node.classList.remove('running');
+        node.classList.add('interrupted');
+        var nm = node.querySelector('.tool-name');
+        if (nm) nm.textContent = '⏸ ' + (_lang === 'zh' ? '已中断' : 'Interrupted');
+        node.removeAttribute('id');
+    }
+    refreshActivity();
+}
+
+// ============ 工具详情 ============
+async function showCallDetail(callId) {
+    document.getElementById('callDetailOverlay').classList.add('show');
+    document.getElementById('callDetailTitle').textContent = t('modal.callDetail') + ' · ' + callId;
+    var body = document.getElementById('callDetailBody');
+    body.innerHTML = '<div class="loading">' + t('common.loading') + '</div>';
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', { action: 'get_call_detail', session_id: currentConversationId, call_id: callId });
+        var data = await res.json();
+        if (!data.ok) { body.innerHTML = '<div class="empty-state">' + escapeHtml(data.error || '?') + '</div>'; return; }
+        var entries = data.entries || [];
+       // var startEntry = entries.find(function(e){ return e.action === 'call_start'; });
+        var endEntry   = entries.find(function(e){ return e.action === 'call_end'; });
+        var errEntry   = entries.find(function(e){ return e.action === 'call_error'; });
+        var aiEntry    = data.ai_entry || null;
+        var html = '';
+        if (aiEntry) html += '<div class="detail-block"><div class="detail-block-title">💭 ' + (_lang === 'zh' ? 'AI 决策（think + args）' : 'AI Decision (think + args)') + '</div><pre class="detail-pre">' + escapeHtml(JSON.stringify(aiEntry, null, 2)) + '</pre></div>';
+      //  if (startEntry) html += '<div class="detail-block"><div class="detail-block-title" style="color:var(--brand)">📤 ' + (_lang === 'zh' ? '调用发起（call_start）' : 'Call Started (call_start)') + '</div><pre class="detail-pre">' + escapeHtml(JSON.stringify(startEntry, null, 2)) + '</pre></div>';
+        if (endEntry) html += '<div class="detail-block"><div class="detail-block-title" style="color:var(--ok)">✅ ' + (_lang === 'zh' ? '调用完成（call_end）' : 'Call Completed (call_end)') + '</div><pre class="detail-pre">' + escapeHtml(JSON.stringify(endEntry, null, 2)) + '</pre></div>';
+        else if (errEntry) html += '<div class="detail-block"><div class="detail-block-title" style="color:var(--err)">❌ ' + (_lang === 'zh' ? '调用失败（call_error）' : 'Call Failed (call_error)') + '</div><pre class="detail-pre">' + escapeHtml(JSON.stringify(errEntry, null, 2)) + '</pre></div>';
+        else html += '<div class="detail-block"><div class="detail-block-title" style="color:var(--warn)">⚠ ' + (_lang === 'zh' ? '未完成（无 call_end / call_error）' : 'Incomplete (no call_end / call_error)') + '</div></div>';
+        body.innerHTML = html;
+    } catch(e) {
+        body.innerHTML = '<div class="empty-state">' + t('msg.loadFail') + escapeHtml(e.message) + '</div>';
+    }
+}
+function closeCallDetail() { document.getElementById('callDetailOverlay').classList.remove('show'); }
+
+// ============ 渲染已有 flow ============
+function renderFlowAsTurns(flow) {
+    var msgs = document.getElementById('chatMessages');
+    msgs.innerHTML = '';
+    currentTurn = null;
+    toolNodes = {};
+    thinkingLine = null;
+    var inner = document.createElement('div');
+    inner.className = 'messages-inner';
+    var turns = [];
+    var current = null;
+    flow.forEach(function(e) {
+        if (e.from === 'user') { current = { user: e, items: [] }; turns.push(current); }
+        else if (current) { current.items.push(e); }
+    });
+    var frag = document.createDocumentFragment();
+    turns.forEach(function(t) {
+        var node = buildTurnNode(t);
+        if (node) frag.appendChild(node);
+    });
+    inner.appendChild(frag);
+    msgs.appendChild(inner);
+    msgs.scrollTop = msgs.scrollHeight;
+}
+
+// ============ WebSocket ============
+var ws = null;
+var wsHeartbeat = null;
+var reconnectDelay = 3000;
+var _wsChannel = null;
+var _wsConnecting = false;
+var _wsEverConnected = false;
+var _needResync = false;   // 断线重连后需要补拉断线期间的消息   // 是否成功连上过（用于判断重连后补拉）
+
+// WebSocket 状态灯：只保留信号点，状态文字改为 title 悬浮提示
+function setWsStatus(connected) {
+    var el = document.getElementById('wsStatus');
+    if (!el) return;
+    el.innerHTML = '<span class="dot ' + (connected ? 'green' : 'red') + '"></span>';
+    el.title = connected ? t('footer.ws') : (_lang === 'zh' ? '已断开' : 'Disconnected');
+}
+function connectWS() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    if (_wsConnecting) return;
+    _wsConnecting = true;
+    var channel = 'pa_' + _userId;
+    fetch('/api/ws_config').then(function(r){ return r.json(); }).then(function(cfg){
+        var url = cfg.url || ('ws://' + location.hostname + ':' + (parseInt(location.port||9000)+1) + '/ws');
+        if (cfg.url && !/:\d+/.test(cfg.url.replace('ws://','').replace('wss://','').split('/')[0])) {
+            var port = cfg.port || (parseInt(location.port||9000)+1);
+            url = cfg.url.replace(/\/ws$/, ':' + port + '/ws');
+        }
+        var token = getToken();
+        var full = url + '?channel=' + encodeURIComponent(channel);
+        if (token) full += '&token=' + encodeURIComponent(token);
+        ws = new WebSocket(full);
+        ws.onopen = function() {
+            _wsConnecting = false;
+            reconnectDelay = 3000;
+            setWsStatus(true);
+            if (wsHeartbeat) clearInterval(wsHeartbeat);
+            wsHeartbeat = setInterval(function(){ if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type:'ping'})); }, 15000);
+            _wsEverConnected = true;
+            if (_needResync) { _needResync = false; resyncCurrentConversation(); }
+        };
+        ws.onmessage = function(e) {
+            try {
+                var msg = JSON.parse(e.data);
+                if (msg.type === 'pong') return;
+                handleWsData(msg.data || msg);
+            } catch(err) { console.warn('WS parse:', err); }
+        };
+        ws.onclose = function(e) {
+            _wsConnecting = false;
+            setWsStatus(false);
+            if (wsHeartbeat) { clearInterval(wsHeartbeat); wsHeartbeat = null; }
+            // 服务端心跳超时也用 1000 关闭，之前按 code!==1000 判断导致断线后永不重连
+            if (_wsEverConnected) _needResync = true;
+            setTimeout(function(){ connectWS(); }, reconnectDelay);
+            if (reconnectDelay < 30000) reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+        };
+        ws.onerror = function(){};
+    }).catch(function(){
+        _wsConnecting = false;
+        setTimeout(function(){ connectWS(); }, reconnectDelay);
+    });
+}
+
+function handleWsData(data) {
+    var sid = data.session_id || '';
+    var isSub = sid.startsWith('sub_');
+    if (isSub) {
+        if (!subSessions[sid]) {
+            subSessions[sid] = {
+                id: sid,
+                title: data.description || ('Sub: ' + sid.slice(0, 12)),
+                status: 'running',
+                updated_at: new Date().toISOString(),
+                is_sub: true,
+            };
+            mergeSubSessionsIntoConversations();
+            renderConversationList(conversations);
+        }
+        if (data.type === 'progress' && data.status === 'reply') {
+            subSessions[sid].status = 'done';
+            subSessions[sid].updated_at = new Date().toISOString();
+            mergeSubSessionsIntoConversations();
+            renderConversationList(conversations);
+        }
+        if (data.type === 'progress' && data.status === 'interrupted') {
+            subSessions[sid].status = 'failed';
+            subSessions[sid].updated_at = new Date().toISOString();
+            mergeSubSessionsIntoConversations();
+            renderConversationList(conversations);
+        }
+        if (data.type === 'chat') {
+            subSessions[sid].last_preview = (data.content || '').slice(0, 80);
+            subSessions[sid].updated_at = new Date().toISOString();
+        }
+        if (!subSessionBuffers[sid]) subSessionBuffers[sid] = [];
+        subSessionBuffers[sid].push(data);
+        if (sid === currentConversationId) handleSubEvent(data);
+        return;
+    }
+    if (sid && sid !== currentConversationId) return;
+    var type = data.type || '';
+    if (type === 'chat') {
+        if (data.content) { removeThinkingLine(); addAssistantMessage(data.content); }
+        return;
+    }
+    if (type === 'progress') {
+        var step = data.step || '';
+        var status = data.status || '';
+        if (step === 'thinking') { ensureThinkingLine(); return; }
+        if (status === 'start') { handleToolStart(data); return; }
+        if (status === 'ok' || status === 'error') { handleToolEnd(data); return; }
+        if (status === 'reply' && data.is_final) { handleReplyEnd(data); return; }
+        if (status === 'interrupting') { handleInterrupting(); return; }
+        if (status === 'interrupted') { handleInterrupted(); return; }
+        return;
+    }
+    if (type === 'summary_stream') { updateThinkingLine(data.chunk || ''); return; }
+    if (type === 'stats') { updateStatsBar(data.stats || {}); return; }
+    if (type === 'error') { removeThinkingLine(); addAssistantMessage('❌ ' + (data.error || data.message || '')); refreshActivity(); return; }
+}
+function mergeSubSessionsIntoConversations() {
+    conversations = conversations.filter(function(c){ return !c.id.startsWith('sub_'); });
+    Object.keys(subSessions).forEach(function(sid){ conversations.push(subSessions[sid]); });
+    conversations.sort(function(a, b) {
+        var aSub = a.id.startsWith('sub_') ? 1 : 0;
+        var bSub = b.id.startsWith('sub_') ? 1 : 0;
+        if (aSub !== bSub) return aSub - bSub;
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
+}
+function handleSubEvent(data) {
+    var type = data.type || '';
+    var step = data.step || '';
+    var status = data.status || '';
+    if (type === 'chat') {
+        if (data.content) { removeThinkingLine(); addAssistantMessage(data.content); }
+        return;
+    }
+    if (type === 'progress') {
+        if (step === 'thinking') { ensureThinkingLine(); return; }
+        if (status === 'start') { handleToolStart(data); return; }
+        if (status === 'ok' || status === 'error') { handleToolEnd(data); return; }
+        if (status === 'reply' && data.is_final) { handleReplyEnd(data); return; }
+        if (status === 'interrupting') { handleInterrupting(); return; }
+        if (status === 'interrupted') { handleInterrupted(); return; }
+        return;
+    }
+    if (type === 'summary_stream') { updateThinkingLine(data.chunk || ''); return; }
+    if (type === 'stats') { updateStatsBar(data.stats || {}); return; }
+    if (type === 'error') { removeThinkingLine(); addAssistantMessage('❌ ' + (data.error || data.message || '')); return; }
+}
+function updateStatsBar(stats) {
+    var box = document.getElementById('statsInline');
+    if (!box) return;
+    function fmt(n){ n=n||0; if(n>=1000) return (n/1000).toFixed(1)+'K'; return String(n); }
+    document.getElementById('statCtx').textContent = (stats.context_k||0) + 'K';
+    document.getElementById('statRound').textContent = fmt(stats.round_total);
+    document.getElementById('statDepth').textContent = (stats.depth||0) + '/' + (stats.max_depth||40);
+    box.style.display = 'inline';
+}
+
+// ============ 插件自动补全（/ 前缀） ============
+var _cmdNames = null;      // 插件名全量缓存
+var _cmdDescs = {};        // 插件名 → 描述（后端 descriptions）
+var _cmdPromise = null;    // in-flight 请求
+var _cmdItems = [];        // 当前候选
+var _cmdIdx = 0;           // 选中下标
+var _cmdStart = -1;        // / 在输入框中的起始位置
+
+function loadCmdNames() {
+    if (_cmdNames) return Promise.resolve(_cmdNames);
+    if (_cmdPromise) return _cmdPromise;
+    _cmdPromise = apiFetch('/api/builtins/tools/cogitor', {action:'list_all', exclude_prefix:['builtins/agents/']})
+        .then(function(res){ return res.json(); })
+        .then(function(d){
+            var list = (d && d.plugins) || [];
+            var dm = (d && d.descriptions) || {};
+            _cmdDescs = {};
+            for (var k in dm) {
+                if (Object.prototype.hasOwnProperty.call(dm, k)) {
+                    _cmdDescs[k] = String(dm[k] || '');
+                }
+            }
+            _cmdNames = list.map(function(n){ return String(n); });
+            return _cmdNames;
+        })
+        .catch(function(){ _cmdNames = []; return _cmdNames; });
+    return _cmdPromise;
+}
+
+function cmdActiveToken(el) {
+    var pos = el.selectionStart;
+    var before = el.value.slice(0, pos);
+    var m = before.match(/(^|\s)\/([A-Za-z0-9_\-\/]*)$/);
+    if (!m) return null;
+    return {start: pos - m[2].length - 1, query: m[2]};
+}
+
+function fuzzyMatch(q, name) {
+    if (!q) return true;
+    var ql = q.toLowerCase(), nl = name.toLowerCase();
+    if (nl.indexOf(ql) >= 0) return true;
+    // 子序列模糊匹配
+    var i = 0;
+    for (var k = 0; k < nl.length && i < ql.length; k++) {
+        if (nl[k] === ql[i]) i++;
+    }
+    return i === ql.length;
+}
+
+function renderCmdHint() {
+    var box = document.getElementById('cmdHint');
+    if (!box) return;
+    if (!_cmdItems.length) { box.style.display = 'none'; return; }
+    var html = '';
+    for (var i = 0; i < _cmdItems.length; i++) {
+        html += '<div class="cmd-item' + (i === _cmdIdx ? ' sel' : '') + '" data-idx="' + i + '">' +
+                '<span class="cmd-name">' + escapeHtml(_cmdItems[i]) + '</span>' +
+                '<span class="cmd-desc">' + escapeHtml(_cmdDescs[_cmdItems[i]] || '') + '</span></div>';
+    }
+    box.innerHTML = html;
+    box.style.display = 'block';
+    var items = box.querySelectorAll('.cmd-item');
+    for (var j = 0; j < items.length; j++) {
+        items[j].addEventListener('mousedown', function(e){ e.preventDefault(); pickCmdItem(parseInt(this.getAttribute('data-idx'), 10)); });
+    }
+}
+
+function hideCmdHint() {
+    var box = document.getElementById('cmdHint');
+    if (box) box.style.display = 'none';
+    _cmdItems = []; _cmdIdx = 0; _cmdStart = -1;
+}
+
+function pickCmdItem(idx) {
+    var el = document.getElementById('msgInput');
+    if (!el || idx < 0 || idx >= _cmdItems.length) return;
+    var name = _cmdItems[idx];
+    if (_cmdStart < 0) return;
+    var pos = el.selectionStart;
+    el.value = el.value.slice(0, _cmdStart) + name + el.value.slice(pos);
+    var caret = _cmdStart + name.length;
+    el.setSelectionRange(caret, caret);
+    el.focus();
+    hideCmdHint();
+}
+
+function refreshCmdHint() {
+    var el = document.getElementById('msgInput');
+    if (!el) return;
+    var tk = cmdActiveToken(el);
+    if (!tk) { hideCmdHint(); return; }
+    loadCmdNames().then(function(names){
+        var q = tk.query;
+        var hits = names.filter(function(n){ return fuzzyMatch(q, n); });
+        // 精确前缀优先
+        hits.sort(function(a, b){
+            var ap = a.toLowerCase().indexOf(q.toLowerCase()) === 0 ? 0 : 1;
+            var bp = b.toLowerCase().indexOf(q.toLowerCase()) === 0 ? 0 : 1;
+            if (ap !== bp) return ap - bp;
+            return a.length - b.length;
+        });
+        _cmdItems = hits.slice(0, 20);
+        _cmdIdx = 0;
+        _cmdStart = tk.start;
+        renderCmdHint();
+    });
+}
+
+// ============ 发送 ============
+async function sendMessage() {
+    var input = document.getElementById('msgInput');
+    var text = input.value.trim();
+    if (!text) { showToast(t('msg.inputRequired')); return; }
+    if (!currentConversationId) { await createNewConversation(); }
+    var cur = conversations.find(function(c){ return c.id === currentConversationId; });
+    if (cur && cur.archived) { showToast(t('msg.archivedWarn')); return; }
+    addUserMessage(text);
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('sendBtn').disabled = true;
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', { content: text, session_id: currentConversationId, source: getSource() });
+        var data = await res.json();
+        if (data.status === 'processing' || data.call === 'processing') { /* async */ }
+        else if (data.content) { addAssistantMessage(data.content); }
+        else if (data.error) { addAssistantMessage('❌ ' + data.error); }
+        setTimeout(function(){ _convListCache.ts = 0; refreshConversations(true); }, 1500);
+    } catch(e) {
+        addAssistantMessage('❌ ' + t('msg.networkError') + e.message);
+    }
+    document.getElementById('sendBtn').disabled = false;
+}
+
+// ============ 应用列表 ============
+async function loadApps() {
+    try {
+        var res = await apiFetch('/api/builtins/control/apps', {action:'list_frontend'});
+        var resp = await res.json();
+        var data = resp.payload || resp.data || resp;
+        var apps = (data.apps || []).filter(function(a){ return a.id !== 'BK'; });
+        var grid = document.getElementById('appGrid');
+        if (apps.length === 0) { grid.innerHTML = '<div class="empty-state">' + t('msg.noApps') + '</div>'; return; }
+        var html = '';
+        apps.forEach(function(a){
+            html += '<div class="app-card" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.id) + '" onclick="openAppCard(this)"><div class="icon">📁</div><div class="name">' + escapeHtml(a.name || a.id) + '</div></div>';
+        });
+        grid.innerHTML = html;
+    } catch(e) { document.getElementById('appGrid').innerHTML = '<div class="empty-state">' + t('msg.loadFailShort') + '</div>'; }
+}
+function openAppCard(el) {
+    var url = el.getAttribute('data-url');
+    var name = el.getAttribute('data-name');
+    if (url) openWebview(url, name);
+}
+
+// ============ 系统应用 ============
+async function openSystemApps() {
+    document.getElementById('sysAppsModalOverlay').classList.add('show');
+    var box = document.getElementById('sysAppsList');
+    box.innerHTML = '<div class="empty-state">' + escapeHtml(t('common.loading')) + '</div>';
+    try {
+        var res = await fetch('/api/pages');
+        var data = await res.json();
+        var allPages = (data.pages || []).filter(function(p){
+            if (p.hidden) return false;
+            if (p.path.indexOf('apps/') === 0) return false;
+            if (p.path.indexOf('demo/') === 0) return false;
+            if (p.path === 'index.html' || p.path === 'console.html' || p.path === 'applications.html' || p.path === 'mcp.html') return false;
+            return true;
+        });
+        var pages = allPages;
+        // 缓存页面清单，供切语种时刷新 webview 面板标题
+        _sysPagesCache = pages;
+        if (pages.length === 0) { box.innerHTML = '<div class="empty-state">' + t('msg.noSystemApps') + '</div>'; return; }
+        var groups = {}, order = [];
+        pages.forEach(function(p){
+            var g = p.group || 'system';
+            if (!groups[g]) { groups[g] = []; order.push(g); }
+            groups[g].push(p);
+        });
+        var isEn = (_lang === 'en');
+        var html = '';
+        order.forEach(function(g){
+            html += '<div class="sys-app-group">' + escapeHtml(t('group.' + g) === 'group.' + g ? g : t('group.' + g)) + '</div>';
+            groups[g].forEach(function(p){
+                var fallback = p.path.replace(/\.html$/, '').split('/').pop();
+                var name = isEn ? (p.title_en || p.title || fallback) : (p.title || fallback);
+                var desc = isEn ? (p.desc_en || p.desc || '') : (p.desc || '');
+                var icon = p.icon || '📄';
+                html += '<div class="sys-app-card" onclick="openSysApp(\'' + p.url + '\', \'' + escapeHtml(name) + '\')">';
+                html += '  <span class="sys-app-icon">' + escapeHtml(icon) + '</span>';
+                html += '  <div class="sys-app-info"><div class="sys-app-name">' + escapeHtml(name) + '</div>';
+                if (desc) html += '<div class="sys-app-desc">' + escapeHtml(desc) + '</div>';
+                html += '  </div>';
+                html += '</div>';
+            });
+        });
+        box.innerHTML = html;
+    } catch(e) { box.innerHTML = '<div class="empty-state">' + escapeHtml(t('msg.loadFail') + ' ' + e.message) + '</div>'; }
+}
+function openSysApp(url, name) {
+    closeSysApps();
+    if (isSameOriginUrl(url)) openWebview(new URL(url, location.href).href, name);
+    else window.open(url, '_blank', 'noopener');
+}
+function closeSysApps() { document.getElementById('sysAppsModalOverlay').classList.remove('show'); }
+
+// ============ 技能 / MCP 页面 ============
+var SKILLS_PAGE_URL = '/tools/skills.html';
+var MCP_PAGE_URL = '/tools/mcp-client.html';
+function openSkillsPage() {
+    var url = SKILLS_PAGE_URL;
+    if (currentConversationId) url += '?session_id=' + encodeURIComponent(currentConversationId);
+    openWebview(url, 'Skills');
+}
+function openMcpPage() { openWebview(MCP_PAGE_URL, 'MCP Client'); }
+
+// ============ 经验/看板 ============
+function openStateModal(type) {
+    currentStateType = type;
+    document.getElementById('stateModalTitle').textContent = type === 'exp' ? t('modal.expTitle') : (_lang === 'zh' ? '📋 任务看板' : '📋 Task Board');
+    // 经验：隐藏保存按钮（只能通过 add_experience 改）
+    var saveBtn = document.querySelector('#stateModalOverlay .btn-save');
+    if (saveBtn) saveBtn.style.display = (type === 'exp') ? 'none' : '';
+    document.getElementById('stateModalOverlay').classList.add('show');
+    reloadState();
+}
+
+function closeStateModal() { document.getElementById('stateModalOverlay').classList.remove('show'); }
+async function reloadState() {
+    var editor = document.getElementById('stateEditor');
+    editor.value = t('common.loading');
+    editor.disabled = true;
+    // 经验：只读（Step 4 后经验由 add_experience 管理，不支持直接编辑）
+    editor.readOnly = (currentStateType === 'exp');
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_state', session_id:currentConversationId, type:currentStateType});
+        var data = await res.json();
+        if (data.ok && data.data) {
+            // 经验：后端返回 content（人类可读的 - [id] title 列表）
+            editor.value = data.data.content || (currentStateType === 'exp' ? '(暂无经验)' : '(empty)');
+        } else {
+            editor.value = t('msg.loadFailShort');
+        }
+    } catch(e) { editor.value = t('msg.loadFail') + e.message; }
+    editor.disabled = false;
+}
+async function saveState() {
+    // 经验：只能通过 add_experience 改，save_state 禁用
+    if (currentStateType === 'exp') {
+        showToast(_lang === 'zh' ? '经验只能通过 add_experience 管理（任务完成后自动沉淀）' : 'Experience is managed by add_experience only');
+        return;
+    }
+    var content = document.getElementById('stateEditor').value;
+    try {
+        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'save_state', session_id:currentConversationId, type:currentStateType, content:content});
+        var data = await res.json();
+        if (data.ok) {
+            showToast(t('msg.saved'));
+            closeStateModal();
+            refreshActivity();
+        } else {
+            showToast('❌ ' + (data.error || '?'));
+        }
+    } catch(e) { showToast('❌ ' + e.message); }
+}
+async function clearState() {
+    var q = _lang === 'zh'
+        ? (currentStateType === 'exp' ? '确定清空经验背包？' : '确定清空任务看板？')
+        : (currentStateType === 'exp' ? 'Clear experience backpack?' : 'Clear task board?');
+    if (!confirm(q)) return;
+    try {
+        var res, data;
+        if (currentStateType === 'exp') {
+            // 经验：调 add_experience clear
+            res = await apiFetch('/api/builtins/tools/add_experience', {action:'clear'});
+            data = await res.json();
+            var payload = data.data || data;
+            if (payload.ok) {
+                document.getElementById('stateEditor').value = '';
+                showToast(t('msg.cleared'));
+                closeStateModal();
+                refreshActivity();
+            } else { showToast('❌ ' + (payload.error || '?')); }
+            return;
+        }
+        // 任务看板：保持原样 save_state
+        res = await apiFetch('/api/builtins/agents/main_agent', {action:'save_state', session_id:currentConversationId, type:currentStateType, content:''});
+        data = await res.json();
+        if (data.ok) {
+            document.getElementById('stateEditor').value = '';
+            showToast(t('msg.cleared'));
+            closeStateModal();
+            refreshActivity();
+        } else { showToast('❌ ' + (data.error || '?')); }
+    } catch(e) { showToast('❌ ' + e.message); }
+}
+// ============ 心跳 ============
+function openCronModal() { document.getElementById('cronModalOverlay').classList.add('show'); reloadCron(); }
+function closeCronModal() { document.getElementById('cronModalOverlay').classList.remove('show'); }
+async function reloadCron() {
+    var box = document.getElementById('cronList');
+    box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
+    try {
+        var res = await apiFetch('/api/os/_cron', {action:'list'});
+        var data = await res.json();
+        var tasks = (data.data && data.data.tasks) || data.tasks || {};
+        var ids = Object.keys(tasks);
+        if (ids.length === 0) { box.innerHTML = '<div class="empty-state">' + t('msg.noCron') + '</div>'; return; }
+        var html = '';
+        ids.forEach(function(tid){
+            var tk = tasks[tid];
+            html += '<div style="padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface-2)">';
+            html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:var(--font-mono);color:var(--brand);font-size:11px">'+escapeHtml(tid)+'</span>';
+            html += '<button onclick="deleteCron(\''+escapeHtml(tid)+'\')" style="background:transparent;border:1px solid rgba(229,72,77,0.3);color:var(--err);border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;font-family:inherit">'+(_lang==='zh'?'删除':'Delete')+'</button></div>';
+            html += '<div style="font-size:11px;color:var(--text-3);margin-top:4px">🎯 '+escapeHtml(tk.target_receiver||'?')+' · '+(tk.running?(_lang==='zh'?'运行中':'Running'):(_lang==='zh'?'已停止':'Stopped'))+'</div>';
+            html += '</div>';
+        });
+        box.innerHTML = html;
+    } catch(e) { box.innerHTML = '<div class="empty-state">' + t('msg.loadFailShort') + '</div>'; }
+}
+async function deleteCron(tid) {
+    var q = _lang === 'zh' ? '删除 ' + tid + '？' : 'Delete ' + tid + '?';
+    if (!confirm(q)) return;
+    try {
+        var res = await apiFetch('/api/os/_cron', {action:'cancel', task_id:tid});
+        var data = await res.json();
+        if (data.ok) { showToast(t('msg.deleted')); reloadCron(); }
+    } catch(e) { showToast('❌ ' + e.message); }
+}
+// ============ 当前技能 ============
+function openSkillModal() {
+    document.getElementById('skillModalOverlay').classList.add('show');
+    reloadSkill();
+}
+function closeSkillModal() { document.getElementById('skillModalOverlay').classList.remove('show'); }
+async function reloadSkill() {
+    var editor = document.getElementById('skillEditor');
+    editor.value = t('common.loading');
+    editor.disabled = true;
+    try {
+        var res = await apiFetch('/api/builtins/tools/skill_loader', {
+            payload: { action: 'get_active' },
+            meta: { session_id: currentConversationId, user_id: _userId }
+        });
+        var data = await res.json();
+        var payload = data.data || data;
+        if (payload.ok) { editor.value = payload.content || ''; updateSkillBadge(payload.has_skill); }
+        else { editor.value = t('msg.loadFail') + (payload.error || '?'); }
+    } catch(e) { editor.value = t('msg.loadFail') + e.message; }
+    editor.disabled = false;
+}
+async function saveSkill() {
+    var content = document.getElementById('skillEditor').value;
+    try {
+        var res = await apiFetch('/api/builtins/tools/skill_loader', {
+            payload: { action: 'save_active', content: content },
+            meta: { session_id: currentConversationId, user_id: _userId }
+        });
+        var data = await res.json();
+        var payload = data.data || data;
+        if (payload.ok) { showToast(t('msg.saved')); updateSkillBadge(!!content); }
+        else { showToast('❌ ' + t('msg.saveFail') + (payload.error || '?')); }
+    } catch(e) { showToast('❌ ' + t('msg.saveFail') + e.message); }
+}
+async function clearSkill() {
+    if (!confirm(t('msg.confirmClearSkill'))) return;
+    try {
+        var res = await apiFetch('/api/builtins/tools/skill_loader', {
+            payload: { action: 'clear' },
+            meta: { session_id: currentConversationId, user_id: _userId }
+        });
+        var data = await res.json();
+        var payload = data.data || data;
+        if (payload.ok) {
+            showToast(t('msg.cleared'));
+            document.getElementById('skillEditor').value = '';
+            updateSkillBadge(false);
+        } else { showToast('❌ ' + t('msg.clearFail') + (payload.error || '?')); }
+    } catch(e) { showToast('❌ ' + t('msg.clearFail') + e.message); }
+}
+function updateSkillBadge(hasSkill) {
+    var badge = document.getElementById('skillBadge');
+    if (badge) badge.style.display = hasSkill ? 'inline' : 'none';
+}
+async function refreshSkillBadge() {
+    try {
+        var res = await apiFetch('/api/builtins/tools/skill_loader', {
+            payload: { action: 'get_active' },
+            meta: { session_id: currentConversationId, user_id: _userId }
+        });
+        var data = await res.json();
+        var payload = data.data || data;
+        if (payload.ok) updateSkillBadge(payload.has_skill);
+    } catch(e) {}
+}
+// ============ 模型切换 ============
+var API_MODEL_PICKER = '/api/os/_model_picker';
+var _mpProviders = [], _mpModels = [], _mpSel = '', _mpCurRef = '', _mpCurProvider = '';
+
+function openModelModal() {
+    var cb = document.getElementById('modelConfirmBtn');
+    if (cb) cb.innerHTML = '&#10003; ' + mpText('保存', 'Save');
+    var lp = document.getElementById('mpLabelProvider');
+    var lm = document.getElementById('mpLabelModel');
+    if (lp) lp.textContent = mpText('端点', 'Endpoint');
+    if (lm) lm.textContent = mpText('模型', 'Model');
+    var lpar = document.getElementById('mpLabelParams');
+    if (lpar) lpar.textContent = mpText('默认角色参数（roles.default）', 'Default role params (roles.default)');
+    document.getElementById('modelModalOverlay').classList.add('show');
+    reloadModel();
+}
+function closeModelModal() {
+    document.getElementById('modelModalOverlay').classList.remove('show');
+}
+function mpText(zh, en) { return _lang === 'zh' ? zh : en; }
+
+async function reloadModel(force) {
+    var box = document.getElementById('modelSel');
+    var sel = document.getElementById('modelProviderSel');
+    box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
+    try {
+        var r1 = await apiFetch(API_MODEL_PICKER, {action:'current'});
+        var j1 = await r1.json();
+        var cur = j1.data || j1;
+        _mpCurRef = cur.ref || '';
+        _mpCurProvider = cur.provider || '';
+        if (cur.model_id) _mpSel = _mpCurProvider ? _mpCurProvider + '/' + cur.model_id : cur.model_id;
+        var mtEl = document.getElementById('mpMaxTokens');
+        var tpEl = document.getElementById('mpTemperature');
+        if (mtEl) mtEl.value = (cur.max_tokens !== null && cur.max_tokens !== undefined && cur.max_tokens !== '') ? cur.max_tokens : '';
+        if (tpEl) tpEl.value = (cur.temperature !== null && cur.temperature !== undefined && cur.temperature !== '') ? cur.temperature : '';
+
+        var r2 = await apiFetch(API_MODEL_PICKER, {action:'list_providers'});
+        var j2 = await r2.json();
+        var d2 = j2.data || j2;
+        _mpProviders = d2.providers || [];
+        if (!_mpProviders.length) { box.innerHTML = '<option>' + escapeHtml(t('msg.noModels')) + '</option>'; return; }
+        sel.innerHTML = _mpProviders.map(function(p){
+            var label = p.provider + (p.name ? ' (' + p.name + ')' : '') + (p.has_key ? '' : ' ' + mpText('·无key','·no key'));
+            return '<option value="' + escapeHtml(p.provider) + '">' + escapeHtml(label) + '</option>';
+        }).join('');
+        sel.value = _mpCurProvider || _mpProviders[0].provider;
+        await loadEndpointModels(sel.value, force);
+    } catch(e) {
+        box.innerHTML = '<option>' + escapeHtml(t('msg.loadFail') + ' ' + e.message) + '</option>';
+    }
+}
+
+async function providerChanged() { await loadEndpointModels(document.getElementById('modelProviderSel').value, false); }
+
+async function loadEndpointModels(pn, force) {
+    var box = document.getElementById('modelSel');
+    var tip = document.getElementById('modelSourceTip');
+    box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
+    try {
+        var res = await apiFetch(API_MODEL_PICKER, {action:'endpoint_models', provider: pn, force: !!force});
+        var jd = await res.json();
+        var data = jd.data || jd;
+        _mpModels = data.models || [];
+        tip.textContent = data.source === 'endpoint'
+            ? mpText('端点返回 ' + (_mpModels.length||0) + ' 个模型', (_mpModels.length||0) + ' models from endpoint')
+            : (data.note || mpText('仅显示已配置模型','configured models only'));
+        renderModelList();
+    } catch(e) {
+        box.innerHTML = '<option>' + escapeHtml(t('msg.loadFail') + ' ' + e.message) + '</option>';
+    }
+}
+
+function renderModelList() {
+    var sel = document.getElementById('modelSel');
+    if (!sel) return;
+    if (!_mpModels.length) { sel.innerHTML = '<option>' + escapeHtml(t('msg.noModels')) + '</option>'; _mpSel = ''; return; }
+    var refs = _mpModels.map(function(m){ return m.ref || (_mpCurProvider + '/' + m.id); });
+    sel.innerHTML = _mpModels.map(function(m, ix){
+        var mark = (refs[ix] === _mpCurRef) ? '\u2713 ' : '';
+        var tag = m.configured ? '' : mpText(' \u00b7 \u65b0', ' (new)');
+        return '<option value="' + escapeHtml(refs[ix]) + '">' + mark + escapeHtml(m.id) + tag + '</option>';
+    }).join('');
+    var ci = refs.indexOf(_mpCurRef);
+    var target = (_mpSel && refs.indexOf(_mpSel) >= 0) ? _mpSel : (ci >= 0 ? _mpCurRef : refs[0]);
+    sel.value = target;
+    _mpSel = sel.value || '';
+}
+
+function pickModel(ref) { _mpSel = ref; }
+
+async function confirmModelSwitch() {
+    if (_switching) return;
+    if (!_mpSel) { showToast(mpText('请先选择模型','Pick a model first')); return; }
+    var parts = _mpSel.split('/');
+    var selProvider = parts.length > 1 ? parts[0] : (document.getElementById('modelProviderSel').value || _mpCurProvider);
+    var selModel = parts.length > 1 ? parts.slice(1).join('/') : parts[0];
+    var mtEl = document.getElementById('mpMaxTokens');
+    var tpEl = document.getElementById('mpTemperature');
+    var mtVal = mtEl && mtEl.value !== '' ? parseInt(mtEl.value, 10) : null;
+    var tpVal = tpEl && tpEl.value !== '' ? parseFloat(tpEl.value) : null;
+    if (mtVal !== null && (!isFinite(mtVal) || mtVal <= 0)) { showToast(mpText('max_tokens 必须是正整数','max_tokens must be a positive integer')); return; }
+    if (tpVal !== null && (!isFinite(tpVal) || tpVal < 0 || tpVal > 2)) { showToast(mpText('temperature 需在 0-2 之间','temperature must be 0-2')); return; }
+    _switching = true;
+    try {
+        var res = await apiFetch(API_MODEL_PICKER, {action:'select_model', provider: selProvider, model_id: selModel, max_tokens: mtVal, temperature: tpVal});
+        var js = await res.json();
+        var data = js.data || js;
+        if (data.ok !== false) {
+            _mpCurRef = data.ref; _mpCurProvider = data.provider;
+            document.getElementById('currentModelDisplay').textContent = data.model_id;
+            showToast(t('msg.switched') + ' ' + data.model_id);
+            closeModelModal();
+        } else { showToast('❌ ' + (data.error || t('msg.switchFail'))); }
+    } catch(e) { showToast('❌ ' + t('msg.switchFail') + e.message); }
+    _switching = false;
+}
+
+async function loadCurrentModel() {
+    try {
+        var res = await apiFetch('/api/builtins/control/_settings', {action:'get'});
+        var raw = await res.json();
+        var config = raw.data || raw;
+        var _d = (config.models && config.models.roles && config.models.roles.default) || '';
+        var model = (typeof _d === 'object' && _d) ? (_d.model || '') : String(_d || '');
+        _currentModel = model;
+        var disp = model.indexOf('/') >= 0 ? model.split('/').slice(1).join('/') : model;
+        document.getElementById('currentModelDisplay').textContent = disp || (_lang === 'zh' ? '未设置' : 'Not set');
+    } catch(e) { document.getElementById('currentModelDisplay').textContent = '?'; }
+}
+
+// ============ 分身任务 ============
+function openSubTaskModal() { document.getElementById('subTaskModalOverlay').classList.add('show'); reloadSubTasks(); }
+function closeSubTaskModal() { document.getElementById('subTaskModalOverlay').classList.remove('show'); }
+async function reloadSubTasks() {
+    var box = document.getElementById('subTaskList');
+    box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
+    try {
+        var res = await apiFetch('/api/builtins/tools/task_manager', {action:'list', params:{}, meta:{session_id:currentConversationId}});
+        var raw = await res.json();
+        var data = raw.data || raw;
+        var payload = data.data || data;
+        var tasks = payload.tasks || [];
+        _subTasks = {};
+        tasks.forEach(function(tk){ _subTasks[tk.task_id] = tk; });
+        renderSubTaskList();
+        if (_selectedSubTask && !_subTasks[_selectedSubTask]) {
+            _selectedSubTask = null;
+            document.getElementById('subTaskDetail').innerHTML = '<div class="empty-state">' + t('modal.selectSub') + '</div>';
+        }
+    } catch(e) { box.innerHTML = '<option>' + escapeHtml(t('msg.loadFail') + ' ' + e.message) + '</option>'; }
+}
+function renderSubTaskList() {
+    var box = document.getElementById('subTaskList');
+    var ids = Object.keys(_subTasks);
+    if (ids.length === 0) { box.innerHTML = '<div class="empty-state" style="padding:20px 0">' + t('msg.noSubTasks') + '</div>'; return; }
+    ids.sort(function(a,b){ return (_subTasks[a].created_at||'').localeCompare(_subTasks[b].created_at||''); });
+    var html = '';
+    ids.forEach(function(tid){
+        var tk = _subTasks[tid];
+        var status = tk.status || 'unknown';
+        var icon = {'pending':'📝','running':'⏳','done':'✅','failed':'❌','timeout':'⏰','cancelled':'🚫'}[status] || '?';
+        var isSel = (_selectedSubTask === tid);
+        var style = isSel ? 'background:var(--brand-soft);border-color:rgba(94,106,210,0.3)' : 'border-color:var(--border)';
+        html += '<div onclick="selectSubTask(\''+escapeHtml(tid)+'\')" style="padding:10px 12px;border:1px solid;border-radius:8px;margin-bottom:4px;cursor:pointer;transition:.15s;'+style+'">';
+        html += '  <div style="font-size:12px;font-weight:500;color:var(--text)">' + icon + ' ' + escapeHtml(tid) + '</div>';
+        html += '  <div style="font-size:10px;color:var(--text-3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(tk.description||'') + '</div>';
+        html += '  <div style="font-size:10px;color:var(--brand);margin-top:2px">' + escapeHtml(status) + '</div>';
+        html += '</div>';
+    });
+    box.innerHTML = html;
+}
+async function selectSubTask(taskId) {
+    _selectedSubTask = taskId;
+    renderSubTaskList();
+    var detail = document.getElementById('subTaskDetail');
+    detail.innerHTML = '<div class="loading">' + t('common.loading') + '</div>';
+    try {
+        var res1 = await apiFetch('/api/builtins/tools/task_manager', {action:'collect', params:{task_id:taskId}, meta:{session_id:currentConversationId}});
+        var raw1 = await res1.json();
+        var payload1 = (raw1.data || raw1).data || raw1.data || raw1;
+        var task = payload1 || {};
+        var flow = [];
+        try {
+            var res2 = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id:taskId});
+            var raw2 = await res2.json();
+            if (raw2.ok && raw2.flow) flow = raw2.flow;
+        } catch(e) {}
+        var html = '';
+        html += '<div style="margin-bottom:12px"><div style="font-size:13px;font-weight:600;font-family:var(--font-mono);color:var(--text)">' + escapeHtml(taskId) + '</div>';
+        html += '<div style="font-size:12px;color:var(--text-3);margin-top:4px">' + escapeHtml(task.description||'') + '</div></div>';
+        html += '<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">' + (_lang === 'zh' ? '状态' : 'Status') + ': <span style="color:var(--brand);font-weight:600">' + escapeHtml(task.status||'?') + '</span></div>';
+        if (task.task) html += '<div style="margin:12px 0;padding:8px 10px;background:var(--surface-2);border-radius:6px;font-size:11px;white-space:pre-wrap;color:var(--text-2);border:1px solid var(--border)">' + escapeHtml(task.task) + '</div>';
+        if (flow && flow.length > 0) {
+            html += '<div style="font-size:12px;font-weight:600;color:var(--text-3);margin:12px 0 8px">' + (_lang === 'zh' ? '执行过程（' + flow.length + ' 条）' : 'Execution (' + flow.length + ' entries)') + '</div>';
+            flow.forEach(function(entry){
+                if (entry.from === 'user') html += '<div style="padding:6px 10px;background:var(--brand-soft);border-left:2px solid var(--brand);border-radius:0 4px 4px 0;margin-bottom:4px;font-size:11px;white-space:pre-wrap;color:var(--text)">👤 ' + escapeHtml(entry.content||'') + '</div>';
+                else if (entry.from === 'ai' && entry.call === 'reply' && entry.content) html += '<div style="padding:6px 10px;background:var(--ok-soft);border-left:2px solid var(--ok);border-radius:0 4px 4px 0;margin-bottom:4px;font-size:11px;white-space:pre-wrap;color:var(--text)">🤖 ' + escapeHtml(entry.content) + '</div>';
+                else if (entry.from === 'system' && entry.action === 'call_start') html += '<div style="padding:4px 10px;background:var(--surface-2);border-radius:4px;margin-bottom:4px;font-size:11px;color:var(--text-3);border:1px solid var(--border)">📤 ' + escapeHtml((entry.detail||{}).target||'') + '</div>';
+            });
+        } else { html += '<div class="empty-state" style="padding:20px 0">' + t('msg.loadFailShort') + '</div>'; }
+        if (task.result) {
+            html += '<div style="font-size:12px;font-weight:600;color:var(--text-3);margin:16px 0 8px">' + (_lang === 'zh' ? '结果' : 'Result') + '</div>';
+            html += '<pre style="padding:8px 10px;background:var(--ok-soft);border-left:2px solid var(--ok);border-radius:0 6px 6px 0;font-size:11px;white-space:pre-wrap;max-height:300px;overflow-y:auto;color:var(--text)">' + escapeHtml(typeof task.result === 'object' ? JSON.stringify(task.result, null, 2) : String(task.result)) + '</pre>';
+        }
+        if (task.error) {
+            html += '<div style="font-size:12px;font-weight:600;color:var(--text-3);margin:16px 0 8px">' + (_lang === 'zh' ? '错误' : 'Error') + '</div>';
+            html += '<pre style="padding:8px 10px;background:var(--err-soft);border-left:2px solid var(--err);border-radius:0 6px 6px 0;font-size:11px;white-space:pre-wrap;max-height:300px;overflow-y:auto;color:var(--err)">' + escapeHtml(task.error) + '</pre>';
+        }
+        detail.innerHTML = html;
+    } catch(e) { detail.innerHTML = '<div class="empty-state">' + t('msg.loadFail') + escapeHtml(e.message) + '</div>'; }
+}
+
+// ============ 其他 ============
+function restartSystem() {
+    if (!confirm(t('msg.confirmRestart'))) return;
+    apiFetch('/api/os/restart', {action:'restart'}).then(function(){ showToast(t('msg.restarting')); });
+}
+function logout() {
+    document.cookie = 'aicp_token=; path=/; max-age=0';
+    localStorage.removeItem('aicp_token');
+    location.href = '/';
+}
+
+// ============ 文件上传 ============
+var uploadedFiles = [];
+var fileList = [];
+function renderFilePreview() {
+    var c = document.getElementById('filePreview');
+    if (!c) return;
+    var html = '';
+    uploadedFiles.forEach(function(f,i){
+        html += '<span>📎 '+escapeHtml(f.name)+' ✓ <span style="cursor:pointer;color:var(--err)" onclick="uploadedFiles.splice('+i+',1);renderFilePreview()">✕</span></span>';
+    });
+    fileList.forEach(function(f,i){
+        html += '<span>📎 '+escapeHtml(f.name)+' … <span style="cursor:pointer;color:var(--err)" onclick="fileList.splice('+i+',1);renderFilePreview()">✕</span></span>';
+    });
+    c.innerHTML = html;
+}
+async function handleFiles(files) {
+    for (var i = 0; i < files.length; i++) {
+        fileList.push(files[i]);
+        renderFilePreview();
+        await uploadFile(files[i]);
+    }
+}
+async function uploadFile(file) {
+    try {
+        var fd = new FormData();
+        fd.append('file', file);
+        fd.append('session_id', currentConversationId || 'default');
+        var cfg = await fetch('/api/upload_config').then(function(r){return r.json();});
+        var url = cfg.url || '/upload';
+        var headers = {};
+        var token = getToken();
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        var res = await fetch(url, {method:'POST', body:fd, headers:headers});
+        var data = await res.json();
+        if (data.success) {
+            uploadedFiles.push({name:file.name, path:data.file_path, size:file.size});
+            fileList = fileList.filter(function(f){return f !== file;});
+            showToast('✅ ' + file.name);
+        } else {
+            fileList = fileList.filter(function(f){return f !== file;});
+            showToast('❌ ' + (data.error || file.name));
+        }
+    } catch(e) {
+        fileList = fileList.filter(function(f){return f !== file;});
+        showToast('❌ ' + e.message);
+    }
+    renderFilePreview();
+}
+
+// ============ 标题悬浮渐隐 ============
+function initTitleFloat() {
+    var msgs = document.getElementById('chatMessages');
+    var titleFloat = document.getElementById('chatTitleFloat');
+    if (!msgs || !titleFloat) return;
+    msgs.addEventListener('scroll', function() {
+        if (msgs.scrollTop > 8) titleFloat.classList.add('scrolled');
+        else titleFloat.classList.remove('scrolled');
+    });
+}
+
+// ============ 初始化 ============
+document.getElementById('msgInput').addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (_cmdItems.length) { pickCmdItem(_cmdIdx); return; }
+        sendMessage(); return;
+    }
+    if (e.key === 'ArrowDown' && _cmdItems.length) { e.preventDefault(); _cmdIdx = (_cmdIdx + 1) % _cmdItems.length; renderCmdHint(); return; }
+    if (e.key === 'ArrowUp' && _cmdItems.length) { e.preventDefault(); _cmdIdx = (_cmdIdx - 1 + _cmdItems.length) % _cmdItems.length; renderCmdHint(); return; }
+    if (e.key === 'Tab' && _cmdItems.length) { e.preventDefault(); pickCmdItem(_cmdIdx); return; }
+    if (e.key === 'Escape' && _cmdItems.length) { hideCmdHint(); return; }
+});
+document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') {
+        closeCallDetail(); closeStateModal(); closeCronModal(); closeRenameModal(); closeModelModal(); closeSubTaskModal(); closeSysApps(); closeSkillModal();
+        if (document.getElementById('webviewPanel').classList.contains('show')) closeWebview();
+    }
+});
+document.getElementById('msgInput').addEventListener('input', function(){
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+    refreshCmdHint();
+});
+document.addEventListener('mousedown', function(e){
+    if (_cmdItems.length && e.target && e.target.id !== 'msgInput') hideCmdHint();
+});
+document.addEventListener('DOMContentLoaded', function() {
+    applyLang(_lang);
+    bindBubbleLinks();
+    initTitleFloat();
+    initAutoScroll();
+    initUser();
+    loadCurrentModel();
+    refreshSkillBadge();
+    refreshActivity();
+    // 全局区（E/H/M/model）低频轮询；会话区（T/A/S）由 selectConversation / 回复结束事件驱动
+    setInterval(refreshGlobalActivity, 60000);
+    document.getElementById('chatMessages').addEventListener('scroll', function() {
+        if (this.scrollTop > 80) return;
+        if (this.dataset.hasMore !== '1') return;
+        var oldest = this.dataset.oldestTs;
+        if (!oldest) return;
+        this.dataset.hasMore = '0';
+        var tip = document.getElementById('loadMoreTip');
+        if (tip) tip.remove();
+        loadConversationFlow(currentConversationId, oldest);
+    });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skill 管理 · AICP</title>
+<meta name="page-title" content="技能管理">
+<meta name="page-title-en" content="Skill Manager">
+<meta name="page-icon" content="🧠">
+<meta name="page-desc" content="上传与管理 SKILL 技能包">
+<meta name="page-desc-en" content="Upload and manage SKILL skill packs">
+<meta name="page-hide" content="1">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body {
+  background:#0a0a0f;
+  color:#e5e7eb;
+  font-family:'Inter','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  height:100%;
+  overflow:hidden;
+}
+body { display:flex; flex-direction:column; height:100vh; }
+
+/* ===== 标题栏 ===== */
+.panel-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 16px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  background:rgba(15,15,22,0.8);
+  backdrop-filter:blur(12px);
+  flex-shrink:0;
+}
+.panel-title {
+  font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px;
+  letter-spacing:-0.01em;
+}
+.panel-title-icon {
+  width:22px; height:22px; border-radius:6px; background:#6366f1;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:800; color:#fff;
+}
+.lang-toggle {
+  background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.1);
+  color:#9ca3af;
+  padding:5px 10px; border-radius:6px;
+  font-size:11px; font-family:'JetBrains Mono',monospace;
+  cursor:pointer; transition:all 0.2s;
+}
+.lang-toggle:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.2); }
+
+/* ===== 内容区 ===== */
+.content { flex:1; min-height:0; position:relative; }
+.pane {
+  position:absolute; inset:0; overflow-y:auto;
+  padding:12px 14px 18px; display:none;
+  -webkit-overflow-scrolling:touch;
+}
+.pane.active { display:block; }
+/* ===== scrollbar ===== */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
+*::-webkit-scrollbar { width:6px; height:6px; }
+*::-webkit-scrollbar-track { background:transparent; }
+*::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.14); border-radius:3px; }
+*::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.26); }
+
+/* ===== 底部标签 ===== */
+.tab-bar {
+  display:flex; gap:6px;
+  padding:6px 10px calc(6px + env(safe-area-inset-bottom));
+  border-top:1px solid rgba(255,255,255,0.06);
+  background:rgba(15,15,22,0.9);
+  backdrop-filter:blur(12px);
+  flex-shrink:0;
+}
+.tab-btn {
+  flex:1; display:flex; align-items:center; justify-content:center; gap:6px;
+  padding:9px 6px; border-radius:8px;
+  border:1px solid transparent; background:transparent;
+  color:#9ca3af; font-family:inherit; font-size:12.5px; font-weight:600;
+  cursor:pointer; transition:all 0.2s;
+}
+.tab-btn.active {
+  background:rgba(99,102,241,0.14);
+  border-color:rgba(99,102,241,0.35);
+  color:#c4b5fd;
+}
+.tab-btn svg {
+  width:14px; height:14px; fill:none; stroke:currentColor;
+  stroke-width:2; stroke-linecap:round; stroke-linejoin:round;
+}
+.tab-btn .cnt {
+  font-family:'JetBrains Mono',monospace; font-style:normal;
+  font-size:10px; padding:1px 6px; border-radius:999px;
+  background:rgba(255,255,255,0.07); color:#9ca3af;
+}
+.tab-btn.active .cnt { background:rgba(99,102,241,0.25); color:#c4b5fd; }
+
+/* ===== 已加载列表 ===== */
+.loaded-item {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 10px; margin-bottom:6px;
+  border:1px solid rgba(255,255,255,0.06);
+  background:rgba(20,20,28,0.6);
+  border-radius:9px;
+  transition:border-color 0.2s;
+}
+.loaded-item:hover { border-color:rgba(99,102,241,0.25); }
+.loaded-item .name {
+  flex:1; min-width:0;
+  font-size:13px; font-weight:600; color:#f3f4f6;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.icon-btn {
+  background:transparent; border:none; color:#6b7280;
+  cursor:pointer; padding:4px; border-radius:4px;
+  display:inline-flex; flex-shrink:0; transition:all 0.2s;
+}
+.icon-btn:hover { color:#e5e7eb; background:rgba(255,255,255,0.07); }
+.icon-btn.danger:hover { color:#f87171; background:rgba(248,113,113,0.12); }
+.icon-btn svg {
+  width:14px; height:14px; fill:none; stroke:currentColor;
+  stroke-width:2; stroke-linecap:round; stroke-linejoin:round;
+}
+
+/* ===== 工具栏 ===== */
+.toolbar { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
+.search {
+  flex:1; min-width:0;
+  padding:8px 11px; background:#0a0a0f;
+  border:1px solid rgba(255,255,255,0.1); border-radius:7px;
+  color:#e5e7eb; font-family:inherit; font-size:12.5px;
+  outline:none; transition:border-color 0.2s;
+}
+.search:focus { border-color:rgba(99,102,241,0.55); }
+.btn-primary {
+  background:linear-gradient(135deg,#8b5cf6,#6366f1);
+  color:#fff; border:none; border-radius:7px;
+  padding:7px 11px; font-family:inherit; font-size:12px; font-weight:600;
+  cursor:pointer; white-space:nowrap; transition:all 0.2s;
+  display:inline-flex; align-items:center; justify-content:center; gap:5px;
+  flex-shrink:0; box-shadow:0 3px 10px rgba(99,102,241,0.22);
+}
+.btn-primary:hover { filter:brightness(1.12); }
+.btn-primary svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.btn-ghost {
+  background:transparent; color:#9ca3af;
+  border:1px solid rgba(255,255,255,0.1); border-radius:7px;
+  padding:7px 14px; font-family:inherit; font-size:12.5px;
+  cursor:pointer; transition:all 0.2s;
+  display:inline-flex; align-items:center; justify-content:center; gap:5px;
+}
+.btn-ghost svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.btn-ghost:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.2); }
+.btn-danger {
+  background:#b91c1c; color:#fff; border:none; border-radius:7px;
+  padding:7px 16px; font-family:inherit; font-size:12.5px; font-weight:600;
+  cursor:pointer; transition:all 0.2s;
+}
+.btn-danger:hover { background:#dc2626; }
+
+/* ===== 技能卡片 ===== */
+.card-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(138px,1fr));
+  gap:7px;
+}
+.skill-card {
+  background:rgba(20,20,28,0.6);
+  border:1px solid rgba(255,255,255,0.06);
+  border-radius:9px; padding:8px 9px;
+  display:flex; flex-direction:column; gap:7px;
+  transition:border-color 0.2s;
+}
+.skill-card:hover { border-color:rgba(99,102,241,0.25); }
+.skill-card .cname {
+  font-size:12.5px; font-weight:600; color:#f3f4f6;
+  line-height:1.35; word-break:break-word;
+}
+.skill-card .cacts { display:flex; gap:4px; }
+.mini {
+  flex:1; padding:4px 0;
+  font-family:inherit; font-size:11px; font-weight:600;
+  border-radius:6px; border:1px solid rgba(255,255,255,0.1);
+  background:transparent; color:#9ca3af;
+  cursor:pointer; transition:all 0.2s;
+}
+.mini:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.22); }
+.mini.p { background:#6366f1; border-color:#6366f1; color:#fff; }
+.mini.p:hover { background:#7c88e8; }
+.mini.d { color:#f87171; border-color:rgba(248,113,113,0.22); }
+.mini.d:hover { background:rgba(248,113,113,0.1); }
+.mini:disabled { opacity:0.5; cursor:not-allowed; }
+
+/* ===== card icon actions ===== */
+.act-btn {
+  flex:1; height:24px; padding:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:6px; border:1px solid rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.02); color:#9ca3af;
+  cursor:pointer; transition:all 0.2s;
+}
+.act-btn:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.24); background:rgba(255,255,255,0.07); }
+.act-btn.p { color:#a5b4fc; border-color:rgba(99,102,241,0.35); background:rgba(99,102,241,0.12); }
+.act-btn.p:hover { color:#c4b5fd; background:rgba(99,102,241,0.22); }
+.act-btn.d { color:#f87171; border-color:rgba(248,113,113,0.24); background:rgba(248,113,113,0.08); }
+.act-btn.d:hover { background:rgba(248,113,113,0.18); }
+.act-btn:disabled { opacity:0.45; cursor:not-allowed; }
+.act-btn svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+/* ===== dir tip ===== */
+.tip {
+  display:flex; align-items:flex-start; gap:7px;
+  padding:8px 9px; margin-bottom:8px;
+  background:rgba(99,102,241,0.07);
+  border:1px solid rgba(99,102,241,0.2);
+  border-radius:8px; font-size:11px; color:#9ca3af; line-height:1.55;
+}
+.tip > svg { width:13px; height:13px; flex-shrink:0; margin-top:1px; fill:none; stroke:#a78bfa; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.tip code { font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#c4b5fd; background:rgba(255,255,255,0.06); padding:1px 5px; border-radius:4px; word-break:break-all; }
+.tip-copy { margin-left:auto; background:transparent; border:none; color:#6b7280; cursor:pointer; padding:3px; border-radius:4px; flex-shrink:0; align-self:center; }
+.tip-copy:hover { color:#e5e7eb; background:rgba(255,255,255,0.08); }
+.tip-copy svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+/* ===== file picker ===== */
+.file-pick { display:flex; align-items:center; gap:8px; }
+.file-pick .btn-ghost { padding:6px 11px; font-size:12px; }
+.file-name { font-size:11px; color:#6b7280; font-family:'JetBrains Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.empty { padding:36px 12px; text-align:center; color:#6b7280; font-size:12.5px; }
+
+/* ===== Modal ===== */
+.modal {
+  position:fixed; inset:0; background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);
+  display:none; align-items:center; justify-content:center;
+  z-index:1000; padding:18px;
+}
+.modal.show { display:flex; }
+.modal-card {
+  background:#14141c; border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px; padding:20px; width:100%; max-width:400px;
+  max-height:88vh; overflow-y:auto;
+}
+.modal-card.wide { max-width:720px; }
+.modal-title { font-size:15px; font-weight:700; color:#f3f4f6; margin-bottom:8px; }
+.modal-desc { font-size:12px; color:#9ca3af; margin-bottom:14px; line-height:1.5; word-break:break-all; }
+.form-group { margin-bottom:11px; display:flex; flex-direction:column; gap:4px; }
+.form-label {
+  font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em;
+  color:#6b7280; font-weight:600;
+}
+.form-input, .form-textarea {
+  width:100%; padding:8px 11px; background:#0a0a0f;
+  border:1px solid rgba(255,255,255,0.1); border-radius:7px;
+  color:#e5e7eb; font-family:'JetBrains Mono',monospace; font-size:12px;
+  outline:none; transition:border-color 0.2s;
+}
+.form-input:focus, .form-textarea:focus { border-color:rgba(99,102,241,0.55); }
+.form-textarea { min-height:180px; resize:vertical; line-height:1.5; }
+.form-hint { font-size:11px; color:#6b7280; }
+.modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+.viewer {
+  margin:0; padding:14px; background:#0a0a0f; border-radius:8px;
+  font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.55;
+  white-space:pre-wrap; word-break:break-word; color:#e5e7eb;
+  max-height:58vh; overflow:auto;
+}
+
+.toast {
+  position:fixed; left:50%; bottom:74px;
+  transform:translateX(-50%) translateY(8px);
+  background:#1c1c26; border:1px solid rgba(255,255,255,0.1);
+  color:#e5e7eb; padding:8px 14px; border-radius:8px;
+  font-size:12px; z-index:1200; opacity:0; pointer-events:none;
+  transition:all 0.22s; max-width:86%;
+}
+.toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+.toast.ok { border-color:rgba(34,197,94,0.45); }
+.toast.err { border-color:rgba(248,113,113,0.45); }
+
+@media (max-width:420px) {
+  .card-grid { grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); }
+  .toolbar { flex-wrap:wrap; }
+}
+</style>
+</head>
+<body>
+
+<div class="panel-header">
+  <div class="panel-title">
+    <span class="panel-title-icon">S</span>
+    <span data-i18n="sk.title">Skill 管理</span>
+  </div>
+  <button class="lang-toggle" id="langToggle">EN</button>
+</div>
+
+<div class="content">
+  <section class="pane active" id="paneLoaded">
+    <div id="loadedList"></div>
+  </section>
+
+  <section class="pane" id="paneManage">
+    <div class="tip">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
+      <span><span data-i18n="sk.dirTip">多文件技能请把整个目录拷贝到</span> <code id="skillsDir">E:\aicp-skills\data\skills\</code><br><span data-i18n="sk.dirTip2">上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝</span></span>
+      <button class="tip-copy" id="copyDirBtn" data-i18n-title="sk.copyPath" title="复制路径">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      </button>
+    </div>
+    <div class="toolbar">
+      <input class="search" id="searchInput" type="search" data-i18n-ph="sk.search" placeholder="搜索技能…">
+      <button class="icon-btn" id="refreshBtn" data-i18n-title="sk.refresh" title="刷新">
+        <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+      </button>
+      <button class="btn-primary" id="uploadBtn" data-i18n-title="sk.upload" title="上传 Skill">
+        <svg viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 20h16"/></svg>
+        <span data-i18n="sk.upload">上传 Skill</span>
+      </button>
+    </div>
+    <div class="card-grid" id="skillGrid"></div>
+  </section>
+</div>
+
+<nav class="tab-bar">
+  <button class="tab-btn active" data-pane="loaded">
+    <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+    <span data-i18n="sk.loaded">已加载</span>
+    <em class="cnt" id="loadedCount">0</em>
+  </button>
+  <button class="tab-btn" data-pane="manage">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    <span data-i18n="sk.manage">技能管理</span>
+  </button>
+</nav>
+
+<!-- 上传 Skill -->
+<div class="modal" id="uploadModal">
+  <div class="modal-card">
+    <div class="modal-title" data-i18n="sk.uploadTitle">上传 Skill</div>
+    <div class="modal-desc" id="uploadDesc"></div>
+    <div class="form-group">
+      <label class="form-label" data-i18n="sk.dirLabel">目录名</label>
+      <input class="form-input" id="uploadName" data-i18n-ph="sk.dirPh" placeholder="stock-analyzer" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label" data-i18n="sk.contentLabel">SKILL.md 内容</label>
+      <textarea class="form-textarea" id="uploadContent"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label" data-i18n="sk.fileLabel">或选择本地文件</label>
+      <div class="file-pick">
+        <button type="button" class="btn-ghost" id="filePickBtn">
+          <svg viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/></svg>
+          <span data-i18n="sk.chooseFile">选择文件</span>
+        </button>
+        <span class="file-name" id="fileName">未选择文件</span>
+        <input type="file" id="uploadFile" accept=".md,.markdown,.txt" hidden>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" data-close="uploadModal" data-i18n="sk.cancel">取消</button>
+      <button class="btn-primary" id="uploadSubmit" data-i18n="sk.confirm">上传</button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除确认 -->
+<div class="modal" id="delModal">
+  <div class="modal-card">
+    <div class="modal-title" data-i18n="sk.delTitle">删除 Skill</div>
+    <div class="modal-desc"><span id="delName"></span></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" data-close="delModal" data-i18n="sk.cancel">取消</button>
+      <button class="btn-danger" id="delOk" data-i18n="sk.delOk">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 查看内容 -->
+<div class="modal" id="viewerModal">
+  <div class="modal-card wide">
+    <div class="modal-title" id="viewerTitle"></div>
+    <pre class="viewer" id="viewerBody"></pre>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="viewerCopy" data-i18n="sk.copy">复制</button>
+      <button class="btn-primary" data-close="viewerModal" data-i18n="sk.close">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const PAGE = window.location.pathname.split('/')[2] || 'skills';
+const SESSION_ID = new URLSearchParams(location.search).get('session_id') || '';
+
+const API = {
+  file: '/api/builtins/tools/file_utils_api',
+  skillLoader: '/api/builtins/tools/skill_loader',
+};
+
+const I18N = {
+  zh: {
+    'sk.title':'Skill 管理',
+    'sk.loaded':'已加载',
+    'sk.manage':'技能管理',
+    'sk.search':'搜索技能…',
+    'sk.upload':'上传 Skill',
+    'sk.uploadTitle':'上传 Skill',
+    'sk.uploadDesc':'写入 data/skills/<目录名>/SKILL.md，支持 frontmatter（name / description / tags）。',
+    'sk.dirLabel':'目录名',
+    'sk.dirPh':'例如 stock-analyzer',
+    'sk.contentLabel':'SKILL.md 内容',
+    'sk.fileLabel':'或选择本地文件',
+    'sk.cancel':'取消',
+    'sk.confirm':'上传',
+    'sk.delTitle':'删除 Skill',
+    'sk.delOk':'删除',
+    'sk.copy':'复制',
+    'sk.close':'关闭',
+    'sk.load':'加载',
+    'sk.view':'查看',
+    'sk.delete':'删除',
+    'sk.unpin':'卸载',
+    'sk.loadedTag':'已加载',
+    'sk.emptyLoaded':'还没有加载任何技能',
+    'sk.emptyManage':'没有匹配的技能',
+    'sk.needName':'请填目录名',
+    'sk.badName':'目录名只能英文 / 数字 / 下划线 / 中划线',
+    'sk.needContent':'请填 SKILL.md 内容',
+    'sk.okLoad':'已加载',
+    'sk.okUnload':'已卸载',
+    'sk.okDel':'已删除',
+    'sk.okUpload':'已上传',
+    'sk.fail':'操作失败',
+    'sk.loading':'加载中…',
+    'sk.dirTip':'多文件技能请把整个目录拷贝到',
+    'sk.dirTip2':'上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝',
+    'sk.copyPath':'复制路径',
+    'sk.chooseFile':'选择文件',
+    'sk.noFile':'未选择文件',
+    'sk.refresh':'刷新'
+  },
+  en: {
+    'sk.title':'Skill Manager',
+    'sk.loaded':'Loaded',
+    'sk.manage':'Manage',
+    'sk.search':'Search skills…',
+    'sk.upload':'Upload Skill',
+    'sk.uploadTitle':'Upload Skill',
+    'sk.uploadDesc':'Writes data/skills/<dir>/SKILL.md, frontmatter (name / description / tags) supported.',
+    'sk.dirLabel':'Directory name',
+    'sk.dirPh':'e.g. stock-analyzer',
+    'sk.contentLabel':'SKILL.md content',
+    'sk.fileLabel':'Or pick a local file',
+    'sk.cancel':'Cancel',
+    'sk.confirm':'Upload',
+    'sk.delTitle':'Delete Skill',
+    'sk.delOk':'Delete',
+    'sk.copy':'Copy',
+    'sk.close':'Close',
+    'sk.load':'Load',
+    'sk.view':'View',
+    'sk.delete':'Delete',
+    'sk.unpin':'Unload',
+    'sk.loadedTag':'Loaded',
+    'sk.emptyLoaded':'No skill loaded yet',
+    'sk.emptyManage':'No matching skill',
+    'sk.needName':'Directory name required',
+    'sk.badName':'Name accepts a-z, 0-9, _ and - only',
+    'sk.needContent':'SKILL.md content required',
+    'sk.okLoad':'Loaded',
+    'sk.okUnload':'Unloaded',
+    'sk.okDel':'Deleted',
+    'sk.okUpload':'Uploaded',
+    'sk.fail':'Action failed',
+    'sk.loading':'Loading…',
+    'sk.dirTip':'For multi-file skills, copy the whole folder into',
+    'sk.dirTip2':'Upload only supports a single SKILL.md; multi-file skills must be copied as a folder',
+    'sk.copyPath':'Copy path',
+    'sk.chooseFile':'Choose file',
+    'sk.noFile':'No file chosen',
+    'sk.refresh':'Refresh'
+  }
+};
+
+const ICON = {
+  view: '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  unload: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg>',
+  load: '<svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
+  del: '<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'
+};
+
+let LANG = 'zh';
+// 与 console / 其它页面共用 aicp_lang，保证在 console iframe 内跟随外层语种切换
+try { LANG = localStorage.getItem('aicp_lang') || localStorage.getItem('aicp_skills_lang') || 'zh'; } catch (e) { LANG = 'zh'; }
+
+const STATE = { skills:[], pinned:{}, query:'', pane:'loaded', loading:true };
+
+function t(k){ return (I18N[LANG] && I18N[LANG][k]) || k; }
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function toast(msg, kind){
+  kind = kind || 'ok';
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + kind;
+  clearTimeout(el._t);
+  el._t = setTimeout(function(){ el.className = 'toast'; }, 2200);
+}
+async function postJSON(url, body){
+  const res = await fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body || {}),
+  });
+  let data;
+  try { data = await res.json(); } catch(e){ data = {ok:false, error:'invalid json'}; }
+  return data;
+}
+function openModal(id){ document.getElementById(id).classList.add('show'); }
+function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+
+/* ---------- 渲染 ---------- */
+function renderLoaded(){
+  const box = document.getElementById('loadedList');
+  const cnt = document.getElementById('loadedCount');
+  const items = STATE.skills.filter(function(s){ return s._p; });
+  if (cnt) cnt.textContent = items.length;
+  if (STATE.loading){
+    box.innerHTML = '<div class="empty">' + esc(t('sk.loading')) + '</div>';
+    return;
+  }
+  if (!items.length){
+    box.innerHTML = '<div class="empty">' + esc(t('sk.emptyLoaded')) + '</div>';
+    return;
+  }
+  box.innerHTML = items.map(function(s){
+    const name = s.title || s.skill_id;
+    return '<div class="loaded-item" data-sid="' + esc(s.skill_id) + '">'
+      + '<span class="name" title="' + esc(name) + '">' + esc(name) + '</span>'
+      + '<button class="icon-btn" data-act="view" title="' + esc(t('sk.view')) + '">' + ICON.view + '</button>'
+      + '<button class="icon-btn danger" data-act="unpin" title="' + esc(t('sk.unpin')) + '">' + ICON.unload + '</button>'
+      + '</div>';
+  }).join('');
+}
+function renderManage(){
+  const box = document.getElementById('skillGrid');
+  const q = STATE.query.trim().toLowerCase();
+  const items = STATE.skills.filter(function(s){
+    if (!q) return true;
+    const hay = (s.skill_id + ' ' + s.title + ' ' + s.description).toLowerCase();
+    return hay.indexOf(q) >= 0;
+  });
+  if (STATE.loading){
+    box.innerHTML = '<div class="empty">' + esc(t('sk.loading')) + '</div>';
+    return;
+  }
+  if (!items.length){
+    box.innerHTML = '<div class="empty">' + esc(t('sk.emptyManage')) + '</div>';
+    return;
+  }
+  box.innerHTML = items.map(function(s){
+    const name = s.title || s.skill_id;
+    const act = s._p
+      ? '<button class="act-btn p" disabled title="' + esc(t('sk.loadedTag')) + '">' + ICON.load + '</button>'
+      : '<button class="act-btn p" data-act="pin" title="' + esc(t('sk.load')) + '">' + ICON.load + '</button>';
+    return '<div class="skill-card" data-sid="' + esc(s.skill_id) + '">'
+      + '<div class="cname" title="' + esc(name) + '">' + esc(name) + '</div>'
+      + '<div class="cacts">' + act
+      + '<button class="act-btn" data-act="view" title="' + esc(t('sk.view')) + '">' + ICON.view + '</button>'
+      + (isDeletable(s) ? '<button class="act-btn d" data-act="delete" title="' + esc(t('sk.delete')) + '">' + ICON.del + '</button>' : '')
+      + '</div></div>';
+  }).join('');
+}
+function render(){ renderLoaded(); renderManage(); }
+
+/* ---------- 数据 ---------- */
+async function loadSkills(){
+  STATE.loading = true;
+  render();
+  try {
+    const listRes = await postJSON(API.skillLoader, {action:'list', limit:500, session_id:SESSION_ID});
+    const all = (listRes && listRes.data && listRes.data.skills) || [];
+
+    const idxRes = await postJSON(API.skillLoader, {action:'index', session_id:SESSION_ID});
+    const raw = (idxRes && idxRes.skills) || (idxRes && idxRes.data && idxRes.data.skills) || [];
+
+    const pinnedMap = {};
+    const pinnedList = [];
+    raw.forEach(function(p){
+      const sid = (typeof p === 'string') ? p : (p.skill_id || '');
+      if (!sid) return;
+      const st = (typeof p === 'string') ? 'pinned' : (p.status || 'indexed');
+      if (st !== 'pinned') return;   // 只有 pinned 算「已加载」
+      const title = (typeof p === 'string') ? p : (p.title || p.skill_id || sid);
+      const fp = (typeof p === 'string') ? '' : (p.path || p.file_path || '');
+      pinnedMap[sid] = {skill_id:sid, title:title, file_path:fp};
+      pinnedList.push(sid);
+    });
+    STATE.pinned = pinnedMap;
+
+    const merged = all.map(function(s){
+      const sid = s.skill_id || '';
+      const p = pinnedMap[sid];
+      return {
+        skill_id: sid,
+        title: s.title || sid,
+        description: s.description || '',
+        file_path: s.file_path || '',
+        status: p ? 'pinned' : 'indexed',
+        _p: !!p
+      };
+    });
+    const known = {};
+    merged.forEach(function(s){ known[s.skill_id] = true; });
+    pinnedList.forEach(function(sid){
+      if (known[sid]) return;
+      merged.push({
+        skill_id: sid, title: pinnedMap[sid].title || sid,
+        description: '', file_path: pinnedMap[sid].file_path || '', status: 'pinned', _p: true
+      });
+    });
+    STATE.skills = merged;
+  } catch(e){
+    console.error(e);
+    STATE.skills = [];
+    toast(t('sk.fail') + ': ' + e.message, 'err');
+  } finally {
+    STATE.loading = false;
+    render();
+  }
+}
+
+/* ---------- 操作 ---------- */
+function skillFilePath(s){
+  let fp = (s && s.file_path) ? String(s.file_path) : '';
+  if (!fp) return '';
+  fp = fp.replace(/\\/g, '/');
+  if (fp.indexOf('data/') === 0) return fp;
+  if (fp.indexOf('plugins/') === 0) return fp;
+  return 'data/skills/' + fp;
+}
+function isDeletable(s){
+  const fp = skillFilePath(s);
+  return !!fp && fp.indexOf('data/skills/') === 0;
+}
+async function doPin(sid){
+const res = await postJSON(API.skillLoader, {action:'pin', skill_id:sid, session_id:SESSION_ID});
+  if (res && res.ok){
+    toast(t('sk.okLoad') + ': ' + (res.title || sid));
+    await loadSkills();
+  } else {
+    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+  }
+}
+async function doUnpin(sid){
+ const res = await postJSON(API.skillLoader, {action:'unpin', skill_id:sid, session_id:SESSION_ID});
+  if (res && res.ok){
+    toast(t('sk.okUnload') + ': ' + (res.title || sid));
+    await loadSkills();
+  } else {
+    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+  }
+}
+async function doView(sid){
+  const s = STATE.skills.find(function(x){ return x.skill_id === sid; });
+  const path = skillFilePath(s);
+  if (!path){
+    toast(t('sk.fail') + ': no file', 'err');
+    return;
+  }
+  const res = await postJSON(API.file, {action:'read_file', path:path});
+  if (!res || !res.ok){
+    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+    return;
+  }
+  const data = res.data || {};
+  let text = '';
+  if (data.truncated){
+    const total = data.total_lines || 0;
+    const linesRes = await postJSON(API.file, {
+      action:'read_file_lines', path:path, start_line:1, end_line: total || 100000
+    });
+    if (linesRes && linesRes.ok){
+      const lines = (linesRes.data && linesRes.data.lines) || [];
+      text = lines.map(function(l){ return typeof l === 'string' ? l : (l.content || ''); }).join('\n');
+    } else {
+      text = data.preview || '';
+    }
+  } else {
+    text = data.full_content || '';
+  }
+  document.getElementById('viewerTitle').textContent = (s && (s.title || sid)) || sid;
+  document.getElementById('viewerBody').textContent = text;
+  openModal('viewerModal');
+}
+async function doDelete(sid){
+  await postJSON(API.skillLoader, {action:'unpin', skill_id:sid, session_id:SESSION_ID});
+  document.getElementById('delName').textContent = (s && (s.title || sid)) || sid;
+  openModal('delModal');
+  document.getElementById('delOk').onclick = async function(){
+    closeModal('delModal');
+    await postJSON(API.skillLoader, {action:'unpin', skill_id:sid});
+    const cands = [];
+    const fp = skillFilePath(s);
+    if (fp) cands.push(fp);
+    cands.push('data/skills/' + sid + '/SKILL.md');
+    let done = false;
+    for (const p of cands){
+      const r = await postJSON(API.file, {action:'delete_file', path:p});
+      if (r && r.ok){ done = true; break; }
+    }
+    if (done){
+      toast(t('sk.okDel') + ': ' + sid);
+      await loadSkills();
+    } else {
+      toast(t('sk.fail'), 'err');
+    }
+  };
+}
+async function doUpload(){
+  const name = document.getElementById('uploadName').value.trim();
+  const content = document.getElementById('uploadContent').value.trim();
+  if (!name){ toast(t('sk.needName'), 'err'); return; }
+  if (!/^[a-zA-Z0-9_\-]+$/.test(name)){ toast(t('sk.badName'), 'err'); return; }
+  if (!content){ toast(t('sk.needContent'), 'err'); return; }
+  const path = 'data/skills/' + name + '/SKILL.md';
+  const res = await postJSON(API.file, {action:'write_file', path:path, content:content});
+  if (!res || !res.ok){
+    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+    return;
+  }
+  closeModal('uploadModal');
+  document.getElementById('uploadName').value = '';
+  document.getElementById('uploadContent').value = '';
+  document.getElementById('uploadFile').value = '';
+  const fn = document.getElementById('fileName');
+  if (fn){ fn.textContent = t('sk.noFile'); delete fn.dataset.picked; }
+  toast(t('sk.okUpload') + ': ' + name);
+  await loadSkills();
+}
+
+/* ---------- 标签切换 ---------- */
+function switchPane(name){
+  STATE.pane = name;
+  const map = {loaded:'paneLoaded', manage:'paneManage'};
+  document.querySelectorAll('.pane').forEach(function(p){
+    p.classList.toggle('active', p.id === map[name]);
+  });
+  document.querySelectorAll('.tab-btn').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-pane') === name);
+  });
+}
+
+/* ---------- i18n ---------- */
+function applyI18n(){
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    const key = el.getAttribute('data-i18n');
+    const v = t(key);
+    if (v && v !== key) el.textContent = v;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
+    el.placeholder = t(el.getAttribute('data-i18n-ph'));
+  });
+  document.getElementById('uploadDesc').textContent = t('sk.uploadDesc');
+  document.querySelectorAll('[data-i18n-title]').forEach(function(el){
+    el.title = t(el.getAttribute('data-i18n-title'));
+  });
+  const fn = document.getElementById('fileName');
+  if (fn && !fn.dataset.picked) fn.textContent = t('sk.noFile');
+  document.getElementById('langToggle').textContent = LANG === 'zh' ? 'EN' : '中';
+  render();
+}
+function toggleLang(){
+  LANG = LANG === 'zh' ? 'en' : 'zh';
+  try { localStorage.setItem('aicp_skills_lang', LANG); } catch(e){}
+  try { localStorage.setItem('aicp_lang', LANG); } catch(e){}
+  applyI18n();
+  notifyParentLang(LANG);
+}
+
+/* 通知父页（console iframe）本页语种，实现与外层双向同步 */
+function notifyParentLang(lang){
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'aicp_lang', lang:lang}, '*');
+    }
+  } catch(e) {}
+}
+
+/* 接收外层（console）推送的语种 */
+window.addEventListener('message', function(e){
+  if (!e.data || e.data.type !== 'aicp_lang') return;
+  var lang = e.data.lang;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === LANG) return;
+  LANG = lang;
+  try { localStorage.setItem('aicp_lang', lang); } catch(e){}
+  applyI18n();
+});
+
+/* 其它标签页切换语种的兜底 */
+window.addEventListener('storage', function(e){
+  if (!e.key || e.key !== 'aicp_lang') return;
+  var lang = e.newValue;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === LANG) return;
+  LANG = lang;
+  applyI18n();
+});
+
+/* ---------- 事件 ---------- */
+document.getElementById('langToggle').addEventListener('click', toggleLang);
+document.querySelectorAll('.tab-btn').forEach(function(b){
+  b.addEventListener('click', function(){ switchPane(b.getAttribute('data-pane')); });
+});
+document.getElementById('searchInput').addEventListener('input', function(e){
+  STATE.query = e.target.value;
+  renderManage();
+});
+document.getElementById('refreshBtn').addEventListener('click', loadSkills);
+document.getElementById('uploadBtn').addEventListener('click', function(){ openModal('uploadModal'); });
+document.getElementById('uploadSubmit').addEventListener('click', doUpload);
+document.getElementById('filePickBtn').addEventListener('click', function(){
+  document.getElementById('uploadFile').click();
+});
+document.getElementById('uploadFile').addEventListener('change', function(e){
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const fn = document.getElementById('fileName');
+  fn.textContent = f.name;
+  fn.dataset.picked = '1';
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    document.getElementById('uploadContent').value = ev.target.result;
+    if (!document.getElementById('uploadName').value){
+      document.getElementById('uploadName').value = f.name
+        .replace(/\.(md|markdown|txt)$/i, '')
+        .replace(/[^a-zA-Z0-9_\-]/g, '-')
+        .toLowerCase();
+    }
+  };
+  reader.readAsText(f, 'utf-8');
+});
+document.getElementById('copyDirBtn').addEventListener('click', function(){
+  const txt = document.getElementById('skillsDir').textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt);
+  }
+  toast(t('sk.copyPath'));
+});
+document.getElementById('viewerCopy').addEventListener('click', function(){
+  const text = document.getElementById('viewerBody').textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text);
+  }
+  toast(t('sk.copy'));
+});
+document.addEventListener('click', function(e){
+  const btn = e.target.closest ? e.target.closest('[data-act]') : null;
+  if (btn){
+    const holder = btn.closest('[data-sid]');
+    const sid = holder ? holder.getAttribute('data-sid') : '';
+    const act = btn.getAttribute('data-act');
+    if (act === 'pin') doPin(sid);
+    else if (act === 'unpin') doUnpin(sid);
+    else if (act === 'view') doView(sid);
+    else if (act === 'delete') doDelete(sid);
+    return;
+  }
+  const close = e.target.closest ? e.target.closest('[data-close]') : null;
+  if (close) closeModal(close.getAttribute('data-close'));
+});
+document.querySelectorAll('.modal').forEach(function(m){
+  m.addEventListener('click', function(e){ if (e.target === m) m.classList.remove('show'); });
+});
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') document.querySelectorAll('.modal.show').forEach(function(m){ m.classList.remove('show'); });
+});
+
+/* ---------- 启动 ---------- */
+applyI18n();
+loadSkills();
+</script>
+</body>
+</html>

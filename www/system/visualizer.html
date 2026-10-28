@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>AICP · Envelop Flow</title>
+<meta name="page-title" content="信封流向">
+<meta name="page-title-en" content="Envelop Flow">
+<meta name="page-icon" content="🧭">
+<meta name="page-desc" content="实时查看 Envelop 在系统中的流转链路">
+<meta name="page-desc-en" content="Live view of how Envelops flow through the system">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+:root{
+  --bg:#08090A;
+  --surface:#16171C;
+  --surface-2:#1E1F25;
+  --surface-3:#25262D;
+  --border:rgba(255,255,255,0.06);
+  --border-strong:rgba(255,255,255,0.10);
+  --text:#F7F8F8;
+  --text-2:#B4B8C0;
+  --text-3:#8A8F98;
+  --text-4:#5C6068;
+  --brand:#5E6AD2;
+  --brand-hover:#6E79DB;
+  --brand-soft:rgba(94,106,210,0.12);
+  --ok:#4CB782;
+  --err:#E5484D;
+  --warn:#D9A441;
+  --c-gateway:#3B82F6;
+  --c-ws:#A855F7;
+  --radius:10px;
+  --radius-sm:6px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',Roboto,sans-serif;
+  --font-mono:'SF Mono',Menlo,Consolas,'Courier New',monospace;
+}
+body{font-family:var(--font-sans);background:var(--bg);color:var(--text);display:flex;flex-direction:column;font-size:13px;-webkit-font-smoothing:antialiased}
+button{font-family:inherit}
+
+.navbar{display:flex;align-items:center;gap:10px;height:48px;padding:0 12px;background:rgba(8,9,10,0.86);backdrop-filter:blur(14px);border-bottom:1px solid var(--border);flex-shrink:0;z-index:30}
+.brand{display:flex;align-items:center;gap:9px;text-decoration:none;color:var(--text);white-space:nowrap}
+.brand-mark{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#8b5cf6,#6366f1,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;flex-shrink:0}
+.brand-name{font-size:14px;font-weight:600;letter-spacing:-0.01em}
+.brand-sub{font-size:11px;color:var(--text-4);font-family:var(--font-mono)}
+.nav-spacer{flex:1}
+.nav-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.nav-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-2);cursor:pointer;font-size:12px;transition:all .16s;white-space:nowrap}
+.nav-btn:hover{border-color:var(--border-strong);color:var(--text);background:var(--surface-2)}
+.nav-btn.active{background:var(--brand-soft);border-color:rgba(94,106,210,0.45);color:var(--brand-hover)}
+.nav-btn.icon{padding:5px 8px}
+.nav-btn .bi{font-size:12px;line-height:1}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:20px;font-size:11px;border:1px solid var(--border);color:var(--text-3);background:var(--surface-2)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--text-4)}
+.badge.on{color:var(--ok);border-color:rgba(76,183,130,0.35)}
+.badge.on .dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.badge.wait{color:var(--warn);border-color:rgba(217,164,65,0.35)}
+.badge.wait .dot{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+.badge.off{color:var(--err);border-color:rgba(229,72,77,0.35)}
+.badge.off .dot{background:var(--err)}
+
+.main{flex:1;display:flex;overflow:hidden;min-height:0;position:relative}
+
+.sidebar{width:206px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;transition:width .22s cubic-bezier(.4,0,.2,1),opacity .16s;z-index:10}
+.sidebar.collapsed{width:0;opacity:0;border-right:none}
+.sidebar-inner{width:206px;display:flex;flex-direction:column;padding:12px 0;overflow-y:auto;min-height:0}
+.nav-group{margin-bottom:6px}
+.nav-group-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-4);padding:8px 14px 5px}
+.nav-item{display:flex;align-items:center;gap:9px;padding:7px 12px;margin:1px 8px;border-radius:var(--radius-sm);cursor:pointer;font-size:12.5px;color:var(--text-3);transition:all .15s;font-weight:500;white-space:nowrap}
+.nav-item:hover{background:var(--surface-2);color:var(--text)}
+.nav-item.active{background:var(--brand-soft);color:var(--brand-hover);font-weight:600}
+.nav-item .icon{font-size:14px;width:16px;text-align:center;flex-shrink:0}
+.divider{height:1px;background:var(--border);margin:8px 12px}
+.sidebar-foot{margin-top:auto;padding:10px 14px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-4);font-family:var(--font-mono);line-height:1.7}
+
+.content{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0;position:relative}
+.canvas-wrap{flex:1;position:relative;overflow:hidden;background:radial-gradient(circle at 50% 42%, rgba(94,106,210,0.09), transparent 62%)}
+#flowCanvas{position:absolute;top:0;left:0;width:100%;height:100%;display:block}
+.stats-overlay{position:absolute;top:14px;left:14px;display:flex;gap:8px;pointer-events:none}
+.stat-card{background:rgba(22,23,28,0.78);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:var(--radius);padding:8px 14px;text-align:center;min-width:82px}
+.stat-card .num{font-size:18px;font-weight:700;color:var(--brand-hover);font-family:var(--font-mono);line-height:1.2}
+.stat-card .lbl{font-size:9px;color:var(--text-4);text-transform:uppercase;letter-spacing:.07em;margin-top:2px}
+.canvas-hint{position:absolute;bottom:14px;left:14px;font-size:10.5px;color:var(--text-4);background:rgba(22,23,28,0.75);padding:5px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);pointer-events:none}
+.node-detail{position:absolute;background:rgba(22,23,28,0.97);border:1px solid rgba(94,106,210,0.35);border-radius:var(--radius);padding:10px 12px;font-size:11px;color:var(--text-2);pointer-events:none;opacity:0;transition:opacity .15s;z-index:100;box-shadow:0 10px 34px rgba(0,0,0,.6);max-width:300px}
+.node-detail.show{opacity:1}
+.node-detail .nd-id{color:var(--brand-hover);font-family:var(--font-mono);font-size:11.5px;font-weight:600;margin-bottom:5px;word-break:break-all}
+.node-detail .nd-row{display:flex;justify-content:space-between;gap:14px;font-size:10.5px;color:var(--text-4);line-height:1.7}
+.node-detail .nd-row b{color:var(--text-2);font-weight:500}
+
+.footer-bar{display:flex;align-items:center;gap:14px;padding:0 14px;height:32px;background:var(--surface);border-top:1px solid var(--border);flex-shrink:0;font-size:10.5px;color:var(--text-4);overflow-x:auto;white-space:nowrap}
+.footer-bar .spacer{flex:1}
+.footer-bar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.footer-bar .dot.green{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.footer-bar .dot.red{background:var(--err);box-shadow:0 0 6px var(--err)}
+.footer-bar .dot.gray{background:var(--text-4)}
+.footer-bar .stat{display:inline-flex;align-items:center;gap:5px}
+.footer-bar .stat b{color:var(--text-2);font-weight:600;font-family:var(--font-mono)}
+
+.panel-right{width:262px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;transition:width .22s cubic-bezier(.4,0,.2,1),opacity .16s;z-index:10}
+.panel-right.collapsed{width:0;opacity:0;border-left:none}
+.panel-inner{width:262px;padding:14px 12px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;min-height:0}
+.panel-section{display:flex;flex-direction:column;gap:7px}
+.panel-section-title{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-4)}
+.panel-row{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--text-3);gap:8px}
+.panel-row .val{color:var(--text);font-weight:500;font-family:var(--font-mono)}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-3)}
+.legend-item .swatch{width:14px;height:2px;border-radius:2px;flex-shrink:0}
+.legend-item .swatch.gw{background:var(--c-gateway);height:3px;box-shadow:0 0 6px var(--c-gateway)}
+.legend-item .swatch.sync{background:var(--brand);box-shadow:0 0 5px var(--brand)}
+.legend-item .swatch.async{background:var(--warn);box-shadow:0 0 5px var(--warn)}
+.legend-item .swatch.return{background:var(--ok);box-shadow:0 0 5px var(--ok)}
+.legend-item .dotnode{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.legend-item .dotnode.gateway{background:var(--c-gateway);box-shadow:0 0 8px var(--c-gateway)}
+.legend-item .dotnode.wsgateway{background:var(--c-ws);box-shadow:0 0 8px var(--c-ws)}
+.legend-item .dotnode.plugin{background:var(--brand);box-shadow:0 0 6px var(--brand)}
+.mono-list{font-family:var(--font-mono);font-size:10.5px;color:var(--text-3);line-height:1.75;max-height:190px;overflow-y:auto}
+.mono-list .hl{color:var(--brand-hover)}
+.empty{color:var(--text-4)}
+
+@media(max-width:820px){
+  .sidebar{position:absolute;top:0;bottom:0;left:0;box-shadow:0 0 40px rgba(0,0,0,.6)}
+  .sidebar.collapsed{width:0}
+  .panel-right{display:none}
+}
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="brand" title="AICP Home">
+    <span class="brand-mark">A</span>
+    <span class="brand-name">AICP</span>
+    <span class="brand-sub" data-i18n="viz.title">Envelop Flow</span>
+  </a>
+  <div class="nav-spacer"></div>
+  <div class="nav-actions">
+    <button class="nav-btn icon" id="btnToggleLeft" onclick="toggleLeft()" title="Toggle sidebar"><span class="bi">&#9776;</span></button>
+    <button class="nav-btn icon" id="btnPause" onclick="togglePause()"><span class="bi">&#10073;&#10073;</span><span data-i18n="viz.pause">Pause</span></button>
+    <button class="nav-btn icon" id="btnClear" onclick="clearAll()"><span class="bi">&#128465;</span><span data-i18n="viz.clear">Clear</span></button>
+    <button class="nav-btn icon active" id="btnLabels" onclick="toggleLabels()"><span class="bi">&#127991;</span><span data-i18n="viz.labels">Labels</span></button>
+    <button class="nav-btn icon" id="langToggle" onclick="toggleLang()"><span data-i18n="viz.lang">中</span></button>
+    <span class="badge" id="wsBadge"><span class="dot"></span><span data-i18n="viz.connecting">Connecting</span></span>
+    <button class="nav-btn icon" id="btnToggleRight" onclick="toggleRight()" title="Toggle panel"><span class="bi">&#9707;</span></button>
+  </div>
+</nav>
+
+<div class="main">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <div class="nav-group">
+        <div class="nav-group-label" data-i18n="viz.views">Views</div>
+        <div class="nav-item active" data-view="all" onclick="switchView('all')">
+          <span class="icon">&#127760;</span><span data-i18n="viz.all">All</span>
+        </div>
+        <div class="nav-item" data-view="business" onclick="switchView('business')">
+          <span class="icon">&#128188;</span><span data-i18n="viz.business">Business</span>
+        </div>
+        <div class="nav-item" data-view="hot" onclick="switchView('hot')">
+          <span class="icon">&#128293;</span><span data-i18n="viz.hot">Hot</span>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="nav-group">
+        <div class="nav-group-label" data-i18n="viz.ops">Operations</div>
+        <div class="nav-item" onclick="resetView()">
+          <span class="icon">&#127919;</span><span data-i18n="viz.reset">Reset View</span>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <div><span data-i18n="viz.channel">Channel</span>: <span id="sideChannel">pa_visualizer</span></div>
+        <div><span data-i18n="viz.session">Session</span>: <span id="sideSession">-</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="content">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="flowCanvas"></canvas>
+      <div class="stats-overlay">
+        <div class="stat-card"><div class="num" id="statParticles">0</div><div class="lbl" data-i18n="viz.inflight">In Flight</div></div>
+        <div class="stat-card"><div class="num" id="statNodes">0</div><div class="lbl" data-i18n="viz.nodes">Nodes</div></div>
+        <div class="stat-card"><div class="num" id="statRate">0</div><div class="lbl" data-i18n="viz.persec">/sec</div></div>
+      </div>
+      <div class="node-detail" id="nodeDetail"></div>
+      <div class="canvas-hint" data-i18n="viz.hint">Hover to inspect</div>
+    </div>
+    <div class="footer-bar">
+      <span id="wsStatus"><span class="dot gray"></span><span data-i18n="viz.disconnected">Disconnected</span></span>
+      <span class="spacer"></span>
+      <span class="stat"><span data-i18n="viz.channel">Channel</span> <b id="channelName">pa_visualizer</b></span>
+      <span class="stat"><span data-i18n="viz.frame">Frame</span> <b id="fpsCounter">0</b> fps</span>
+    </div>
+  </section>
+
+  <aside class="panel-right" id="panelRight">
+    <div class="panel-inner">
+      <div class="panel-section">
+        <div class="panel-section-title" data-i18n="viz.legend">Legend</div>
+        <div class="legend-item"><span class="dotnode gateway"></span> <span data-i18n="viz.lgGateway">HTTP Gateway (in)</span></div>
+        <div class="legend-item"><span class="dotnode wsgateway"></span> <span data-i18n="viz.lgWs">WS Gateway (out)</span></div>
+        <div class="legend-item"><span class="dotnode plugin"></span> <span data-i18n="viz.lgPlugin">Plugin (dynamic)</span></div>
+        <div class="legend-item" style="margin-top:4px"><span class="swatch gw"></span> <span data-i18n="viz.lgGwEdge">Gateway forward (out)</span></div>
+        <div class="legend-item"><span class="swatch sync"></span> <span data-i18n="viz.lgSync">Sync call (out)</span></div>
+        <div class="legend-item"><span class="swatch async"></span> <span data-i18n="viz.lgAsync">Async / callback (out)</span></div>
+        <div class="legend-item"><span class="swatch return"></span> <span data-i18n="viz.lgReturn">Return (in)</span></div>
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-title" data-i18n="viz.nodes">Nodes</div>
+        <div class="panel-row"><span data-i18n="viz.total">Total</span><span class="val" id="pTotalNodes">0</span></div>
+        <div class="panel-row"><span data-i18n="viz.active">Active</span><span class="val" id="pActiveNodes">0</span></div>
+        <div class="panel-row"><span data-i18n="viz.maxflow">Max flow</span><span class="val" id="pMaxFlow">0</span></div>
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-title" data-i18n="viz.top">Top Nodes</div>
+        <div class="mono-list" id="topNodes"></div>
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-title" data-i18n="viz.recent">Recent Events</div>
+        <div class="mono-list" id="recentEvents"></div>
+      </div>
+    </div>
+  </aside>
+</div>
+<script>
+/* ================= i18n ================= */
+var I18N = {
+  zh: {
+    'viz.title':'Envelop Flow','viz.pause':'暂停','viz.resume':'继续','viz.clear':'清空','viz.labels':'标签',
+    'viz.lang':'EN','viz.connecting':'连接中','viz.connected':'已连接','viz.reconnecting':'重连中','viz.disconnected':'已断开',
+    'viz.views':'视图','viz.all':'全部','viz.business':'业务','viz.hot':'热点','viz.ops':'操作','viz.reset':'重置视角',
+    'viz.channel':'频道','viz.session':'会话','viz.frame':'帧',
+    'viz.inflight':'在飞','viz.nodes':'节点','viz.persec':'/秒','viz.hint':'悬停查看节点详情',
+    'viz.legend':'图例','viz.lgGateway':'HTTP 网关（入口）','viz.lgWs':'WS 网关（出口）','viz.lgPlugin':'插件（动态）',
+    'viz.lgGwEdge':'网关转发（出）','viz.lgSync':'同步调用（出）','viz.lgAsync':'异步 / 回调（出）','viz.lgReturn':'返回（入）',
+    'viz.total':'总节点','viz.active':'活跃节点','viz.maxflow':'最大流量','viz.top':'Top 节点','viz.recent':'最近事件',
+    'viz.type':'类型','viz.count':'事件数','viz.lastActive':'最近活跃','viz.sAgo':'秒前','viz.noData':'暂无数据','viz.noEvents':'暂无事件'
+  },
+  en: {
+    'viz.title':'Envelop Flow','viz.pause':'Pause','viz.resume':'Resume','viz.clear':'Clear','viz.labels':'Labels',
+    'viz.lang':'中','viz.connecting':'Connecting','viz.connected':'Connected','viz.reconnecting':'Reconnecting','viz.disconnected':'Disconnected',
+    'viz.views':'Views','viz.all':'All','viz.business':'Business','viz.hot':'Hot','viz.ops':'Operations','viz.reset':'Reset View',
+    'viz.channel':'Channel','viz.session':'Session','viz.frame':'Frame',
+    'viz.inflight':'In Flight','viz.nodes':'Nodes','viz.persec':'/sec','viz.hint':'Hover to inspect nodes',
+    'viz.legend':'Legend','viz.lgGateway':'HTTP Gateway (in)','viz.lgWs':'WS Gateway (out)','viz.lgPlugin':'Plugin (dynamic)',
+    'viz.lgGwEdge':'Gateway forward (out)','viz.lgSync':'Sync call (out)','viz.lgAsync':'Async / callback (out)','viz.lgReturn':'Return (in)',
+    'viz.total':'Total','viz.active':'Active','viz.maxflow':'Max flow','viz.top':'Top Nodes','viz.recent':'Recent Events',
+    'viz.type':'Type','viz.count':'Events','viz.lastActive':'Last active','viz.sAgo':'s ago','viz.noData':'No data','viz.noEvents':'No events'
+  }
+};
+var lang = localStorage.getItem('aicp_lang') || 'en';
+function t(key){ return (I18N[lang] && I18N[lang][key]) || (I18N.en[key] || key); }
+function applyI18n(){
+  document.documentElement.lang = (lang === 'zh') ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(function(el){ el.textContent = t(el.getAttribute('data-i18n')); });
+  var lt = document.getElementById('langToggle');
+  if (lt) lt.textContent = t('viz.lang');
+  document.title = 'AICP · ' + t('viz.title');
+  var bp = document.getElementById('btnPause');
+  if (bp) bp.innerHTML = '<span class="bi">&#10073;&#10073;</span><span>' + (paused ? t('viz.resume') : t('viz.pause')) + '</span>';
+  renderTopNodes(); renderRecentEvents();
+}
+function toggleLang(){ lang = (lang === 'zh') ? 'en' : 'zh'; localStorage.setItem('aicp_lang', lang); applyI18n(); }
+
+/* ================= 面板收起 ================= */
+function toggleLeft(){
+  var s = document.getElementById('sidebar');
+  s.classList.toggle('collapsed');
+  document.getElementById('btnToggleLeft').classList.toggle('active', !s.classList.contains('collapsed'));
+  setTimeout(resize, 240);
+}
+function toggleRight(){
+  var p = document.getElementById('panelRight');
+  p.classList.toggle('collapsed');
+  document.getElementById('btnToggleRight').classList.toggle('active', !p.classList.contains('collapsed'));
+  setTimeout(resize, 240);
+}
+
+/* ================= 配置 / 状态 ================= */
+var CHANNEL = 'pa_visualizer';
+var nodes = {}, particles = [], links = {};
+var paused = false, showLabels = true, currentView = 'all';
+var eventRate = { count:0, lastReset:Date.now(), rate:0 };
+var recentEvents = [], hotNodes = {};
+var CHANNEL_PLUGINS = ['os/_websocket','builtins/notify/ws','os/_visualizer'];
+var COLORS = { gateway:'#3B82F6', wsgateway:'#A855F7', plugin:'#5E6AD2', sync:'#5E6AD2', async:'#D9A441', return:'#4CB782' };
+
+var canvas = document.getElementById('flowCanvas');
+var ctx = canvas.getContext('2d');
+var W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+function resize(){
+  var wrap = document.getElementById('canvasWrap');
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  bootstrapNodes();
+}
+window.addEventListener('resize', resize);
+
+function bootstrapNodes(){
+  var g = ensureNode('os/_gateway'); g.type='gateway'; g.x=W/2-110; g.y=H/2; g.pinned=true; g.alpha=1;
+  var w = ensureNode('os/_websocket'); w.type='wsgateway'; w.x=W/2+110; w.y=H/2; w.pinned=true; w.alpha=1;
+}
+function classifyNode(id){
+  if (!id) return 'plugin';
+  if (id === 'os/_websocket') return 'wsgateway';
+  if (id.indexOf('gateway') !== -1) return 'gateway';
+  return 'plugin';
+}
+function nodeColor(type){ return COLORS[type] || COLORS.plugin; }
+function ensureNode(id, type){
+  if (!nodes[id]){
+    var angle = Math.random()*Math.PI*2, radius = Math.min(W,H)*0.3;
+    nodes[id] = { id:id, x:W/2+Math.cos(angle)*radius, y:H/2+Math.sin(angle)*radius, vx:0, vy:0,
+      count:0, lastActive:Date.now(), type:type||classifyNode(id), alpha:1, pinned:false };
+  }
+  return nodes[id];
+}
+function shouldSkipChannel(id){
+  for (var i=0;i<CHANNEL_PLUGINS.length;i++) if (id.indexOf(CHANNEL_PLUGINS[i]) !== -1) return true;
+  return false;
+}
+function shouldSkipNode(id){
+  var n = nodes[id];
+  if (n && n.pinned) return false;
+  if (currentView === 'business') return shouldSkipChannel(id);
+  if (currentView === 'hot') return !hotNodes[id];
+  return false;
+}
+function shouldSkipEdge(from, to){
+  var a = nodes[from], b = nodes[to];
+  if ((a && a.pinned) || (b && b.pinned)) return false;
+  if (currentView === 'business') return shouldSkipChannel(from) || shouldSkipChannel(to);
+  if (currentView === 'hot') return !hotNodes[from] && !hotNodes[to];
+  return false;
+}
+
+/* ================= 事件处理 ================= */
+function handleEnvelop(evt){
+  if (paused) return;
+  var from = evt.sender || 'unknown', to = evt.receiver || 'unknown';
+  var intent = evt.intent || '', direction = evt.direction || 'out';
+  if (from === 'os/_visualizer') return;
+  var pFrom = direction === 'in' ? to : from;
+  var pTo   = direction === 'in' ? from : to;
+  var fn = ensureNode(from), tn = ensureNode(to);
+  fn.count++; fn.lastActive = Date.now(); tn.lastActive = Date.now();
+
+  var key = from + '|' + to;
+  if (!links[key]) links[key] = { count:0, lastActive:Date.now(), kind:'sync' };
+  links[key].count++; links[key].lastActive = Date.now();
+
+  var isGateway = from.indexOf('gateway') !== -1 || to.indexOf('gateway') !== -1;
+  var isWs = from === 'os/_websocket' || to === 'os/_websocket';
+  var isAsync = intent === 'CALLBACK' || intent === 'ASYNC' || (evt.has_response === false);
+  if (isGateway) links[key].kind = 'gateway';
+  else if (isAsync) links[key].kind = 'async';
+
+  var color, kind;
+  if (direction === 'in') { color = COLORS.return; kind = 'return'; }
+  else if (isWs) { color = COLORS.wsgateway; kind = 'wsgateway'; }
+  else if (isGateway) { color = COLORS.gateway; kind = 'gateway'; }
+  else if (isAsync) { color = COLORS.async; kind = 'async'; }
+  else { color = COLORS.sync; kind = 'sync'; }
+
+  particles.push({ from:pFrom, to:pTo, progress:0, speed:0.018+Math.random()*0.012, color:color,
+    width: direction==='in' ? 1.5 : (isWs ? 3.5 : (isGateway ? 3 : 2)), dashed:isAsync, kind:kind, born:Date.now() });
+
+  eventRate.count++;
+  recentEvents.unshift({ from:from, to:to, intent:intent, ts:Date.now(), direction:direction, kind:kind });
+  if (recentEvents.length > 8) recentEvents.pop();
+  renderRecentEvents();
+}
+
+/* ================= 物理 ================= */
+function simulate(){
+  var ids = Object.keys(nodes), cx = W/2, cy = H/2;
+  for (var i=0;i<ids.length;i++){
+    var a = nodes[ids[i]];
+    for (var j=i+1;j<ids.length;j++){
+      var b = nodes[ids[j]];
+      var dx = b.x-a.x, dy = b.y-a.y;
+      var d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2);
+      var force = 12000/d2, fx = (dx/d)*force, fy = (dy/d)*force;
+      if (!a.pinned) { a.vx -= fx; a.vy -= fy; }
+      if (!b.pinned) { b.vx += fx; b.vy += fy; }
+    }
+  }
+  for (var k=0;k<ids.length;k++){
+    var n = nodes[ids[k]];
+    if (n.pinned) continue;
+    n.vx += (cx-n.x)*0.0008; n.vy += (cy-n.y)*0.0008;
+  }
+  for (var key in links){
+    var p = key.split('|'), na = nodes[p[0]], nb = nodes[p[1]];
+    if (!na || !nb) continue;
+    var lx = nb.x-na.x, ly = nb.y-na.y;
+    var ld = Math.sqrt(lx*lx+ly*ly)+0.01;
+    var diff = (ld-140)*0.005, lfx = (lx/ld)*diff, lfy = (ly/ld)*diff;
+    if (!na.pinned) { na.vx += lfx; na.vy += lfy; }
+    if (!nb.pinned) { nb.vx -= lfx; nb.vy -= lfy; }
+  }
+  for (var m=0;m<ids.length;m++){
+    var node = nodes[ids[m]];
+    if (node.pinned) { node.alpha = 1; continue; }
+    node.vx *= 0.85; node.vy *= 0.85;
+    node.x += node.vx; node.y += node.vy;
+    var pad = 30;
+    if (node.x < pad) { node.x = pad; node.vx *= -0.3; }
+    if (node.x > W-pad) { node.x = W-pad; node.vx *= -0.3; }
+    if (node.y < pad) { node.y = pad; node.vy *= -0.3; }
+    if (node.y > H-pad) { node.y = H-pad; node.vy *= -0.3; }
+    var age = (Date.now()-node.lastActive)/1000;
+    node.alpha = age > 30 ? Math.max(0.15, 1-(age-30)/60) : Math.min(1, node.alpha+0.05);
+  }
+}
+
+/* ================= 绘制 ================= */
+function hexA(hex,a){
+  var r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  var ids = Object.keys(nodes);
+  for (var key in links){
+    var p = key.split('|'), a = nodes[p[0]], b = nodes[p[1]];
+    if (!a || !b) continue;
+    if (shouldSkipEdge(p[0], p[1])) continue;
+    var link = links[key];
+    var age = (Date.now()-link.lastActive)/1000;
+    var linkAlpha = Math.max(0.05, 1-age/30);
+    var width = Math.min(3, 0.5+Math.log(1+link.count)*0.5);
+    ctx.save();
+    ctx.globalAlpha = linkAlpha*0.4;
+    ctx.strokeStyle = link.kind==='gateway' ? COLORS.gateway : (link.kind==='async' ? COLORS.async : COLORS.sync);
+    ctx.lineWidth = width;
+    if (link.kind==='async') ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    ctx.restore();
+  }
+  for (var i=particles.length-1;i>=0;i--){
+    var pt = particles[i];
+    var fn = nodes[pt.from], tn = nodes[pt.to];
+    if (!fn || !tn){ particles.splice(i,1); continue; }
+    if (shouldSkipEdge(pt.from, pt.to)){ particles.splice(i,1); continue; }
+    pt.progress += pt.speed;
+    if (pt.progress >= 1){ particles.splice(i,1); continue; }
+    var px = fn.x+(tn.x-fn.x)*pt.progress, py = fn.y+(tn.y-fn.y)*pt.progress;
+    var glow = ctx.createRadialGradient(px,py,0,px,py,12);
+    glow.addColorStop(0, pt.color); glow.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.save(); ctx.globalAlpha = 0.5*(1-pt.progress*0.3); ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(px,py,12,0,Math.PI*2); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.globalAlpha = 1-pt.progress*0.3; ctx.fillStyle = pt.color;
+    ctx.beginPath(); ctx.arc(px,py,pt.width+1,0,Math.PI*2); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.globalAlpha = 0.3*(1-pt.progress); ctx.strokeStyle = pt.color; ctx.lineWidth = pt.width;
+    var tp = Math.max(0, pt.progress-0.08);
+    ctx.beginPath(); ctx.moveTo(fn.x+(tn.x-fn.x)*tp, fn.y+(tn.y-fn.y)*tp); ctx.lineTo(px,py); ctx.stroke(); ctx.restore();
+  }
+  for (var j=0;j<ids.length;j++){
+    var n = nodes[ids[j]];
+    if (shouldSkipNode(n.id)) continue;
+    var r = (n.type==='gateway'||n.type==='wsgateway') ? 13 : 9;
+    var color = nodeColor(n.type);
+    var halo = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r*3);
+    halo.addColorStop(0, hexA(color, 0.4*n.alpha)); halo.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.save(); ctx.globalAlpha = n.alpha; ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(n.x,n.y,r*3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.beginPath(); ctx.arc(n.x,n.y,r*0.4,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+    if (showLabels){
+      var shortName = n.id.length > 28 ? n.id.slice(0,26)+'…' : n.id;
+      ctx.save(); ctx.globalAlpha = n.alpha*0.85;
+      ctx.font = '10px ' + "'SF Mono',Menlo,Consolas,monospace";
+      ctx.fillStyle = '#B4B8C0'; ctx.textAlign = 'center';
+      ctx.fillText(shortName, n.x, n.y+r+14); ctx.restore();
+    }
+  }
+}
+
+/* ================= 主循环 ================= */
+var lastFrame = Date.now(), frameCount = 0, fpsTime = Date.now();
+function loop(){
+  var now = Date.now();
+  lastFrame = now;
+  if (!paused){ simulate(); draw(); }
+  frameCount++;
+  if (now - fpsTime > 1000){
+    document.getElementById('fpsCounter').textContent = frameCount;
+    frameCount = 0; fpsTime = now;
+  }
+  if (now - eventRate.lastReset > 1000){
+    eventRate.rate = eventRate.count; eventRate.count = 0; eventRate.lastReset = now;
+    document.getElementById('statRate').textContent = eventRate.rate;
+  }
+  document.getElementById('statParticles').textContent = particles.length;
+  document.getElementById('statNodes').textContent = Object.keys(nodes).length;
+  requestAnimationFrame(loop);
+}
+
+/* ================= WebSocket ================= */
+var ws = null, wsHeartbeat = null, reconnectDelay = 3000, reconnectTimer = null;
+function setWsBadge(state, text){
+  var b = document.getElementById('wsBadge');
+  b.className = 'badge ' + state;
+  b.innerHTML = '<span class="dot"></span><span>' + text + '</span>';
+  var st = document.getElementById('wsStatus');
+  st.innerHTML = '<span class="dot ' + (state==='on'?'green':'red') + '"></span><span>' + text + '</span>';
+}
+function connectWS(){
+  fetch('/api/ws_config').then(function(r){ return r.json(); }).then(function(data){
+    var url = data.url || ('ws://' + location.hostname + ':' + (parseInt(location.port||9000)+1) + '/ws');
+    ws = new WebSocket(url + '?channel=' + CHANNEL);
+    ws.onopen = function(){
+      setWsBadge('on', t('viz.connected'));
+      reconnectDelay = 3000;
+      updatePanelStats();
+      if (wsHeartbeat) clearInterval(wsHeartbeat);
+      wsHeartbeat = setInterval(function(){
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type:'ping' }));
+      }, 15000);
+    };
+    ws.onmessage = function(e){
+      try {
+        var msg = JSON.parse(e.data);
+        if (msg.type === 'pong') return;
+        var d = msg.data || msg;
+        if (d.type === 'envelop') handleEnvelop(d);
+      } catch(err){}
+    };
+    ws.onclose = function(){
+      setWsBadge('wait', t('viz.reconnecting'));
+      if (wsHeartbeat){ clearInterval(wsHeartbeat); wsHeartbeat = null; }
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectWS, reconnectDelay);
+      if (reconnectDelay < 30000) reconnectDelay = Math.min(reconnectDelay*1.5, 30000);
+    };
+    ws.onerror = function(){};
+  }).catch(function(){
+    setWsBadge('off', t('viz.disconnected'));
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectWS, reconnectDelay);
+  });
+}
+
+/* ================= 面板数据 ================= */
+function updatePanelStats(){
+  var ids = Object.keys(nodes), now = Date.now(), active = 0, maxFlow = 0;
+  ids.forEach(function(id){
+    var n = nodes[id];
+    if (now - n.lastActive < 15000) active++;
+    if (n.count > maxFlow) maxFlow = n.count;
+  });
+  var sorted = ids.slice().sort(function(a,b){ return nodes[b].count - nodes[a].count; });
+  hotNodes = {};
+  sorted.slice(0,10).forEach(function(id){ hotNodes[id] = true; });
+  document.getElementById('pTotalNodes').textContent = ids.length;
+  document.getElementById('pActiveNodes').textContent = active;
+  document.getElementById('pMaxFlow').textContent = maxFlow;
+  renderTopNodes();
+}
+function renderTopNodes(){
+  var box = document.getElementById('topNodes'); if (!box) return;
+  var ids = Object.keys(nodes).sort(function(a,b){ return nodes[b].count - nodes[a].count; }).slice(0,10);
+  if (!ids.length){ box.innerHTML = '<div class="empty">' + t('viz.noData') + '</div>'; return; }
+  var html = '';
+  ids.forEach(function(id, idx){
+    var shortId = id.length > 24 ? '…' + id.slice(-22) : id;
+    html += '<div>' + (idx+1) + '. ' + shortId + ' <span class="hl">' + nodes[id].count + '</span></div>';
+  });
+  box.innerHTML = html;
+}
+function renderRecentEvents(){
+  var box = document.getElementById('recentEvents'); if (!box) return;
+  if (!recentEvents.length){ box.innerHTML = '<div class="empty">' + t('viz.noEvents') + '</div>'; return; }
+  var html = '';
+  recentEvents.forEach(function(ev){
+    var time = new Date(ev.ts).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour12:false });
+    var color = ev.kind==='return' ? COLORS.return : (ev.kind==='wsgateway' ? COLORS.wsgateway : (ev.kind==='gateway' ? COLORS.gateway : (ev.kind==='async' ? COLORS.async : COLORS.sync)));
+    var arrow = (ev.direction === 'in') ? '←' : (ev.kind === 'gateway' ? '⇢' : '→');
+    var fromShort = ev.from.length > 18 ? '…' + ev.from.slice(-16) : ev.from;
+    var toShort = ev.to.length > 18 ? '…' + ev.to.slice(-16) : ev.to;
+    html += '<div style="color:' + color + '">' + time + ' ' + arrow + ' ' + fromShort + ' → ' + toShort + '</div>';
+  });
+  box.innerHTML = html;
+}
+setInterval(updatePanelStats, 1000);
+
+/* ================= 交互 ================= */
+function togglePause(){
+  paused = !paused;
+  document.getElementById('btnPause').classList.toggle('active', paused);
+  applyI18n();
+}
+function clearAll(){
+  nodes = {}; particles = []; links = {}; recentEvents = []; hotNodes = {};
+  renderRecentEvents(); ctx.clearRect(0,0,W,H); bootstrapNodes();
+}
+function toggleLabels(){
+  showLabels = !showLabels;
+  document.getElementById('btnLabels').classList.toggle('active', showLabels);
+}
+function switchView(view){
+  currentView = view;
+  document.querySelectorAll('.sidebar .nav-item[data-view]').forEach(function(el){ el.classList.remove('active'); });
+  var el = document.querySelector('.sidebar .nav-item[data-view="' + view + '"]');
+  if (el) el.classList.add('active');
+}
+function resetView(){
+  Object.keys(nodes).forEach(function(id){
+    var n = nodes[id]; if (n.pinned) return;
+    var angle = Math.random()*Math.PI*2, radius = Math.min(W,H)*0.3;
+    n.x = W/2+Math.cos(angle)*radius; n.y = H/2+Math.sin(angle)*radius; n.vx = 0; n.vy = 0;
+  });
+  particles = [];
+}
+canvas.addEventListener('mousemove', function(e){
+  var rect = canvas.getBoundingClientRect();
+  var mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  var hovered = null;
+  for (var id in nodes){
+    var n = nodes[id];
+    if (shouldSkipNode(id)) continue;
+    var dx = mx-n.x, dy = my-n.y;
+    if (dx*dx+dy*dy < 20*20){ hovered = n; break; }
+  }
+  var detail = document.getElementById('nodeDetail');
+  if (hovered){
+    var age = ((Date.now()-hovered.lastActive)/1000).toFixed(1);
+    detail.innerHTML =
+      '<div class="nd-id">' + hovered.id + '</div>' +
+      '<div class="nd-row"><span>' + t('viz.type') + '</span><b>' + hovered.type + '</b></div>' +
+      '<div class="nd-row"><span>' + t('viz.count') + '</span><b>' + hovered.count + '</b></div>' +
+      '<div class="nd-row"><span>' + t('viz.lastActive') + '</span><b>' + age + ' ' + t('viz.sAgo') + '</b></div>';
+    detail.style.left = (mx+16)+'px'; detail.style.top = (my+16)+'px';
+    detail.classList.add('show');
+  } else { detail.classList.remove('show'); }
+});
+canvas.addEventListener('mouseleave', function(){ document.getElementById('nodeDetail').classList.remove('show'); });
+
+/* ================= 启动 ================= */
+applyI18n();
+resize();
+connectWS();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

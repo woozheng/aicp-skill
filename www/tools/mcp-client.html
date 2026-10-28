@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Client</title>
+<meta name="page-title" content="MCP 客户端">
+<meta name="page-title-en" content="MCP Client">
+<meta name="page-icon" content="🔌">
+<meta name="page-desc" content="连接外部 MCP Server 并接管其工具">
+<meta name="page-desc-en" content="Connect external MCP servers and take over their tools">
+<meta name="page-hide" content="1">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: #0a0a0f;
+  color: #e5e7eb;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+  overflow: hidden;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ===== 标题栏 ===== */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: rgba(15,15,22,0.8);
+  backdrop-filter: blur(12px);
+}
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: -0.01em;
+}
+.panel-title-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: white;
+}
+.lang-toggle {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #9ca3af;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.lang-toggle:hover {
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.2);
+}
+
+/* ===== 状态概览 ===== */
+.status-bar {
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #9ca3af;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.status-dot-overall {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34,197,94,0.5);
+}
+.status-dot-overall.off {
+  background: #6b7280;
+  box-shadow: none;
+}
+.status-bar strong {
+  color: #f3f4f6;
+  font-weight: 600;
+}
+
+/* ===== 列表 ===== */
+.server-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.server-list::-webkit-scrollbar { width: 4px; }
+.server-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+.server-item {
+  background: rgba(20,20,28,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+.server-item:hover {
+  border-color: rgba(139,92,246,0.2);
+}
+.server-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.server-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.server-dot.on {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34,197,94,0.6);
+}
+.server-dot.off {
+  background: #6b7280;
+}
+.server-dot.connecting {
+  background: #f59e0b;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.server-info {
+  flex: 1;
+  min-width: 0;
+}
+.server-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f3f4f6;
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.server-url {
+  font-size: 11px;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.server-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 滑动开关 */
+.toggle-switch {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  background: #374151;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.25s;
+  flex-shrink: 0;
+}
+.toggle-switch.on {
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+}
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.25s;
+}
+.toggle-switch.on::after {
+  transform: translateX(16px);
+}
+
+.refresh-btn {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.refresh-btn:hover {
+  color: #a78bfa;
+  background: rgba(139,92,246,0.1);
+}
+.refresh-btn svg { width: 14px; height: 14px; }
+.refresh-btn.spin svg {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.delete-btn {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+.delete-btn:hover {
+  color: #f87171;
+  background: rgba(248,113,113,0.1);
+}
+.delete-btn svg { width: 14px; height: 14px; }
+
+.server-error {
+  font-size: 10px;
+  color: #f87171;
+  margin-top: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* 展开区域 */
+.server-expand {
+  display: none;
+  padding: 0 12px 12px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-top: -1px;
+}
+.server-item.expanded .server-expand {
+  display: block;
+}
+.tool-list-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7280;
+  font-weight: 600;
+  margin: 10px 0 6px;
+}
+.tool-list {
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.tool-list::-webkit-scrollbar { width: 3px; }
+.tool-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.tool-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: #a78bfa;
+  background: rgba(139,92,246,0.08);
+  border: 1px solid rgba(139,92,246,0.15);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+.tool-empty {
+  font-size: 11px;
+  color: #6b7280;
+  font-style: italic;
+}
+
+/* 空状态 */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 13px;
+  gap: 8px;
+  padding: 20px;
+  text-align: center;
+}
+.empty-state svg {
+  width: 36px;
+  height: 36px;
+  opacity: 0.3;
+  margin-bottom: 4px;
+}
+
+/* ===== 底部按钮 ===== */
+.panel-footer {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: rgba(15,15,22,0.8);
+}
+.add-btn {
+  width: 100%;
+  padding: 9px 16px;
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(139,92,246,0.3);
+}
+.add-btn:hover {
+  box-shadow: 0 6px 18px rgba(139,92,246,0.45);
+  transform: translateY(-1px);
+}
+.add-btn svg { width: 14px; height: 14px; }
+
+/* ===== Modal ===== */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  overflow-y: auto;
+}
+.modal.show { display: flex; }
+.modal-card {
+  background: #14141c;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 22px;
+  width: 100%;
+  max-width: 380px;
+  margin: auto;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+
+/* ===== 弹窗滚动条 ===== */
+.modal, .modal-card {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.14) transparent;
+}
+.modal::-webkit-scrollbar, .modal-card::-webkit-scrollbar { width: 6px; }
+.modal::-webkit-scrollbar-track, .modal-card::-webkit-scrollbar-track { background: transparent; }
+.modal::-webkit-scrollbar-thumb, .modal-card::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.modal::-webkit-scrollbar-thumb:hover, .modal-card::-webkit-scrollbar-thumb:hover {
+  background: rgba(139,92,246,0.55);
+  background-clip: padding-box;
+}
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f3f4f6;
+  margin-bottom: 6px;
+}
+.modal-desc {
+  font-size: 12.5px;
+  color: #9ca3af;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.form-group {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  font-weight: 600;
+}
+.form-input {
+  width: 100%;
+  padding: 9px 12px;
+  background: #0a0a0f;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 7px;
+  color: #e5e7eb;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.form-input:focus {
+  border-color: rgba(139,92,246,0.5);
+}
+.form-hint {
+  font-size: 11px;
+  color: #6b7280;
+  line-height: 1.55;
+  margin-top: 4px;
+}
+.oauth-btn {
+  background: rgba(139,92,246,0.12);
+  border: 1px solid rgba(139,92,246,0.35);
+  color: #c4b5fd;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.oauth-btn:hover { background: rgba(139,92,246,0.24); }
+.server-auth {
+  font-size: 10px;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
+.auth-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+.footer-links {
+  margin-top: 8px;
+  text-align: center;
+}
+.mini-link {
+  font-size: 11px;
+  color: #6b7280;
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(139,92,246,0.35);
+}
+.mini-link:hover { color: #a78bfa; }
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+.form-row .form-group {
+  flex: 1;
+}
+.modal-error {
+  color: #f87171;
+  font-size: 12px;
+  margin-bottom: 10px;
+  display: none;
+}
+.modal-error.show { display: block; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.btn-ghost {
+  background: transparent;
+  color: #9ca3af;
+  border: 1px solid rgba(255,255,255,0.1);
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-ghost:hover {
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.2);
+}
+.btn-primary {
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+  color: white;
+  border: none;
+  padding: 7px 16px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-primary:hover { opacity: 0.9; }
+
+.auth-select {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.auth-option {
+  flex: 1;
+  padding: 7px;
+  text-align: center;
+  font-size: 11px;
+  color: #9ca3af;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #0a0a0f;
+}
+.auth-option.active {
+  border-color: rgba(139,92,246,0.5);
+  background: rgba(139,92,246,0.1);
+  color: #c4b5fd;
+}
+</style>
+</head>
+<body>
+
+<div class="panel-header">
+  <div class="panel-title">
+    <span class="panel-title-icon">M</span>
+    <span data-i18n="mc.title">MCP Client</span>
+  </div>
+  <button class="lang-toggle" id="langToggle" onclick="toggleLang()">EN</button>
+</div>
+
+<div class="status-bar">
+  <div class="status-dot-overall" id="overallDot"></div>
+  <span data-i18n="mc.statusConnected">Connected</span> <strong id="connectedCount">0</strong> / <span id="totalCount">0</strong>
+</div>
+
+<div class="server-list" id="serverList">
+  <!-- 动态渲染 -->
+</div>
+
+<div class="panel-footer">
+  <button class="add-btn" onclick="openAddModal()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <span data-i18n="mc.addServer">Add MCP Server</span>
+  </button>
+</div>
+
+<!-- 添加 Modal -->
+<div class="modal" id="addModal">
+  <div class="modal-card">
+    <div class="modal-title" data-i18n="mc.addTitle">Add MCP Server</div>
+    <div class="modal-desc" data-i18n="mc.addDesc">Enter the connection details for the MCP server you want to connect.</div>
+
+    <div class="form-group">
+      <label class="form-label" data-i18n="mc.nameLabel">Name</label>
+      <input type="text" class="form-input" id="inputName" placeholder="my-server">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" data-i18n="mc.urlLabel">URL</label>
+      <input type="text" class="form-input" id="inputUrl" placeholder="https://example.com/mcp">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" data-i18n="mc.protocolLabel">Protocol</label>
+    </div>
+    <div class="auth-select" id="protocolSelect">
+      <div class="auth-option active" data-protocol="http" onclick="selectProtocol('http')">HTTP</div>
+      <div class="auth-option" data-protocol="streamable" onclick="selectProtocol('streamable')" data-i18n="mc.protoStreamable">Streamable</div>
+      <div class="auth-option" data-protocol="sse" onclick="selectProtocol('sse')">SSE</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" data-i18n="mc.authLabel">Auth Type</label>
+    </div>
+    <div class="auth-select" id="authSelect">
+      <div class="auth-option active" data-auth="none" onclick="selectAuth('none')" data-i18n="mc.authNone">None</div>
+      <div class="auth-option" data-auth="bearer" onclick="selectAuth('bearer')">Bearer</div>
+      <div class="auth-option" data-auth="apikey" onclick="selectAuth('apikey')" data-i18n="mc.authApiKey">API Key</div>
+      <div class="auth-option" data-auth="oauth" onclick="selectAuth('oauth')" data-i18n="mc.authOAuth">OAuth 2.1</div>
+    </div>
+
+    <div class="form-group" id="tokenGroup" style="display:none;">
+      <label class="form-label" data-i18n="mc.tokenLabel">Token / Key</label>
+      <input type="password" class="form-input" id="inputToken" placeholder="...">
+    </div>
+
+    <div class="form-group" id="oauthGroup" style="display:none;">
+      <label class="form-label" data-i18n="mc.oauthScopeLabel">Scope (optional)</label>
+      <input type="text" class="form-input" id="inputScope" placeholder="auto-discovered when empty">
+      <label class="form-label" data-i18n="mc.oauthIssuerLabel">Issuer (optional)</label>
+      <input type="text" class="form-input" id="inputIssuer" placeholder="https://auth.example.com">
+      <div class="form-hint" data-i18n="mc.oauthHint">RFC 9728 / 8414 discovery → RFC 7591 dynamic registration → RFC 7636 PKCE (S256) → browser authorization → token saved automatically.</div>
+      <div class="form-hint"><a class="mini-link" target="_blank" rel="noopener" href="/api/os/mcp_oauth?action=list&format=html" data-i18n="mc.oauthManage">OAuth authorization</a></div>
+    </div>
+
+    <div class="modal-error" id="modalError"></div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeAddModal()" data-i18n="mc.cancel">Cancel</button>
+      <button class="btn-primary" onclick="addServer()" data-i18n="mc.add">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== i18n =====
+const i18n = {
+  en: {
+    'mc.title': 'MCP Client',
+    'mc.statusConnected': 'Connected',
+    'mc.addServer': 'Add MCP Server',
+    'mc.addTitle': 'Add MCP Server',
+    'mc.addDesc': 'Enter the connection details for the MCP server you want to connect.',
+    'mc.nameLabel': 'Name',
+    'mc.urlLabel': 'URL',
+    'mc.protocolLabel': 'Protocol',
+    'mc.protoStreamable': 'Streamable',
+    'mc.authLabel': 'Auth Type',
+    'mc.authNone': 'None',
+    'mc.authApiKey': 'API Key',
+    'mc.authOAuth': 'OAuth 2.1',
+    'mc.tokenLabel': 'Token / Key',
+    'mc.oauthScopeLabel': 'Scope (optional)',
+    'mc.oauthIssuerLabel': 'Issuer (optional)',
+    'mc.oauthHint': 'Auto-discovery + dynamic registration + PKCE; the token is saved locally after authorization.',
+    'mc.oauthManage': 'OAuth authorization',
+    'mc.authorize': 'Authorize',
+    'mc.oauthSignedIn': 'Signed in',
+    'mc.oauthUnsigned': 'Not authorized',
+    'mc.oauthPending': 'Awaiting authorization',
+    'mc.oauthExpired': 'Token expired',
+    'mc.oauthStartFailed': 'Failed to start authorization',
+    'mc.oauthPopupBlocked': 'Popup was blocked, please allow popups for this site',
+    'mc.oauthTimeout': 'Authorization timed out, please try again',
+    'mc.cancel': 'Cancel',
+    'mc.add': 'Add',
+    'mc.connected': 'Connected',
+    'mc.disconnected': 'Disconnected',
+    'mc.connecting': 'Connecting',
+    'mc.tools': 'Tools',
+    'mc.noTools': 'No tools loaded yet',
+    'mc.emptyTitle': 'No MCP servers yet',
+    'mc.emptyDesc': 'Add your first MCP server to extend AICP with external tools.',
+    'mc.errorName': 'Please enter a server name',
+    'mc.errorUrl': 'Please enter a valid URL',
+    'mc.deleteConfirm': 'Remove this MCP server?',
+  },
+  zh: {
+    'mc.title': 'MCP 客户端',
+    'mc.statusConnected': '已连接',
+    'mc.addServer': '添加 MCP Server',
+    'mc.addTitle': '添加 MCP Server',
+    'mc.addDesc': '填写要接入的 MCP 服务的连接信息。',
+    'mc.nameLabel': '名称',
+    'mc.urlLabel': '地址',
+    'mc.protocolLabel': '协议',
+    'mc.protoStreamable': 'Streamable',
+    'mc.authLabel': '认证方式',
+    'mc.authNone': '无',
+    'mc.authApiKey': 'API Key',
+    'mc.authOAuth': 'OAuth 2.1',
+    'mc.tokenLabel': '令牌 / Key',
+    'mc.oauthScopeLabel': 'Scope（可选）',
+    'mc.oauthIssuerLabel': 'Issuer（可选）',
+    'mc.oauthHint': '自动 discovery + 动态注册 + PKCE；授权完成后 token 自动落地本地。',
+    'mc.oauthManage': 'OAuth 授权',
+    'mc.authorize': '去授权',
+    'mc.oauthSignedIn': '已授权',
+    'mc.oauthUnsigned': '未授权',
+    'mc.oauthPending': '等待授权',
+    'mc.oauthExpired': 'Token 已过期',
+    'mc.oauthStartFailed': '授权启动失败',
+    'mc.oauthPopupBlocked': '弹窗被拦截，请允许本站弹出新窗口',
+    'mc.oauthTimeout': '授权超时，请重试',
+    'mc.cancel': '取消',
+    'mc.add': '添加',
+    'mc.connected': '已连接',
+    'mc.disconnected': '未连接',
+    'mc.connecting': '连接中',
+    'mc.tools': '工具列表',
+    'mc.noTools': '暂无工具',
+    'mc.emptyTitle': '还没有 MCP Server',
+    'mc.emptyDesc': '添加第一个 MCP 服务，为 AICP 接入外部工具能力。',
+    'mc.errorName': '请输入服务名称',
+    'mc.errorUrl': '请输入有效地址',
+    'mc.deleteConfirm': '确认移除这个 MCP 服务？',
+  }
+};
+
+let currentLang = localStorage.getItem('aicp_lang') || 'en';
+
+function t(key) {
+  return (i18n[currentLang] && i18n[currentLang][key]) || key;
+}
+
+function applyI18n() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    const val = t(key);
+    if (val) el.textContent = val;
+  });
+  document.getElementById('langToggle').textContent = currentLang === 'en' ? '中' : 'EN';
+  document.documentElement.lang = currentLang;
+}
+
+function toggleLang() {
+  currentLang = currentLang === 'en' ? 'zh' : 'en';
+  localStorage.setItem('aicp_lang', currentLang);
+  applyI18n();
+  renderServerList();
+  notifyParentLang(currentLang);
+}
+
+// 通知父页（console iframe）本页语种，实现与外层双向同步
+function notifyParentLang(lang) {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type: 'aicp_lang', lang: lang}, '*');
+    }
+  } catch (e) {}
+}
+
+// 接收外层（console）推送的语种
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.type !== 'aicp_lang') return;
+  var lang = e.data.lang;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === currentLang) return;
+  currentLang = lang;
+  localStorage.setItem('aicp_lang', lang);
+  applyI18n();
+  renderServerList();
+});
+
+// 其它标签页切换语种的兜底
+window.addEventListener('storage', function(e) {
+  if (!e.key || e.key !== 'aicp_lang') return;
+  var lang = e.newValue;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === currentLang) return;
+  currentLang = lang;
+  applyI18n();
+  renderServerList();
+});
+
+// ===== 数据 =====
+let servers = [];
+let toolsCache = {}; // server -> tools list
+
+async function api(action, body = {}) {
+  try {
+    const res = await fetch('/api/os/_mcp_client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...body })
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ===== OAuth 2.1（os/mcp_oauth）=====
+async function oauthApi(action, body = {}) {
+  try {
+    const res = await fetch('/api/os/mcp_oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...body })
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+let oauthState = {}; // server -> {signed_in, pending, expired, remaining, scope, mcp_url}
+
+async function loadOAuthState() {
+  const res = await oauthApi('status');
+  const list = (res && res.data) || [];
+  if (!Array.isArray(list)) return;
+  const next = {};
+  list.forEach(it => {
+    // 只有走过 OAuth 流程的 server 才显示授权状态，避免给纯 bearer/apikey 的服务器误挂徽标
+    if (!it.client_id && !it.issuer && !it.signed_in && !it.pending_authorization) return;
+    next[it.server] = {
+      signed_in: !!it.signed_in,
+      pending: !!it.pending_authorization,
+      expired: !!it.expired,
+      remaining: it.expires_in_remaining,
+      scope: it.scope || '',
+      mcp_url: it.mcp_url || ''
+    };
+  });
+  oauthState = next;
+}
+
+// 轮询授权状态：token 由插件回调落盘，页面只负责感知完成
+async function waitForOAuth(name, timeoutMs) {
+  const limit = Date.now() + (timeoutMs || 180000);
+  while (Date.now() < limit) {
+    await new Promise(r => setTimeout(r, 2000));
+    const res = await oauthApi('status', { server: name });
+    const list = (res && res.data) || [];
+    const it = list[0];
+    if (it && it.signed_in) {
+      await loadOAuthState();
+      return true;
+    }
+  }
+  return false;
+}
+
+// 对已登记但未授权的 server 发起授权
+async function authorizeServer(name) {
+  const st = oauthState[name] || {};
+  const payload = { server: name };
+  if (st.mcp_url) payload.mcp_url = st.mcp_url;
+  const res = await oauthApi('start', payload);
+  if (!res.ok || !res.authorize_url) {
+    alert((res && res.error) || t('mc.oauthStartFailed'));
+    return;
+  }
+  const win = window.open(res.authorize_url, '_blank');
+  if (!win) alert(t('mc.oauthPopupBlocked'));
+  const done = await waitForOAuth(name);
+  if (!done) alert(t('mc.oauthTimeout'));
+  await loadServers();
+}
+
+function oauthBadge(s) {
+  const st = oauthState[s.name];
+  if (!st) return '';
+  let label, color;
+  if (st.signed_in && !st.expired) { label = t('mc.oauthSignedIn'); color = '#22c55e'; }
+  else if (st.expired) { label = t('mc.oauthExpired'); color = '#f59e0b'; }
+  else if (st.pending) { label = t('mc.oauthPending'); color = '#f59e0b'; }
+  else { label = t('mc.oauthUnsigned'); color = '#6b7280'; }
+  const btn = st.signed_in ? '' :
+    `<button class="oauth-btn" onclick="event.stopPropagation(); authorizeServer('${s.name}')">${t('mc.authorize')}</button>`;
+  return `<div class="auth-row"><span class="server-auth" style="color:${color}">${label}</span>${btn}</div>`;
+}
+
+async function loadServers() {
+  const res = await api('list_servers');
+  const list = (res && res.data) || [];
+  await loadOAuthState();
+  if (!Array.isArray(list)) {
+    servers = [];
+    return;
+  }
+  servers = list.map(s => ({
+    id: s.server,
+    name: s.server,
+    url: s.url || '',
+    status: s.connected ? 'on' : 'off',
+    toolCount: s.tool_count || 0,
+    enabled: s.enabled !== false,
+    lastError: s.last_error || '',
+    expanded: false
+  }));
+  renderServerList();
+}
+
+async function loadTools(serverName) {
+  if (toolsCache[serverName]) return toolsCache[serverName];
+  const res = await api('list_tools', { server: serverName });
+  const list = (res && res.data) || (res && res.tools) || [];
+  if (!Array.isArray(list)) return [];
+  toolsCache[serverName] = list.map(t => (t && t.tool) || (t && t.name) || t);
+  return toolsCache[serverName];
+}
+
+// ===== 渲染 =====
+function renderServerList() {
+  const list = document.getElementById('serverList');
+  const connectedCount = servers.filter(s => s.status === 'on').length;
+  document.getElementById('connectedCount').textContent = connectedCount;
+  document.getElementById('totalCount').textContent = servers.length;
+
+  const dot = document.getElementById('overallDot');
+  if (connectedCount > 0) dot.classList.remove('off');
+  else dot.classList.add('off');
+
+  if (servers.length === 0) {
+    list.innerHTML = `
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <div style="font-size:13px; color:#9ca3af; font-weight:500;">${t('mc.emptyTitle')}</div>
+        <div style="font-size:12px;">${t('mc.emptyDesc')}</div>
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = servers.map(s => `
+    <div class="server-item ${s.expanded ? 'expanded' : ''}" data-id="${s.id}">
+      <div class="server-item-head" onclick="toggleExpand('${s.id}')">
+        <div class="server-dot ${s.status}"></div>
+        <div class="server-info">
+          <div class="server-name">
+            ${s.name}
+            <span style="font-size:10px; font-weight:500; color:${s.status === 'on' ? '#22c55e' : s.status === 'connecting' ? '#f59e0b' : '#6b7280'};">
+              ${s.status === 'on' ? t('mc.connected') : s.status === 'connecting' ? t('mc.connecting') : t('mc.disconnected')}
+            </span>
+          </div>
+          <div class="server-url">${s.url}</div>
+          ${oauthBadge(s)}
+          ${s.lastError ? `<div class="server-error" title="${s.lastError}">${s.lastError}</div>` : ''}
+        </div>
+        <div class="server-actions">
+          <button class="refresh-btn" onclick="event.stopPropagation(); refreshServer('${s.id}')" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          </button>
+          <div class="toggle-switch ${s.status === 'on' ? 'on' : ''}" onclick="event.stopPropagation(); toggleServer('${s.id}')"></div>
+          <button class="delete-btn" onclick="event.stopPropagation(); deleteServer('${s.id}')" title="Delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="server-expand">
+        <div class="tool-list-label">${t('mc.tools')} (${s.toolCount || 0})</div>
+        <div class="tool-list" id="tools-${s.id}">
+          <div class="tool-empty">${t('mc.noTools')}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // 展开的服务器异步加载工具列表
+  servers.forEach(s => {
+    if (s.expanded && s.status === 'on') {
+      loadTools(s.name).then(tools => {
+        const el = document.getElementById('tools-' + s.id);
+        if (el && tools.length > 0) {
+          el.innerHTML = tools.map(tl => `<span class="tool-chip">${tl}</span>`).join('');
+        }
+      });
+    }
+  });
+}
+
+function toggleExpand(id) {
+  const s = servers.find(x => x.id === id);
+  if (s) {
+    s.expanded = !s.expanded;
+    renderServerList();
+  }
+}
+
+async function toggleServer(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  if (s.status === 'on') {
+    s.status = 'connecting';
+    renderServerList();
+    const res = await api('disconnect', { server: s.name });
+    if (res.ok) {
+      s.status = 'off';
+      s.toolCount = 0;
+      delete toolsCache[s.name];
+    } else {
+      s.status = 'on';
+    }
+  } else {
+    s.status = 'connecting';
+    renderServerList();
+    const res = await api('connect', { server: s.name, url: s.url });
+    if (res.ok) {
+      s.status = 'on';
+      s.toolCount = res.tool_count || 0;
+    } else {
+      s.status = 'off';
+      s.lastError = res.error || 'connect failed';
+    }
+  }
+  renderServerList();
+}
+
+async function refreshServer(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  const btn = document.querySelector(`[data-id="${id}"] .refresh-btn`);
+  if (btn) btn.classList.add('spin');
+  const res = await api('refresh', { server: s.name });
+  if (btn) btn.classList.remove('spin');
+  if (res.ok) {
+    s.status = 'on';
+    s.lastError = '';
+    const result = (res.data && res.data[0]) || {};
+    s.toolCount = result.tool_count || 0;
+    delete toolsCache[s.name];
+  } else {
+    s.lastError = res.error || 'refresh failed';
+    s.status = 'off';
+  }
+  renderServerList();
+}
+
+async function deleteServer(id) {
+  if (!confirm(t('mc.deleteConfirm'))) return;
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  const res = await api('remove_server', { server: s.name });
+  if (res.ok) {
+    servers = servers.filter(x => x.id !== id);
+    delete toolsCache[s.name];
+    renderServerList();
+  } else {
+    alert(res.error || 'delete failed');
+  }
+}
+
+// ===== 添加 Modal =====
+let currentProtocol = 'http';
+let currentAuth = 'none';
+
+function openAddModal() {
+  document.getElementById('addModal').classList.add('show');
+  document.getElementById('inputName').value = '';
+  document.getElementById('inputUrl').value = '';
+  document.getElementById('inputToken').value = '';
+  document.getElementById('inputScope').value = '';
+  document.getElementById('inputIssuer').value = '';
+  document.getElementById('modalError').classList.remove('show');
+  selectProtocol('http');
+  selectAuth('none');
+}
+
+function closeAddModal() {
+  document.getElementById('addModal').classList.remove('show');
+}
+
+function selectProtocol(type) {
+  currentProtocol = type;
+  document.querySelectorAll('#protocolSelect .auth-option').forEach(el => {
+    el.classList.toggle('active', el.dataset.protocol === type);
+  });
+}
+
+function selectAuth(type) {
+  currentAuth = type;
+  document.querySelectorAll('#authSelect .auth-option').forEach(el => {
+    el.classList.toggle('active', el.dataset.auth === type);
+  });
+  document.getElementById('tokenGroup').style.display =
+    (type === 'bearer' || type === 'apikey') ? 'flex' : 'none';
+  document.getElementById('oauthGroup').style.display = (type === 'oauth') ? 'flex' : 'none';
+}
+
+async function addServer() {
+  const name = document.getElementById('inputName').value.trim();
+  const url = document.getElementById('inputUrl').value.trim();
+  const token = document.getElementById('inputToken').value.trim();
+  const err = document.getElementById('modalError');
+
+  if (!name) {
+    err.textContent = t('mc.errorName');
+    err.classList.add('show');
+    return;
+  }
+  if (!url || !url.startsWith('http')) {
+    err.textContent = t('mc.errorUrl');
+    err.classList.add('show');
+    return;
+  }
+
+  closeAddModal();
+  const newServer = {
+    id: 'srv_' + Date.now(),
+    name,
+    url,
+    protocol: currentProtocol,
+    status: 'connecting',
+    auth: currentAuth,
+    toolCount: 0,
+    expanded: true
+  };
+  servers.unshift(newServer);
+  renderServerList();
+
+  const scope = (document.getElementById('inputScope') || {}).value || '';
+  const issuer = (document.getElementById('inputIssuer') || {}).value || '';
+
+  if (currentAuth === 'oauth') {
+    // OAuth 2.1: discovery → DCR → PKCE → 浏览器授权；token 由插件回调落盘
+    const op = { server: name, mcp_url: url };
+    if (scope.trim()) op.scope = scope.trim();
+    if (issuer.trim()) op.issuer = issuer.trim();
+    const r = await oauthApi('start', op);
+    if (!r.ok || !r.authorize_url) {
+      newServer.status = 'off';
+      newServer.lastError = (r && r.error) || t('mc.oauthStartFailed');
+      renderServerList();
+      alert(newServer.lastError);
+      return;
+    }
+    const win = window.open(r.authorize_url, '_blank');
+    if (!win) alert(t('mc.oauthPopupBlocked'));
+    const done = await waitForOAuth(name);
+    if (!done) {
+      newServer.status = 'off';
+      newServer.lastError = t('mc.oauthTimeout');
+      renderServerList();
+      alert(newServer.lastError);
+      return;
+    }
+    await loadOAuthState();
+  }
+
+  const payload = { server: name, url };
+  if (currentAuth !== 'none' && currentAuth !== 'oauth' && token) payload.token = token;
+  const res = await api('connect', payload);
+  if (res.ok) {
+    newServer.status = 'on';
+    newServer.toolCount = res.tool_count || 0;
+  } else {
+    newServer.status = 'off';
+    newServer.lastError = res.error || 'connect failed';
+    alert(res.error || 'connect failed');
+  }
+  renderServerList();
+}
+
+// 点击遮罩关闭
+document.getElementById('addModal').addEventListener('click', (e) => {
+  if (e.target.id === 'addModal') closeAddModal();
+});
+
+// ===== 初始化 =====
+applyI18n();
+loadServers();
+</script>
+
+</body>
+</html>
