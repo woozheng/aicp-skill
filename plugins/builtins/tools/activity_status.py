@@ -7,7 +7,10 @@
 #   1. 每个模块独立容错 —— 一个挂了只标记该模块 ok=false，其余照常返回
 #   2. 只读，不做任何写操作
 #   3. 失败时前端保留上一次高亮（不清空）
-#   4. Step 1-4 后：exp 读 backpack.json；task / skill 读 sessions/{sid}/ 下的文件
+#   4. 每个模块带 scope 字段，前端据此分组渲染（前端不需要知道字母含义）：
+#        user    —— 用户级（exp）
+#        session —— 会话级（task / sub / skill）
+#        system  —— 实例级（cron / mcp，不带 uid，多用户共享）
 # ============================================================
 
 import json
@@ -25,6 +28,22 @@ CRON_DIR = DATA_ROOT / "os_cron"
 
 MODULES = ["exp", "task", "cron", "sub", "skill", "mcp"]
 
+# 模块作用域：user / session / system
+SCOPES = {
+    "exp": "user",
+    "task": "session",
+    "cron": "system",
+    "sub": "session",
+    "skill": "session",
+    "mcp": "system",
+}
+
+SCOPE_LABELS = {
+    "user": "全局",
+    "session": "本会话",
+    "system": "实例",
+}
+
 
 def _user_dir(user_id: str) -> Path:
     return USERS_DIR / user_id
@@ -36,9 +55,12 @@ def _sessions_dir(user_id: str) -> Path:
 
 def _resolve_user_id(envelop) -> str:
     meta = envelop.meta or {}
+    payload = envelop.payload or {}
+    # ★ 网关会剥掉 meta 里的 user_id（防伪造），前端自报的 user_id 走 payload
     uid = (
-        meta.get("user_id")
-        or meta.get("auth_result", {}).get("user_id")
+        payload.get("user_id")
+        or meta.get("user_id")
+        or (meta.get("auth_result") or {}).get("user_id")
         or "local"
     )
     return str(uid).strip() or "local"
@@ -77,7 +99,7 @@ def _probe_exp(user_id: str) -> dict:
 
 
 def _probe_task(user_id: str, session_id: str) -> dict:
-    """任务看板：sessions/{sid}/taskboard.txt 是否有内容（Step 2 迁 session 级）"""
+    """任务看板：sessions/{sid}/taskboard.txt 是否有内容（session 级）"""
     if not session_id:
         return {"ok": True, "active": False, "detail": "无 session", "pending": 0}
     p = _sessions_dir(user_id) / session_id / "taskboard.txt"
@@ -130,34 +152,34 @@ def _probe_cron() -> dict:
     }
 
 
-def _probe_sub(user_id: str) -> dict:
-    """分身：task_manager 落盘的任务（文件存在 != 有分身任务）"""
-    tdir = _user_dir(user_id) / "tasks"
-    if not tdir.exists():
+def _probe_sub(user_id: str, session_id: str) -> dict:
+    """分身：task_manager 落盘的任务（session 级 —— sessions/{sid}/tasks.json）
+
+    与 task_manager._tasks_file() 完全一致：分身是父会话派出去的 sub_session，
+    因此任务归属于会话，而不是用户。
+    """
+    if not session_id:
+        return {"ok": True, "active": False, "detail": "无 session", "count": 0}
+    f = _sessions_dir(user_id) / session_id / "tasks.json"
+    if not f.exists():
         return {"ok": True, "active": False, "detail": "无分身", "count": 0}
     try:
-        files = list(tdir.glob("*.json"))
+        obj = json.loads(f.read_text(encoding="utf-8", errors="replace"))
     except Exception as e:
-        return {"ok": False, "active": False, "detail": f"扫描失败: {e}", "count": 0}
+        return {"ok": False, "active": False, "detail": f"读取失败: {e}", "count": 0}
+    items = obj.values() if isinstance(obj, dict) else (obj or [])
     running = 0
     done = 0
     total = 0
-    for f in files:
-        try:
-            obj = json.loads(f.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
+    for t in items:
+        if not isinstance(t, dict):
             continue
-        if not isinstance(obj, dict):
-            continue
-        for t in obj.values():
-            if not isinstance(t, dict):
-                continue
-            total += 1
-            st = str(t.get("status", "")).lower()
-            if st == "running":
-                running += 1
-            elif st in ("done", "completed", "failed", "cancelled"):
-                done += 1
+        total += 1
+        st = str(t.get("status", "")).lower()
+        if st == "running":
+            running += 1
+        elif st in ("done", "completed", "failed", "cancelled", "canceled"):
+            done += 1
     return {
         "ok": True,
         "active": total > 0,
@@ -169,8 +191,7 @@ def _probe_sub(user_id: str) -> dict:
 
 
 def _probe_skill(user_id: str, session_id: str) -> dict:
-    """技能：本 session 真正钉住（pinned）的技能数 —— 读 sessions/{sid}/pinned.json
-    （Step 3 后 pinned 是 session 级，user 级 skill_state.json 已废弃）"""
+    """技能：本 session 真正钉住（pinned）的技能数 —— 读 sessions/{sid}/pinned.json"""
     if not session_id:
         return {"ok": True, "active": False, "detail": "无 session", "count": 0, "pinned": 0}
     f = _sessions_dir(user_id) / session_id / "pinned.json"
@@ -261,23 +282,28 @@ async def execute(envelop, agent):
         "exp": lambda: _probe_exp(user_id),
         "task": lambda: _probe_task(user_id, session_id),
         "cron": _probe_cron,
-        "sub": lambda: _probe_sub(user_id),
+        "sub": lambda: _probe_sub(user_id, session_id),
         "skill": lambda: _probe_skill(user_id, session_id),
         "mcp": _probe_mcp,
     }
 
     modules = {}
     for key in MODULES:
+        scope = SCOPES.get(key, "user")
         try:
-            modules[key] = probes[key]()
+            res = probes[key]() or {}
         except Exception as e:
-            modules[key] = {"ok": False, "active": False, "detail": f"探测异常: {e}"}
+            res = {"ok": False, "active": False, "detail": f"探测异常: {e}"}
+        res["scope"] = scope
+        res["scope_label"] = SCOPE_LABELS.get(scope, scope)
+        modules[key] = res
 
     envelop.payload = {
         "ok": True,
         "data": {
             "modules": modules,
             "active": [k for k, v in modules.items() if v.get("active")],
+            "scopes": SCOPES,
             "user_id": user_id,
             "session_id": session_id,
         },
@@ -289,20 +315,27 @@ async def execute(envelop, agent):
 def help():
     return {
         "route": "builtins/tools/activity_status",
-        "description": "活动状态聚合 —— 一次请求返回 E/T/H/A/S/M 六个模块是否有活动",
+        "description": "活动状态聚合 —— 一次请求返回 E/T/H/A/S/M 六个模块是否有活动，并标注每个模块的作用域",
         "input": {
             "action": "snapshot（默认）",
-            "session_id": "可选；不传则从 meta.session_id 取（task / skill 需要）",
+            "session_id": "可选；不传则从 meta.session_id 取（task / sub / skill 需要）",
         },
         "output": {
             "ok": "是否成功",
             "data.modules.<key>.ok": "该模块探测是否成功",
             "data.modules.<key>.active": "该模块是否有活动（前端据此高亮）",
             "data.modules.<key>.detail": "简要说明",
+            "data.modules.<key>.scope": "作用域 user / session / system（前端据此分组）",
             "data.active": "有活动的模块 key 列表",
+            "data.scopes": "模块 → 作用域 的映射表",
             "data.session_id": "本次探测的会话",
         },
+        "scopes": {
+            "user": "用户级 —— exp",
+            "session": "会话级 —— task / sub / skill",
+            "system": "实例级 —— cron / mcp",
+        },
         "examples": [
-            'action="snapshot" → {"modules": {"exp": {...}, "task": {...}, ...}, "active": ["exp"]}',
+            'action="snapshot" → {"modules": {"exp": {"scope": "user"}, "task": {"scope": "session"}}, "active": ["exp"]}',
         ],
     }

@@ -5,6 +5,10 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+
+# read_file 超过此大小时，不返回尾部预览，改返回 code_structure（结构地图）
+# 设为 0 表示禁用（永远返回尾部预览）
+READ_FILE_STRUCTURE_THRESHOLD = 100 * 1024
 # ============================================================
 # 基准目录 —— 相对路径统一基于此解析（可用环境变量覆盖）
 # ============================================================
@@ -875,6 +879,31 @@ def _read_file_sync(path_str):
         raise IsADirectoryError(f"路径不是文件: {path_str}")
 
     file_size = p.stat().st_size
+
+    # ★ 大文件：超过阈值直接返回 code_structure（结构地图），不返回尾部预览
+    if READ_FILE_STRUCTURE_THRESHOLD > 0 and file_size > READ_FILE_STRUCTURE_THRESHOLD:
+        try:
+            structure = _parse_code_structure_sync(path_str)
+        except Exception as e:
+            # 结构解析失败（语法错误等），降级返回尾部预览
+            structure = {
+                "error": f"结构解析失败: {e}",
+                "hint": "用 read_file_lines(path, start_line, end_line) 读指定范围",
+            }
+        return {
+            "structure": structure,
+            "size": file_size,
+            "size_kb": round(file_size / 1024, 1),
+            "truncated": True,
+            "mode": "structure",
+            "hint": (
+                f"文件超过 {READ_FILE_STRUCTURE_THRESHOLD // 1024}KiB"
+                f"（{round(file_size/1024,1)}KiB），已自动返回 code_structure 结构地图，"
+                f"不返回全文。用 read_file_lines(path, start_line, end_line) 读关键定义。"
+                f"如需强制读尾部预览，把 READ_FILE_STRUCTURE_THRESHOLD 设为 0 或调大阈值。"
+            ),
+        }
+
 
     if file_size <= MAX_INLINE_SIZE:
         content = p.read_text(encoding="utf-8")

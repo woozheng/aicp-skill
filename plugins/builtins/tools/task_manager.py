@@ -121,9 +121,10 @@ def _resolve_user_id(envelop) -> str:
 
 
 def _tasks_file(user_id: str, parent_session: str) -> Path:
-    d = USER_ROOT / user_id / "tasks"
+    """分身任务存储：sessions/{parent_session}/tasks.json（session 级，与 main_agent 一致）"""
+    d = USER_ROOT / user_id / "sessions" / parent_session
     d.mkdir(parents=True, exist_ok=True)
-    return d / f"{parent_session}.json"
+    return d / "tasks.json"
 
 
 # ============================================================
@@ -216,22 +217,26 @@ def _format_summary(user_id: str, parent_session: str) -> str:
         lines.append(f"{icon} {tid}: {desc} [{status}]")
     return "\n".join(lines)
 
+SESSIONS_DIR = MEMORY_DIR / "sessions"     # ← 改名，路径变了
 
-def _delete_flow_files(task_ids: list) -> int:
+def _delete_flow_files(user_id: str, task_ids: list) -> int:
+    """删分身的 flow 目录（sessions/{tid}/）+ 清 index 条目。"""
     deleted = 0
-    if not CONVERSATIONS_DIR.exists():
+    sessions_base = USER_ROOT / user_id / "sessions"
+    if not sessions_base.exists():
         return 0
     for tid in task_ids:
-        flow_file = CONVERSATIONS_DIR / f"{tid}.json"
-        if flow_file.exists():
+        session_dir = sessions_base / tid
+        if session_dir.exists():
             try:
-                flow_file.unlink()
+                import shutil
+                shutil.rmtree(session_dir, ignore_errors=True)
                 deleted += 1
             except Exception:
                 pass
 
-    # ★ 清理 index.json 里的孤儿记录
-    index_file = CONVERSATIONS_DIR / "index.json"
+    # 清理 index.json 里的孤儿记录
+    index_file = sessions_base / "index.json"
     if index_file.exists():
         try:
             index = json.loads(index_file.read_text(encoding="utf-8"))
@@ -577,7 +582,7 @@ async def _handle_clear(agent, args, user_id, session_id, flow):
     removed_tids = [tid for tid in tasks if tid not in kept]
     removed = len(removed_tids)
     _save_tasks(user_id, session_id, kept)
-    deleted_flows = _delete_flow_files(removed_tids)
+    deleted_flows = _delete_flow_files(user_id, removed_tids)
 
     try:
         await agent.system.call(core.Envelop(
@@ -639,7 +644,7 @@ async def _handle_delete(agent, args, user_id, session_id, flow):
         deleted.append(tid)
 
     _save_tasks(user_id, session_id, tasks)
-    deleted_flows = _delete_flow_files(deleted)
+    deleted_flows = _delete_flow_files(user_id, removed_tids)
 
     try:
         await agent.system.call(core.Envelop(

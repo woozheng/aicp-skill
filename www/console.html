@@ -267,21 +267,22 @@ body{
 .panel{display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0;min-width:0;position:relative}
 .panel.active{display:flex}
 
-/* 悬浮对话标题（不占布局） */
+/* 悬浮对话标题（常驻顶部，不随消息滚动、不被消息顶掉） */
 .chat-title-float{
   position:absolute;
   top:0;left:0;right:0;
   height:32px;
   display:flex;align-items:center;
   padding:0 24px;
-  z-index:5;
+  z-index:6;
   pointer-events:none;
-  background:linear-gradient(to bottom, var(--bg) 60%, transparent);
+  background:var(--bg);
+  border-bottom:1px solid var(--border);
   transition:opacity .25s;
 }
 .chat-title-float .title-text{
   font-size:11px;font-weight:500;color:var(--text-3);
-  max-width:var(--chat-width);margin:0 auto;width:100%;
+  max-width:var(--chat-width);margin:0;width:100%;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   pointer-events:auto;cursor:default;
 }
@@ -290,9 +291,7 @@ body{
   pointer-events:auto;font-size:11px;
 }
 .chat-title-float .title-text .rename-hint:hover{color:var(--text-2)}
-.chat-title-float.scrolled{
-  opacity:0;
-}
+/* 标题常驻可见：滚动时不再隐藏 */
 
 /* 消息区 */
 .messages{
@@ -3052,15 +3051,12 @@ async function uploadFile(file) {
     renderFilePreview();
 }
 
-// ============ 标题悬浮渐隐 ============
+// ============ 对话标题常驻左上角（滚动时不隐藏） ============
 function initTitleFloat() {
     var msgs = document.getElementById('chatMessages');
     var titleFloat = document.getElementById('chatTitleFloat');
     if (!msgs || !titleFloat) return;
-    msgs.addEventListener('scroll', function() {
-        if (msgs.scrollTop > 8) titleFloat.classList.add('scrolled');
-        else titleFloat.classList.remove('scrolled');
-    });
+    // 标题常驻：滚动时不再加 .scrolled 渐隐，始终可见可点击改名
 }
 
 // ============ 初始化 ============

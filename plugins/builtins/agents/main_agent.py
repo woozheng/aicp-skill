@@ -634,6 +634,11 @@ async def _update_conversation_index(user_id: str, session_id: str, flow: list):
                 if e.get("from") == "user" and e.get("content"):
                     meta["title"] = e["content"][:20]
                     break
+        if not meta.get("description"):
+            for e in flow:
+                if e.get("from") == "user" and e.get("content"):
+                    meta["description"] = " ".join(str(e["content"]).split())[:120]
+                    break
         if not meta.get("created_at") and flow:
             meta["created_at"] = flow[0].get("timestamp", datetime.now().isoformat())
         meta["updated_at"] = datetime.now().isoformat()
@@ -714,8 +719,8 @@ def _cn_to_int(s: str) -> int:
 
 # 可配置基线
 BASE_ROUNDS = 8          # 默认显示最近 3 轮 #N
-BASE_CHAINS = 1          # 默认显示最近 1 轮的 ##（更早的 ## 折叠）
-FORCE_FOLD_THRESHOLD = 200_000   # context 字符数，超过就强制提示模型折叠
+BASE_CHAINS = 2          # 默认显示最近 1 轮的 ##（更早的 ## 折叠）
+FORCE_FOLD_THRESHOLD = 220_000   # context 字符数，超过就强制提示模型折叠
 # 发现类工具：只给条数，不列字段内容
 
 
@@ -821,6 +826,18 @@ class InformationFlow:
         if applied["expand"]:   parts.append(f"展开 {len(applied['expand'])} 条")
         if applied["invalid"]:  parts.append(f"无效 {len(applied['invalid'])} 个")
         think = "，".join(parts) or "无变更"
+
+        # ★ 把 TTL / 到期轮次一并返回，供写 flow 与下一轮渲染使用
+        return {
+            "ok": True,
+            "think": think,
+            "data": {
+                **applied,
+                "ttl": ttl,
+                "current_turn": self._current_turn,
+                "expires_at_turn": self._current_turn + ttl,
+            },
+        }
 
         return {"ok": True, "think": think, "data": applied}
     # ============================================================
@@ -1369,7 +1386,41 @@ class InformationFlow:
     # ============================================================
     # 渲染：主入口
     # ============================================================
+    def _render_manage_flow(self, entries: List[dict]) -> List[str]:
+        """渲染本轮轮级 manage_flow 记录（chain_no 不计，按 action 识别）。
 
+        输出示例：
+          > 🧭 manage_flow：收起 2 条: ##3.1, ###3.1.2；TTL 3 轮（#5 生效，到 #8 失效）；原因：...
+        """
+        out: List[str] = []
+        for e in entries:
+            if e.get("action") != "manage_flow":
+                continue
+            d = e.get("detail") or {}
+            applied = d.get("applied") or {}
+            parts: List[str] = []
+            if applied.get("collapse"):
+                parts.append(f"收起 {len(applied['collapse'])} 条: {', '.join(applied['collapse'])}")
+            if applied.get("ignore"):
+                parts.append(f"忽略 {len(applied['ignore'])} 条: {', '.join(applied['ignore'])}")
+            if applied.get("expand"):
+                parts.append(f"展开 {len(applied['expand'])} 条: {', '.join(applied['expand'])}")
+            if applied.get("invalid"):
+                parts.append(f"无效 {len(applied['invalid'])} 个: {', '.join(str(x) for x in applied['invalid'])}")
+
+            ttl = d.get("ttl")
+            cur = d.get("current_turn")
+            exp = d.get("expires_at_turn")
+            ttl_hint = ""
+            if ttl is not None and exp is not None:
+                ttl_hint = f"；TTL {ttl} 轮（#{(cur or 0) + 1} 生效，到 #{exp} 失效）"
+
+            reason = (d.get("reason") or "").strip()
+            reason_hint = f"；原因：{reason}" if reason else ""
+
+            body = "；".join(parts) if parts else "无变更"
+            out.append(f"> 🧭 manage_flow：{body}{ttl_hint}{reason_hint}")
+        return out
 
 
 
@@ -1437,6 +1488,12 @@ class InformationFlow:
                     prev_ts = e.get("timestamp", "") or prev_ts
                     break
             lines.append("")
+
+            # 3.2 ★ 轮级 manage_flow 记录：让 agent 记得「上一轮我折叠/展开了什么」
+            mf_lines = self._render_manage_flow(entries)
+            if mf_lines:
+                lines.extend(mf_lines)
+                lines.append("")
 
             chains = self._group_chains(entries)
             if not chains:
@@ -1576,6 +1633,8 @@ class InformationFlow:
         问题 1：use_tool 与 call_start 内容几乎一样，### 里不再重复渲染 use_tool。
         use_tool 的 think 已在 ## 头（💭），args 已在 call_start 的 params。
         """
+        if se.get("action") == "manage_flow":
+            return []   # 轮级记录已在 _render_manage_flow 渲染，不重复进 ###
         # ★ 跳过 ai.use_tool（内容与 call_start 重复）
         if se.get("from") == "ai" and se.get("call") == "use_tool":
             return []
@@ -2067,6 +2126,10 @@ MANAGE_FLOW_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "为什么展开/折叠（可选）。会写进信息流，下一轮你能看到自己当时的理由。"
+                },
                 "collapse": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -3166,6 +3229,7 @@ class LLMThinker:
                     tc = event.get("tool_call")
 
                     # ★ manage_flow 特殊处理：直接执行，不进 tool_calls_list
+                    # ★ manage_flow 特殊处理：直接执行，不进 tool_calls_list
                     if tc.name == "manage_flow":
                         args = tc.arguments or {}
                         try:
@@ -3178,6 +3242,25 @@ class LLMThinker:
                             manage_flow_done = True
                             _info_parts = result.get("think", "")
                             Logger.info(f"[manage_flow] depth={depth} {_info_parts}")
+
+                            # ★ 写进 flow：让下一轮 context 能看到「我折叠/展开了什么、为什么、TTL 剩几轮」
+                            #   chain_no=0 → 不进 ## 分组，跟 #N 同轮，作为轮级 system entry 渲染
+                            try:
+                                await flow.append_system(
+                                    action="manage_flow",
+                                    result_think=f"🧭 信息流：{_info_parts}",
+                                    detail={
+                                        "applied": result.get("data", {}),
+                                        "ttl": args.get("ttl", 3),
+                                        "reason": args.get("reason", ""),
+                                        "current_turn": flow._current_turn,
+                                        "expires_at_turn": flow._current_turn + max(1, min(int(args.get("ttl", 3) or 3), 20)),
+                                    },
+                                    retain=2,   # 只保留 2 轮，不长期占 context
+                                )
+                            except Exception as e:
+                                Logger.warn(f"[manage_flow] 写 flow 失败: {e}")
+
                             try:
                                 await _push_progress(
                                     agent, user_id, session_id, "executing",
@@ -3753,6 +3836,7 @@ async def execute(envelop, agent):
                     "updated_at": meta.get("updated_at", ""),
                     "message_count": meta.get("message_count", 0),
                     "last_preview": meta.get("last_preview", ""),
+                    "description": meta.get("description", ""),
                     "archived": meta.get("archived", False),
                 })
             items.sort(key=lambda x: x.get("updated_at", ""), reverse=True)

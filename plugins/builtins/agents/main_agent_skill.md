@@ -110,7 +110,7 @@ plugins 目录内的 py 文件符合签名函数的 `async def execute(envelop, 
 
 - 调用 `edit_file` 或 `apply_patch` 前，必须先调用 `read_file`。
 - `find` 必须与文件原文完全一致。替换失败并提示「不匹配」时，先读取文件确认实际内容，不要重复相同操作。
-- 根据用户需求的具体内容，决定重写还是部分修改代码文件。
+- 根据用户需求的具体内容，决定重写还是部分修改代码文件
 
 ## 寻址
 
@@ -221,7 +221,7 @@ plugins 目录内的 py 文件符合签名函数的 `async def execute(envelop, 
 1. 根据需求自行设计后端插件数量和命名规范。
    设计原则：
    - **envelop 为唯一插件数据真相**：插件内持久状态靠 envelop 自行设计的字段隔离（如 `payload.state` / `payload.session` / `payload.cache`），不靠「模块级全局变量」——多会话并发时全局变量互相污染。
-   - **存储落盘**：`data/{project}/`，用户无特殊需求默认 JSON 文件。
+   - **存储落盘**：`data/{project}/`，用户无特殊需求默认 JSON 文件。_save 用原子写（`tmp` + `os.replace`）——防并发写覆盖。
    - **项目起名先查重**：`list_dir("plugins/applications")` + `list_dir("www/apps")`，两处都不能重名。
    - **插件命名**：一个项目多个后端时，插件名 = 职责（`notes` 记笔记 / `ping` 自检 / `collab` 跨插件调用），不用 `main` / `app` 这种「万能名」。
 

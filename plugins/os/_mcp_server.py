@@ -397,16 +397,61 @@ META_TOOL_ROUTES = {
 
 
 def _skill_text_for(plugin: str) -> str:
-    """读插件的 <name>_skill.md 正文。
-
-    AICP 内部 get_contract 是把 skill 加载到自己 system（对 AICP 自己有效）；
-    外部 MCP 客户端拿不到那份正文，所以这里直接读磁盘返回给它。
+    """读插件的用法正文。覆盖三种来源：
+    - 内部插件：plugins/<route>.py 同目录 <stem>_skill.md
+    - skill/xxx：data/skills/xxx/SKILL.md（或 skill/plugin/... → plugins/...）
+    - mcp/server/tool：data/os/_mcp_client/contracts/<server>.<tool>.json 的 description
     """
     import pathlib
+    import json
 
     name = (plugin or "").strip().replace("\\", "/")
     if not name:
         return ""
+
+    def _strip_fm(text: str) -> str:
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                return parts[2].strip()
+        return text.strip()
+
+    # ---- skill/xxx ----
+    if name.startswith("skill/"):
+        rel = name[len("skill/"):].strip("/")
+        # skill/plugin/<ppath>/<stem> → plugins/<ppath>/<stem>_skill.md
+        if rel.startswith("plugin/"):
+            sub = rel[len("plugin/"):].strip("/")
+            cand = pathlib.Path("plugins") / sub
+            if not cand.name.endswith("_skill.md"):
+                cand = cand.with_name(cand.name + "_skill.md")
+            if cand.exists():
+                return _strip_fm(cand.read_text(encoding="utf-8"))
+        # data/skills/<rel>/SKILL.md
+        for base in (pathlib.Path("data/skills"), pathlib.Path("data/skills/aicp")):
+            cand = base / rel
+            if not cand.name.endswith("SKILL.md"):
+                cand = cand / "SKILL.md"
+            if cand.exists():
+                return _strip_fm(cand.read_text(encoding="utf-8"))
+        return ""
+
+    # ---- mcp/server/tool ----
+    if name.startswith("mcp/"):
+        parts = name.split("/")
+        if len(parts) < 3:
+            return ""
+        server, tool = parts[1], parts[2]
+        f = pathlib.Path("data/os/_mcp_client/contracts") / f"{server}.{tool}.json"
+        if not f.exists():
+            return ""
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            return (data.get("description") or "").strip()
+        except Exception:
+            return ""
+
+    # ---- 内部插件：plugins/<route>.py 同目录 <stem>_skill.md ----
     if name.endswith(".py"):
         name = name[:-3]
     root = pathlib.Path("plugins")
@@ -419,15 +464,7 @@ def _skill_text_for(plugin: str) -> str:
     skill_file = path.parent / (path.stem + "_skill.md")
     if not skill_file.exists():
         return ""
-    try:
-        text = skill_file.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            return parts[2].strip()
-    return text
+    return _strip_fm(skill_file.read_text(encoding="utf-8"))
 
 
 # ============================================================

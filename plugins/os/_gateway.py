@@ -291,7 +291,7 @@ async def execute(envelop, agent):
             if result.meta and result.meta.get("static_content"):
                 return web.Response(
                     body=result.meta["static_content"],
-                    content_type=result.meta.get("content_type", "application/octet-stream"),
+                    content_type=result.meta.get("content_type", "text/html"),
                 )
 
             # ★ 兜底序列化：payload 里混入 bytes/自定义对象时不应整条 500，
@@ -396,10 +396,19 @@ async def execute(envelop, agent):
                         content_type='text/html',
                     )
 
+                return await _route_get(
+                        "os/_static", request,
+                        action="serve", file_path=file_path,
+                        extra_headers={
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                        },
+                    )
             return await _route_get("os/_static", request,
                                 action="serve", file_path=file_path)
 
-        async def _route_get(receiver, request, action=None, file_path=None):
+        async def _route_get(receiver, request, action=None, file_path=None, extra_headers=None):
             from urllib.parse import parse_qs
 
             payload = {}
@@ -432,22 +441,24 @@ async def execute(envelop, agent):
                 return web.json_response({"error": "no response"}, status=500)
 
             if result.meta and result.meta.get("static_content"):
+                headers = dict(extra_headers or {})
                 return web.Response(
                     body=result.meta["static_content"],
                     content_type=result.meta.get("content_type", "text/html"),
+                    headers=headers,
                 )
 
             if result.meta and result.meta.get("response_type") == "file":
                 fp = result.meta.get("file_path")
                 if not fp or not Path(fp).exists():
                     return web.json_response({"error": "File not found"}, status=404)
-                return web.FileResponse(
-                    path=fp,
-                    headers={
-                        "Content-Type": result.meta.get("content_type", "application/octet-stream"),
-                        "Content-Disposition": f'{result.meta.get("content_disposition", "inline")}; filename="{result.meta.get("file_name", "file")}"'
-                    }
-                )
+                headers = {
+                    "Content-Type": result.meta.get("content_type", "application/octet-stream"),
+                    "Content-Disposition": f'{result.meta.get("content_disposition", "inline")}; filename="{result.meta.get("file_name", "file")}"',
+                }
+                if extra_headers:
+                    headers.update(extra_headers)
+                return web.FileResponse(path=fp, headers=headers)
 
             if result.payload and result.payload.get("error"):
                 status = 403 if "Forbidden" in str(result.payload.get("error", "")) else 404
