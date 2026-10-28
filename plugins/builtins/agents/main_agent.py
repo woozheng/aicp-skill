@@ -3593,18 +3593,37 @@ def _json_safe(obj, _depth=0):
     return str(obj)
 
 async def _purge_session(user_id: str, session_id: str):
-    """清一个会话：内存缓存 + index 条目 + 整个 session 目录。"""
-    # 1. 清内存缓存
-    old = _session_flows.pop(f"{user_id}:{session_id}", None)
-    if old is not None:
+    """清一个会话：主会话 + 所有分身目录 + index 条目，直接删。"""
+    sessions_base = _conversations_dir(user_id)
+
+    # 1. 找该会话的所有分身
+    sub_ids = []
+    tasks_file = sessions_base / session_id / "tasks.json"
+    if tasks_file.exists():
         try:
-            await old.close()
+            tasks = json.loads(tasks_file.read_text(encoding="utf-8"))
+            if isinstance(tasks, dict):
+                sub_ids = list(tasks.keys())
         except Exception:
             pass
-    # 2. 删 index 条目
+
+    # 2. 清内存缓存（主 + 所有分身）
+    for sid in [session_id] + sub_ids:
+        old = _session_flows.pop(f"{user_id}:{sid}", None)
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                pass
+
+    # 3. 删 index 条目（主 + 所有分身）
     index = _load_conversation_index(user_id)
-    if session_id in index:
-        del index[session_id]
+    index_changed = False
+    for sid in [session_id] + sub_ids:
+        if sid in index:
+            del index[sid]
+            index_changed = True
+    if index_changed:
         try:
             _index_file(user_id).write_text(
                 json.dumps({"conversations": index}, ensure_ascii=False, indent=2),
@@ -3612,8 +3631,10 @@ async def _purge_session(user_id: str, session_id: str):
             )
         except Exception as e:
             Logger.warn(f"[purge] 写 index 失败: {e}")
-    # 3. 删整个 session 目录
-    shutil.rmtree(_conversations_dir(user_id, session_id), ignore_errors=True)
+
+    # 4. 删目录（主 + 所有分身）
+    for sid in [session_id] + sub_ids:
+        shutil.rmtree(sessions_base / sid, ignore_errors=True)
 
 async def execute(envelop, agent):
     try:

@@ -51,6 +51,19 @@
   <h1>Notes Demo</h1>
   <div class="sub">notes.py（CRUD + LLM + SSE + WS + 上传 + call_ping）+ collab.py（四种 system.call）+ ping.py（极简被调用方）</div>
 
+  <div class="card" style="border-left:3px solid var(--primary)">
+    <h2>对齐规则（造应用照抄本 demo 时必须遵守）</h2>
+    <div style="font-size:13px; line-height:1.85">
+      <p style="margin:6px 0"><b>1. 路由 = 目录结构</b> — 后端 <code>plugins/applications/{project}/{plugin}.py</code> → 路由 <code>applications/{project}/{plugin}</code> → HTTP <code>/api/applications/{project}/{plugin}</code>。<code>app.yaml</code> 不参与路由，只是声明。</p>
+      <p style="margin:6px 0"><b>2. 三处同名</b> — 后端文件名（去 <code>.py</code>）= 前端 <code>const PLUGIN</code> = 路由末段。改一处必须同时改三处，漏一处就 404。</p>
+      <p style="margin:6px 0"><b>3. 请求体</b> — <code>{action, ...params}</code> 平铺发送；后端读 <code>envelop.payload.action</code> 决定分支（平铺与 <code>{payload:{...}}</code> 两种形状都收）。</p>
+      <p style="margin:6px 0"><b>4. 返回体</b> — 统一 <code>{ok:true, data:...}</code> 或 <code>{ok:false, error:"..."}</code>，前端按 <code>ok</code> 分支渲染。</p>
+      <p style="margin:6px 0"><b>5. 跨插件</b> — <code>await agent.system.call(core.Envelop(receiver=..., payload={...}))</code>，见 collab.py。</p>
+      <p style="margin:6px 0"><b>6. 状态归属</b> — envelop 是唯一真相：不用模块级全局变量，状态放 payload，落盘到 <code>data/{project}/</code>。</p>
+      <p style="margin:6px 0"><b>7. 系统基建</b> — LLM：<code>runtime/_llm.py</code>；SSE：直接写 <code>data: {...}</code> 流；WS：<code>os/_websocket</code> 的 push/broadcast；上传：<code>/api/upload_config</code>；契约：<code>builtins/tools/contract_agent</code>。</p>
+    </div>
+  </div>
+
   <div class="card">
     <h2>notes · 列表 / 新增 / 删除</h2>
     <div class="row">

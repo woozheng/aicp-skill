@@ -1,4 +1,5 @@
 """控制面板 API — 应用管理"""
+import re
 from pathlib import Path
 
 
@@ -73,8 +74,6 @@ async def execute(envelop, agent):
 
     elif action == "list_frontend":
         # 扫描 www/apps/ 下的前端应用（每个目录含 index.html）
-        import re
-
         title_re = re.compile(r"<title>(.*?)</title>", re.S | re.I)
         apps = []
         www_dir = Path("www/apps")
