@@ -1,0 +1,5 @@
+name: Notes Demo
+id: _demo
+version: 1.0
+description: 最小全栈示例（CRUD + LLM + SSE + WS + 上传 + 跨插件 system.call）
+static_root: www/apps/_demo

@@ -74,7 +74,6 @@ async def execute(envelop, agent):
     elif action == "list_frontend":
         # 扫描 www/apps/ 下的前端应用（每个目录含 index.html）
         import re
-        from pathlib import Path
 
         title_re = re.compile(r"<title>(.*?)</title>", re.S | re.I)
         apps = []
