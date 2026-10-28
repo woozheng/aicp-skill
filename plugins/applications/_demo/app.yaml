@@ -1,5 +1,6 @@
 name: Notes Demo
 id: _demo
 version: 1.0
-description: 最小全栈示例（CRUD + LLM + SSE + WS + 上传 + 跨插件 system.call）
+description: 系统示例应用，不可删除（最小全栈示例 For Developers）
+description_en: System example app - cannot be deleted (minimal full-stack demo for developers)
 static_root: www/apps/_demo

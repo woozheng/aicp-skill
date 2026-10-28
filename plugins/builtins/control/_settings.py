@@ -229,7 +229,10 @@ async def execute(envelop, agent):
             envelop.payload = {"error": "app_id required"}
             return envelop
         if app_id in ("studio", "mk", "control", "system", "os"):
-            envelop.payload = {"error": "Cannot uninstall system app"}
+            envelop.payload = {"ok": False, "error": "Cannot uninstall system app", "code": "SYSTEM_APP"}
+            return envelop
+        if app_id == "_demo":
+            envelop.payload = {"ok": False, "error": "System example app cannot be uninstalled", "code": "PROTECTED_APP"}
             return envelop
         shutil.rmtree(Path(f"plugins/applications/{app_id}"), ignore_errors=True)
         shutil.rmtree(Path(f"www/apps/{app_id}"), ignore_errors=True)

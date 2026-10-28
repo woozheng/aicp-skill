@@ -2,6 +2,9 @@
 import re
 from pathlib import Path
 
+# 受保护的系统示例应用：不允许被卸载（后端拦截，前端也会提示）
+PROTECTED_APPS = {"_demo"}
+
 
 async def execute(envelop, agent):  
     action = envelop.payload.get("action", "list")
@@ -42,7 +45,7 @@ async def execute(envelop, agent):
                     "py_files": py_count,
                     "html_files": html_count,
                     "type": "builtin" if scan_dir.startswith("plugins/builtins") else "user",
-                    "deletable": scan_dir == "plugins/applications" and d.name not in ("studio", "mk"),
+                    "deletable": scan_dir == "plugins/applications" and d.name not in ("studio", "mk") and d.name not in PROTECTED_APPS,
                 })
 
         envelop.payload = {"apps": apps}
@@ -54,7 +57,10 @@ async def execute(envelop, agent):
             envelop.payload = {"error": "app_id required"}
             return envelop
         if app_id in ("studio", "mk", "control"):
-            envelop.payload = {"error": "System app cannot be uninstalled"}
+            envelop.payload = {"ok": False, "error": "System app cannot be uninstalled", "code": "SYSTEM_APP"}
+            return envelop
+        if app_id in PROTECTED_APPS:
+            envelop.payload = {"ok": False, "error": "System example app cannot be uninstalled", "code": "PROTECTED_APP"}
             return envelop
 
         import shutil
@@ -114,6 +120,8 @@ async def execute(envelop, agent):
                     "description": desc,
                     "description_en": desc_en,
                     "url": f"/apps/{d.name}/",
+                    "protected": d.name in PROTECTED_APPS,
+                    "deletable": d.name not in PROTECTED_APPS,
                 })
 
         envelop.payload = {"ok": True, "apps": apps, "total": len(apps)}

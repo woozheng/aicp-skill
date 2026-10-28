@@ -64,6 +64,11 @@ h2{font-size:20px;font-weight:700;color:#f3f4f6;margin-bottom:20px;letter-spacin
 .app-card .app-meta span{background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:5px}
 .app-card .app-actions{position:absolute;top:8px;right:8px;display:none;gap:3px}
 .app-card:hover .app-actions{display:flex}
+.app-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.app-search{flex:1;min-width:190px;max-width:360px;padding:7px 11px;border-radius:8px;border:1px solid rgba(255,255,255,0.10);background:#12121a;color:#f3f4f6;font-size:12px;font-family:inherit;outline:none}
+.app-search:focus{border-color:#818cf8;box-shadow:0 0 0 2px rgba(99,102,241,0.18)}
+.app-search-count{font-size:11px;color:#9ca3af;white-space:nowrap}
+.app-card .app-actions .btn-protected{opacity:.55}
 
 .btn{padding:6px 13px;border-radius:7px;border:1px solid rgba(255,255,255,0.08);cursor:pointer;font-size:12px;background:#17171f;color:#9ca3af;transition:all 0.15s;font-family:inherit;white-space:nowrap;font-weight:500}
 .btn:hover{border-color:#4a4a55;color:#e5e7eb;background:rgba(255,255,255,0.05)}
@@ -201,6 +206,10 @@ input::placeholder,textarea::placeholder{color:#6b7280}
         <!-- ============ 应用 ============ -->
         <div id="apps" class="panel active">
             <h2><span data-i18n="apps.title">📦 应用列表</span></h2>
+            <div class="app-toolbar">
+                <input id="appSearch" class="app-search" type="search" autocomplete="off" data-i18n-ph="apps.searchPh" placeholder="搜索应用（英文名 / 描述）..." oninput="filterApps(this.value)">
+                <span class="app-search-count" id="appSearchCount"></span>
+            </div>
             <div class="app-grid" id="appGrid">
                 <div class="empty" data-i18n="common.loading">加载中...</div>
             </div>
@@ -479,6 +488,8 @@ const I18N = {
     'badge.local':'本地版',
     'nav.group':'面板','nav.apps':'应用','nav.settings':'配置','nav.mcp':'MCP','nav.tokens':'Token 管理',
     'apps.title':'📦 应用列表',
+    'apps.searchPh':'搜索应用（英文名 / 描述）...','apps.searchCount':'显示 {n} / {m} 个应用','apps.noMatch':'没有匹配的应用',
+    'apps.protected':'系统示例应用不可删除','apps.protectedTitle':'系统示例应用受保护，不可删除',
     'common.loading':'加载中...','common.refresh':'🔄 刷新','common.cancel':'取消','common.save':'保存',
     'common.on':'开启','common.off':'关闭','common.fail':'加载失败','common.empty':'暂无应用，让 AI 造一个吧',
     'common.edit':'编辑',
@@ -538,6 +549,8 @@ const I18N = {
     'badge.local':'Local',
     'nav.group':'Panels','nav.apps':'Apps','nav.settings':'Settings','nav.mcp':'MCP','nav.tokens':'Token Manager',
     'apps.title':'📦 Applications',
+    'apps.searchPh':'Search apps (English name / description)...','apps.searchCount':'Showing {n} of {m} apps','apps.noMatch':'No matching apps',
+    'apps.protected':'The system example app cannot be deleted','apps.protectedTitle':'The system example app is protected and cannot be deleted',
     'common.loading':'Loading...','common.refresh':'🔄 Refresh','common.cancel':'Cancel','common.save':'Save',
     'common.on':'On','common.off':'Off','common.fail':'Failed to load','common.empty':'No apps yet — let AI build one',
     'common.edit':'Edit',
@@ -702,6 +715,8 @@ function switchSettingsTab(name) {
 /* ============ 应用 ============ */
 const API_APPS = '/api/builtins/control/apps';
 
+let _allApps = [];
+
 async function loadApps(){
     const grid = document.getElementById('appGrid');
     if (!grid) return;
@@ -712,22 +727,51 @@ async function loadApps(){
         });
         const resp = await res.json();
         const data = resp.payload || resp.data || resp;
-        const apps = (data.apps || []).filter(a => a.id !== 'BK');
-        if (!apps.length) { grid.innerHTML = `<div class="empty">${t('common.empty')}</div>`; return; }
-        grid.innerHTML = apps.map(a => `
-            <div class="app-card" onclick="window.open('${a.url}','_blank')">
-                <div class="app-name"><span class="app-id">${escapeHtml(a.id)}</span><span class="app-dot">·</span>${escapeHtml(a.name || a.id)}</div>
-                <div class="app-desc">${escapeHtml(a.description || '')}</div>
-                <div class="app-meta"><span>/apps/${escapeHtml(a.id)}/</span></div>
-                <div class="app-actions">
-                    <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteApp('${escapeHtml(a.id)}')">${t('msg.delete')}</button>
-                </div>
-            </div>
-        `).join('');
+        _allApps = (data.apps || []).filter(a => a.id !== 'BK');
+        renderApps(appSearchValue());
     } catch(e) { grid.innerHTML = `<div class="empty">${t('common.fail')}</div>`; }
 }
 
-async function deleteApp(appId) {
+function appSearchValue(){
+    const el = document.getElementById('appSearch');
+    return el ? String(el.value || '').trim().toLowerCase() : '';
+}
+
+function filterApps(q){
+    const el = document.getElementById('appSearch');
+    if (el && typeof q === 'string' && el.value !== q) el.value = q;
+    renderApps(appSearchValue());
+}
+
+function renderApps(q){
+    const grid = document.getElementById('appGrid');
+    if (!grid) return;
+    q = String(q || '').toLowerCase();
+    const all = _allApps || [];
+    const apps = all.filter(a => {
+        if (!q) return true;
+        return [a.id, a.name, a.description, a.description_en].some(v => String(v || '').toLowerCase().indexOf(q) >= 0);
+    });
+    const cnt = document.getElementById('appSearchCount');
+    if (cnt) cnt.textContent = all.length ? t('apps.searchCount').replace('{n}', apps.length).replace('{m}', all.length) : '';
+    if (!apps.length) {
+        grid.innerHTML = `<div class="empty">${escapeHtml(all.length ? t('apps.noMatch') : t('common.empty'))}</div>`;
+        return;
+    }
+    grid.innerHTML = apps.map(a => `
+        <div class="app-card" onclick="window.open('${escapeHtml(a.url)}','_blank')">
+            <div class="app-name"><span class="app-id">${escapeHtml(a.id)}</span><span class="app-dot">·</span>${escapeHtml(a.name || a.id)}</div>
+            <div class="app-desc">${escapeHtml(a.description || '')}</div>
+            <div class="app-meta"><span>/apps/${escapeHtml(a.id)}/</span></div>
+            <div class="app-actions">
+                <button class="btn btn-danger btn-sm${a.protected ? ' btn-protected' : ''}" title="${escapeHtml(a.protected ? t('apps.protectedTitle') : t('msg.delete'))}" onclick="event.stopPropagation();deleteApp('${escapeHtml(a.id)}', ${a.protected ? 'true' : 'false'})">${t('msg.delete')}</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function deleteApp(appId, isProtected) {
+    if (isProtected) { alert(t('apps.protected')); return; }
     if (!confirm(`${t('msg.deleteAppConfirm')} ${appId}?`)) return;
     try {
         const res = await fetch(API_APPS, {
@@ -736,7 +780,10 @@ async function deleteApp(appId) {
         });
         const resp = await res.json();
         const data = resp.payload || resp.data || resp;
-        if (data && data.error) throw new Error(data.error);
+        if (data && data.error) {
+            if (data.code === 'PROTECTED_APP') { alert(t('apps.protected')); return; }
+            throw new Error(data.error);
+        }
         loadApps();
     } catch(e) { alert(t('msg.deleteFail') + e.message); }
 }

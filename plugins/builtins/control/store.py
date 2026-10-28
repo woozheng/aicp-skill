@@ -135,6 +135,10 @@ async def _uninstall(envelop, agent):
         envelop.payload = {"error": "Missing app_id"}
         return envelop
 
+    if app_id == "_demo":
+        envelop.payload = {"ok": False, "error": "System example app cannot be uninstalled", "code": "PROTECTED_APP"}
+        return envelop
+
     if app_type == "bundle" and bundled_apps:
         for sub_id in bundled_apps:
             _remove_app(sub_id)
