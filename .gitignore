@@ -66,5 +66,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# 非项目文件
+.clinerules/
+scripts/
+
 # 系统
 desktop.ini
