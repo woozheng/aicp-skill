@@ -2,6 +2,7 @@
 接口对齐：os/_cron schedule/update/cancel/list
 入参：interval(秒) / at_time("HH:MM")，同时提供at_time优先
 特性：update无需重启即时生效；系统休眠时间跳变校正；重启自动恢复持久任务
+一次性：once=true 时，延时 interval 秒（或到 at_time 时刻）只执行一次，执行完自动注销
 """
 import asyncio
 import json
@@ -67,15 +68,27 @@ def _format_heartbeat_content(content: str) -> str:
     return f"{prefix}{content}"
 
 
+def _cleanup_once_task(task_id: str):
+    """一次性任务执行完毕：注销内存任务与持久化记录"""
+    _tasks.pop(task_id, None)
+    _stop_events.pop(task_id, None)
+    if task_id in _persisted_tasks:
+        del _persisted_tasks[task_id]
+        save_persisted_tasks()
+
+
 async def _start_cron_loop(task_id: str, config: dict, agent):
     interval = config.get("interval")
     at_time = config.get("at_time")
+    once = bool(config.get("once", False))
     target_receiver = config.get("target_receiver", "")
     target_payload = config.get("target_payload", {})
     immediate = config.get("immediate", False)
 
-    # 调度模式判定：at_time存在优先daily，否则interval
-    if at_time:
+    # 调度模式判定：once最高优先，其次at_time(daily)，否则interval
+    if once:
+        schedule_mode = "once"
+    elif at_time:
         schedule_mode = "daily"
     else:
         schedule_mode = "interval"
@@ -91,6 +104,14 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
             except Exception as e:
                 agent.log.error(f"Cron {task_id} parse at_time error: {e}")
                 return
+        elif schedule_mode == "once":
+            once_at = config.get("once_at")
+            try:
+                next_run_time = float(once_at) if once_at else time.time() + float(interval or 0)
+            except (TypeError, ValueError):
+                next_run_time = time.time()
+            if next_run_time <= time.time():
+                next_run_time = time.time()
         else:
             next_run_time = time.time()
 
@@ -106,6 +127,11 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
                 ))
             except Exception as e:
                 agent.log.error(f"Cron {task_id} immediate exec error: {e}")
+            # 一次性任务：immediate 已消耗唯一一次执行，执行完即注销
+            if schedule_mode == "once":
+                _cleanup_once_task(task_id)
+                agent.log.info(f"Cron {task_id}: 一次性任务(immediate)执行完毕，已注销")
+                return
             # immediate执行完计算下一轮
             if schedule_mode == "daily":
                 try:
@@ -125,6 +151,8 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
             # 休眠跳变阈值
             if schedule_mode == "interval":
                 jump_threshold = interval * 2
+            elif schedule_mode == "once":
+                jump_threshold = 0.5
             else:
                 jump_threshold = 600
 
@@ -135,6 +163,8 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
                         next_run_time = _get_next_daily_ts(at_time)
                     except Exception:
                         break
+                elif schedule_mode == "once":
+                    next_run_time = time.time()
                 else:
                     next_run_time = time.time() + interval
                 sleep_time = next_run_time - time.time()
@@ -163,6 +193,12 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
                 ))
             except Exception as e:
                 agent.log.error(f"Cron {task_id}: {e}")
+
+            # 一次性任务：执行完毕即注销
+            if schedule_mode == "once":
+                _cleanup_once_task(task_id)
+                agent.log.info(f"Cron {task_id}: 一次性任务执行完毕，已注销")
+                return
 
             # 下一次时间
             if schedule_mode == "daily":
@@ -199,6 +235,7 @@ async def execute(envelop, agent):
         target_payload = envelop.payload.get("target_payload", {})
         immediate = envelop.payload.get("immediate", False)
         persisted = envelop.payload.get("persisted", True)
+        once = bool(envelop.payload.get("once", False))
 
         # ★★★ 参数校验 ★★★
         if not task_id:
@@ -268,6 +305,16 @@ async def execute(envelop, agent):
         if immediate and "content" in target_payload:
             target_payload["content"] = _format_heartbeat_content(target_payload["content"])
 
+        once_at = None
+        if once:
+            if at_time:
+                try:
+                    once_at = _get_next_daily_ts(at_time)
+                except Exception:
+                    once_at = time.time() + float(interval or 0)
+            else:
+                once_at = time.time() + float(interval)
+
         task_config = {
             "interval": interval,
             "at_time": at_time,
@@ -275,6 +322,8 @@ async def execute(envelop, agent):
             "target_payload": target_payload,
             "token": token,
             "immediate": immediate,
+            "once": once,
+            "once_at": once_at,
         }
 
         if persisted:
@@ -283,7 +332,10 @@ async def execute(envelop, agent):
 
         await _start_cron_loop(task_id, task_config, agent)
 
-        schedule_mode = "daily" if at_time else "interval"
+        if once:
+            schedule_mode = "once"
+        else:
+            schedule_mode = "daily" if at_time else "interval"
         envelop.payload = {
             "ok": True,
             "task_id": task_id,
@@ -292,6 +344,8 @@ async def execute(envelop, agent):
             "at_time": at_time,
             "immediate": immediate,
             "persisted": persisted,
+            "once": once,
+            "once_at": once_at,
             "target_receiver": target_receiver
         }
         return envelop
@@ -304,6 +358,7 @@ async def execute(envelop, agent):
         target_payload = envelop.payload.get("target_payload")
         immediate = envelop.payload.get("immediate")
         persisted = envelop.payload.get("persisted", True)
+        once = envelop.payload.get("once")
 
         # ★★★ 参数校验 ★★★
         if not task_id:
@@ -359,6 +414,22 @@ async def execute(envelop, agent):
             new_config["target_payload"] = merged_payload
         if immediate is not None:
             new_config["immediate"] = immediate
+        if once is not None:
+            new_config["once"] = bool(once)
+
+        # 一次性任务：按最新 interval/at_time 重算触发时刻
+        if new_config.get("once"):
+            _at = new_config.get("at_time")
+            _iv = new_config.get("interval")
+            if _at:
+                try:
+                    new_config["once_at"] = _get_next_daily_ts(_at)
+                except Exception:
+                    new_config["once_at"] = time.time() + float(_iv or 0)
+            else:
+                new_config["once_at"] = time.time() + float(_iv or 0)
+        else:
+            new_config.pop("once_at", None)
 
         # 销毁旧协程，立刻生效
         if task_id in _stop_events:
@@ -379,7 +450,10 @@ async def execute(envelop, agent):
 
         await _start_cron_loop(task_id, new_config, agent)
 
-        out_mode = "daily" if new_config.get("at_time") else "interval"
+        if new_config.get("once"):
+            out_mode = "once"
+        else:
+            out_mode = "daily" if new_config.get("at_time") else "interval"
         envelop.payload = {
             "ok": True,
             "task_id": task_id,
@@ -434,7 +508,11 @@ async def execute(envelop, agent):
                 payload_preview["action"] = target_payload["action"]
 
             at_time_val = config.get("at_time")
-            schedule_mode = "daily" if at_time_val else "interval"
+            once_val = bool(config.get("once", False))
+            if once_val:
+                schedule_mode = "once"
+            else:
+                schedule_mode = "daily" if at_time_val else "interval"
 
             tasks_info[tid] = {
                 "running": not task.done(),
@@ -443,6 +521,8 @@ async def execute(envelop, agent):
                 "at_time": at_time_val,
                 "target_receiver": config.get("target_receiver", "?"),
                 "immediate": config.get("immediate", False),
+                "once": once_val,
+                "once_at": config.get("once_at"),
                 "persisted": tid in _persisted_tasks,
                 "payload": payload_preview,
                 "task_id": tid,
@@ -480,13 +560,13 @@ def help():
             "schedule": {
                 "description": "创建定时任务",
                 "required": ["task_id", "target_receiver", "target_payload.content", "target_payload.session_id"],
-                "optional": ["interval", "at_time", "immediate", "persisted"],
-                "note": "interval(秒) 或 at_time(HH:MM) 至少提供一个，同时提供时 at_time 优先"
+                "optional": ["interval", "at_time", "immediate", "persisted", "once"],
+                "note": "interval(秒) 或 at_time(HH:MM) 至少提供一个，同时提供时 at_time 优先；once=true 表示延时触发一次后自动注销（只执行一次）"
             },
             "update": {
                 "description": "更新已有任务（即时生效）",
                 "required": ["task_id"],
-                "optional": ["interval", "at_time", "target_receiver", "target_payload", "immediate", "persisted"]
+                "optional": ["interval", "at_time", "target_receiver", "target_payload", "immediate", "persisted", "once"]
             },
             "cancel": {
                 "description": "取消并删除任务",
@@ -508,6 +588,7 @@ def help():
             "target_receiver": "目标插件路由",
             "target_payload": "发送给目标插件的 payload，必须包含 session_id 和 content",
             "immediate": "是否立即执行第一次",
+            "once": "是否只执行一次（once=true 时按 interval 延时触发一次，触发完自动注销）",
             "persisted": "是否持久化（重启后恢复）"
         },
         "output": {

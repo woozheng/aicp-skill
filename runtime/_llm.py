@@ -1433,7 +1433,7 @@ class LLM:
 
             except asyncio.TimeoutError:
                 _info(f"⏱️ chat_tool_stream 超时 attempt={attempt + 1}")
-                if yielded_any:
+                if yielded_text:
                     yield {"type": ET_ERROR, "error": FALLBACK_MESSAGES["timeout"]}
                     yield {"type": ET_DONE, "finish_reason": "error"}
                     await self._report_usage(
@@ -1451,6 +1451,12 @@ class LLM:
                         extra={"tool": "", "text_len": len(text_buf)},
                     )
                     return
+                yield {
+                        "type": "retry",
+                        "attempt": attempt + 1,
+                        "max_attempts": self.max_retries,
+                        "reason": "timeout",
+                    }
             except Exception as exc:
                 kind = _classify_stream_error(exc)
                 msg = _sanitize_for_log(str(exc))
@@ -1482,6 +1488,13 @@ class LLM:
                         extra={"tool": "", "text_len": len(text_buf)},
                     )
                     return
+                # ★ 新增：网络/解析错误时，也告诉前端“正在重试”
+                yield {
+                    "type": "retry",
+                    "attempt": attempt + 1,
+                    "max_attempts": self.max_retries,
+                    "reason": kind,
+                }
             finally:
                 # ★ FIX 3: stream.close() 加超时
                 if stream is not None:

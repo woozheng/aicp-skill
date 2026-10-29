@@ -1168,7 +1168,20 @@ def _parse_code_structure_sync(path_str: str) -> dict:
         "ext": ext,
         "hint": "用 read_file_lines(path, start_line, end_line) 读关键定义，不要读全文",
     }
-
+    # ★ 小于 100K 直接返回全文，不走结构解析（省一轮 read_file）
+    if size <= MAX_INLINE_SIZE:
+        return {
+            **base,
+            "language": ext.lstrip(".") or "unknown",
+            "structure": {},
+            "full_content": text,
+            "truncated": False,
+            "hint": (
+                "文件小于 100KB，已直接返回全文（full_content）。"
+                "直接读 full_content 即可，不需要再调 read_file 或 read_file_lines。"
+                "如果需要定位函数/类，本次返回的 structure 为空——但文件不大，直接读全文即可。"
+            ),
+        }
     if ext in (".html", ".htm", ".vue", ".svelte"):
         return {**base, "language": "html", "structure": _parse_html_structure(text)}
 

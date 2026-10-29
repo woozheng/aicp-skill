@@ -50,7 +50,12 @@ def _parse_date(date_str: str) -> Optional[datetime]:
 
 
 def _session_files(session_id: str, user_id: Optional[str] = None) -> List[Path]:
-    """按 session_id 找到会话文件；user_id 可选（大小写不敏感）。"""
+    """按 session_id 找 flow.jsonl；只认新布局 sessions/{sid}/flow.jsonl。
+
+    路径约定与 main_agent._conversations_dir 一致：
+        data/memories/main_agent/users/{uid}/sessions/{sid}/flow.jsonl
+    user_id 可选，用于加速与消歧。
+    """
     base = _base_dir()
     found: List[Path] = []
     seen = set()
@@ -65,16 +70,18 @@ def _session_files(session_id: str, user_id: Optional[str] = None) -> List[Path]
         except Exception:
             pass
 
+    def _try_user(uid: str) -> None:
+        add(base / "users" / uid / "sessions" / session_id / "flow.jsonl")
+
     if user_id:
-        add(base / "users" / user_id / "conversations" / f"{session_id}.jsonl")
-        # ★ user_id 没找到时，大小写不敏感回退
+        _try_user(user_id)
         if not found:
             users_dir = base / "users"
             try:
                 if users_dir.is_dir():
                     for u in sorted(users_dir.iterdir()):
                         if u.is_dir() and u.name.lower() == str(user_id).lower():
-                            add(u / "conversations" / f"{session_id}.jsonl")
+                            _try_user(u.name)
             except Exception:
                 pass
     else:
@@ -83,18 +90,13 @@ def _session_files(session_id: str, user_id: Optional[str] = None) -> List[Path]
             if users_dir.is_dir():
                 for u in sorted(users_dir.iterdir()):
                     if u.is_dir():
-                        add(u / "conversations" / f"{session_id}.jsonl")
+                        _try_user(u.name)
         except Exception:
             pass
 
-    # 旧布局
-    add(base / "conversations" / f"{session_id}.jsonl")
-    add(base / "conversations" / f"{session_id}.json")
-
-    # 兜底：任意深度
     if not found:
         try:
-            for p in base.rglob(f"{session_id}.jsonl"):
+            for p in base.rglob(f"sessions/{session_id}/flow.jsonl"):
                 add(p)
         except Exception:
             pass
@@ -102,12 +104,13 @@ def _session_files(session_id: str, user_id: Optional[str] = None) -> List[Path]
 
 
 def _available_sessions(limit: int = 30) -> List[str]:
+    """列出可用 session_id（只认 sessions/{sid}/flow.jsonl）。"""
     base = _base_dir()
     ids: List[str] = []
     try:
-        for p in base.rglob("*.jsonl"):
-            if "conversations" in p.parts:
-                ids.append(p.stem)
+        for p in base.rglob("flow.jsonl"):
+            if "sessions" in p.parts:
+                ids.append(p.parent.name)
     except Exception:
         pass
     return sorted(set(ids))[-limit:]

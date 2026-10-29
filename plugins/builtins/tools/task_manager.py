@@ -314,24 +314,34 @@ async def _handle_create(agent, args, user_id, session_id, flow):
         "_description": description,   # ★ 加
     }
 
-    try:
-        await agent.system.call(core.Envelop(
-            sender="builtins/tools/task_manager",
-            receiver="builtins/agents/main_agent",
-            payload={
-                "content": task_text,
-                "session_id": task_id,
-                "action": "",
-            },
-            meta=call_meta,
-        ), timeout=SUB_AGENT_TIMEOUT)
-    except Exception as e:
-        _update_task(user_id, session_id, task_id, {
-            "status": "failed",
-            "error": f"创建分身失败: {e}",
-            "finished_at": _now(),
-        })
-        return {"ok": False, "think": f"创建分身失败: {e}"}
+        # ★ 提交到后台，不阻塞 create 返回（否则主控 _process_internal 挂起，
+        #   前端在等 create 的 HTTP 响应期间，session 列表/flow 都刷不出来）
+    async def _run_sub():
+        # asyncio.create_task 不继承 contextvars，显式设置当前 session
+        try:
+            from runtime._llm import set_current_session
+            set_current_session(task_id)
+        except Exception:
+            pass
+        try:
+            await agent.system.call(core.Envelop(
+                sender="builtins/tools/task_manager",
+                receiver="builtins/agents/main_agent",
+                payload={
+                    "content": task_text,
+                    "session_id": task_id,
+                    "action": "",
+                },
+                meta=call_meta,
+            ), timeout=SUB_AGENT_TIMEOUT)
+        except Exception as e:
+            _update_task(user_id, session_id, task_id, {
+                "status": "failed",
+                "error": f"创建分身失败: {e}",
+                "finished_at": _now(),
+            })
+
+    asyncio.create_task(_run_sub())
 
     return {
         "ok": True,
@@ -371,30 +381,41 @@ async def _handle_send(agent, args, user_id, session_id, flow):
         "_parent_session": session_id,
     }
 
-    try:
-        await agent.system.call(core.Envelop(
-            sender="builtins/tools/task_manager",
-            receiver="builtins/agents/main_agent",
-            payload={
-                "content": message,
-                "session_id": task_id,
-                "action": "",
-            },
-            meta=call_meta,
-        ), timeout=SUB_AGENT_TIMEOUT)
-    except Exception as e:
-        _update_task(user_id, session_id, task_id, {
-            "status": "failed",
-            "error": f"发送失败: {e}",
-            "finished_at": _now(),
-        })
-        return {"ok": False, "think": f"发送失败: {e}"}
+    # ★ 提交到后台，不阻塞 create 返回（否则主控 _process_internal 挂起，
+    #   前端在等 create 的 HTTP 响应期间，session 列表/flow 都刷不出来）
+    async def _run_sub():
+        # asyncio.create_task 不继承 contextvars，显式设置当前 session
+        try:
+            from runtime._llm import set_current_session
+            set_current_session(task_id)
+        except Exception:
+            pass
+        try:
+            await agent.system.call(core.Envelop(
+                sender="builtins/tools/task_manager",
+                receiver="builtins/agents/main_agent",
+                payload={
+                    "content": task_text,
+                    "session_id": task_id,
+                    "action": "",
+                },
+                meta=call_meta,
+            ), timeout=SUB_AGENT_TIMEOUT)
+        except Exception as e:
+            _update_task(user_id, session_id, task_id, {
+                "status": "failed",
+                "error": f"创建分身失败: {e}",
+                "finished_at": _now(),
+            })
+
+    asyncio.create_task(_run_sub())
 
     return {
         "ok": True,
-        "think": f"✅ 已发送到 {task_id}，分身将带着记忆继续",
+        "think": f"✅ 分身任务已创建：{task_id}",
         "data": {
             "task_id": task_id,
+            "description": description,
             "status": "running",
         },
         "_summary": _format_summary(user_id, session_id),

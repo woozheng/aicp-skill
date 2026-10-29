@@ -649,6 +649,11 @@ async def _update_conversation_index(user_id: str, session_id: str, flow: list):
                 meta["last_preview"] = e["content"][:80]
                 break
         meta["archived"] = meta.get("archived", False)
+        # ★ 分身会话：记录父会话，供前端把分身挂到「发起它的对话」下面
+        if session_id.startswith("sub_"):
+            _ps = _SUB_PARENTS.get(session_id, "")
+            if _ps:
+                meta["parent_session"] = _ps
         convs[session_id] = meta
         index["conversations"] = convs
         index_file.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1961,6 +1966,10 @@ _last_ctx_k: Dict[str, float] = {}
 _session_processing_locks: Dict[str, asyncio.Lock] = {}
 _session_flows: Dict[str, InformationFlow] = {}
 
+# ★ 分身 → 父会话 映射（sub_xxx → 父 session_id）
+#   用途：console 左侧会话列表把分身挂到「发起它的对话」下面
+_SUB_PARENTS: Dict[str, str] = {}
+
 
 def _get_processing_lock(session_id: str) -> asyncio.Lock:
     if session_id not in _session_processing_locks:
@@ -2811,8 +2820,43 @@ class PromptBuilder:
             )
         elif depth == 38:
             hint = (
-                f"🚨 强警告：执行深度 {depth}/40，**下一步必须 reply**。"
-                f"把当前进展 / 结论 / 未完成项整理成 reply 回复用户，不要再调工具。"
+                f"🚨 强警告：执行深度 {depth}/40，**这一步是最后一次能调工具的机会**，下一步（depth=39）只给 reply。\n"
+                f"\n"
+                f"你有两个选择：\n"
+                f"\n"
+                f"【选择 1：任务已完成】\n"
+                f"  直接 `reply` 交付结果。\n"
+                f"\n"
+                f"【选择 2：任务未完成，必须继续】\n"
+                f"  用 `use_tool` 调 `os/_cron`，**只设一次性任务（once=true），不要设循环**：\n"
+                f"  ```\n"
+                f"  target = \"os/_cron\"\n"
+                f"  action = \"schedule\"\n"
+                f"  plugin_args = {{\n"
+                f"    \"task_id\": \"relay_{session_id}_<自拟短id>\",\n"
+                f"    \"once\": true,\n"
+                f"    \"interval\": 15,\n"
+                f"    \"target_receiver\": \"builtins/agents/main_agent\",\n"
+                f"    \"target_payload\": {{\n"
+                f"      \"session_id\": \"{session_id}\",\n"
+                f"      \"content\": \"【接力唤醒】继续未完成项。摘要：<按下面的结构写，1000 字以内>\"\n"
+                f"    }}\n"
+                f"  }}\n"
+                f"  ```\n"
+                f"  **content 字段是接力的关键**：唤醒后你只能看到这段摘要 + 信息流折叠视图（"
+                f"历史轮的 ## 只展开最近 2 条，### 全折叠），所以摘要必须自足。按下面结构写，**1000 字以内**：\n"
+                f"    1. **目标**：用户最初要什么（一句话）\n"
+                f"    2. **已完成**：关键步骤 + 产出（文件路径 / 接口 / 关键数据，列 3~6 条）\n"
+                f"    3. **当前卡点**：为什么到 38 步还没完（一句话）\n"
+                f"    4. **下一步**：唤醒后第一个动作是什么（具体到工具 + 参数）\n"
+                f"    5. **雷区**：已经试过但失败的路，别重走（列 1~3 条，没有就写「无」）\n"
+                f"  写成一段紧凑文本，不要 markdown 列表，不要换行过多（JSON 里换行要转义，容易出错）。\n"
+                f"  设完之后，立即 `reply`，**简短**告诉用户：进度 {depth}/40、还剩几项、已设置 15 秒后自动继续。\n"
+                f"  不要把完整摘要在 reply 里重复一遍——摘要在 cron 的 content 里，是给唤醒后的自己看的，不是给用户的。\n"
+                f"\n"
+                f"**不要设循环定时任务**（不要省略 once 或设 once=false），"
+                f"循环任务会在任务完成后还在唤醒你，造成空转。"
+                f"once=true 的任务触发一次后自动注销，是接力唯一正确的方式。"
             )
         else:  # depth >= 39
             hint = (
@@ -3225,6 +3269,12 @@ class LLMThinker:
                     chunk = event.get("content", "")
                     text_buf += chunk
                     _buffer_stream_chunk(agent, user_id, session_id, chunk)
+                elif etype == "retry":
+                    await _push_progress(
+                        agent, user_id, session_id, "executing",
+                        f"⚠️ LLM 超时，正在重试 {event.get('attempt')}/{event.get('max_attempts')}...",
+                        extra={"status": "retrying"},
+                    )
                 elif etype == "tool_call":
                     tc = event.get("tool_call")
 
@@ -3542,7 +3592,10 @@ class CoreProcessor:
                         agent, user_id, session_id,
                         f"⏳ 任务已提交，正在后台处理...（{target}）"
                     )
-
+            # ★ 工具执行后加 1 秒喘息，避免上游 Key 池被持续调用占满
+            if all_calls:
+                import random
+                    await asyncio.sleep(random.uniform(1.0, 3.0))
             if has_processing:
                 return await self._process_internal(agent, user_id, session_id, flow, depth + 1)
 
@@ -3587,6 +3640,14 @@ async def _run_processing(agent, user_id, session_id, flow):
     """
     try:
         async with _get_processing_lock(session_id):
+            # ★ 拿到 session 锁后再写 user，避免在递归进行中把新消息插到当前轮前面
+            pending = getattr(flow, "_pending_user_input", None)
+            if pending is not None:
+                flow._pending_user_input = None
+                try:
+                    await flow.append_user(pending)
+                except Exception as e:
+                    Logger.error(f"[_run_processing] append_user 失败: {e}")
             try:
                 await core_processor.process(agent, user_id, session_id, flow, 0)
             finally:
@@ -3838,6 +3899,7 @@ async def execute(envelop, agent):
                     "last_preview": meta.get("last_preview", ""),
                     "description": meta.get("description", ""),
                     "archived": meta.get("archived", False),
+                    "parent_session": meta.get("parent_session", ""),
                 })
             items.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
             envelop.payload = {"ok": True, "conversations": items, "total": len(items)}
@@ -3997,9 +4059,12 @@ async def execute(envelop, agent):
         # ★★★ 分身场景同步跑完，返回最终 reply ★★★
         if envelop.meta.get("_task_id"):
             description = envelop.meta.get("_description", "")
+            # ★ 记录分身 → 父会话（task_manager 通过 meta._parent_session 传入）
+            _SUB_PARENTS[session_id] = envelop.meta.get("_parent_session", "") or ""
             Logger.info(f"[main_agent] 分身同步执行 session={session_id}")
             await _push_progress(agent, user_id, session_id, "thinking", "🧠 正在思考...",
-                    extra={"description": description})
+                    extra={"description": description,
+                           "parent_session": _SUB_PARENTS.get(session_id, "")})
             flow = _get_or_create_flow(user_id, session_id)
             await flow.append_user(user_input)
             if hasattr(agent.llm, "reset_round"):
@@ -4070,7 +4135,9 @@ async def execute(envelop, agent):
         Logger.info(f"用户输入 [{session_id}]: {user_input[:60]}")
         await _push_progress(agent, user_id,session_id, "thinking", "🧠 正在思考...")
         flow = _get_or_create_flow(user_id,session_id)
-        await flow.append_user(user_input)
+        # ★ 不立即 append_user：等 _run_processing 拿到 session 锁后再写，
+        #   避免心跳/用户消息在递归进行中插到当前轮前面，把信息流打断。
+        flow._pending_user_input = user_input
         if hasattr(agent.llm, "reset_round"):
             agent.llm.reset_round(session_id)
         # ★ 新 user 消息时，清零 empty_output 重试计数

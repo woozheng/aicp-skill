@@ -1468,7 +1468,7 @@ function closeWebview() {
     if (!panel) return;
     panel.classList.remove('show');
     setWebviewMax(false);   // 统一复位全屏状态（含最大化按钮图标/标题）
-    
+
     document.getElementById('webviewFrame').src = 'about:blank';
     panel.dataset.url = '';
     if (_webviewOpenedSidebarCollapsed) {
@@ -1566,13 +1566,38 @@ async function refreshConversations(silent) {
     }
 }
 
-function renderConversationList(list) {
-    var sorted = (list || []).slice().sort(function(a, b) {
-        var aSub = a.id && a.id.startsWith('sub_') ? 1 : 0;
-        var bSub = b.id && b.id.startsWith('sub_') ? 1 : 0;
-        if (aSub !== bSub) return aSub - bSub;
-        return (b.updated_at || '').localeCompare(a.updated_at || '');
+// ============ 会话排序：分身挂到「发起它的对话」下面 ============
+function orderConversations(list) {
+    var arr = (list || []).slice();
+    var isSub = function(c){ return c && c.id && c.id.indexOf('sub_') === 0; };
+    var normals = arr.filter(function(c){ return !isSub(c); });
+    var subs = arr.filter(function(c){ return isSub(c); });
+    normals.sort(function(a, b){ return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+    var byParent = {};
+    subs.forEach(function(s){
+        var p = s.parent_session || '';
+        if (!byParent[p]) byParent[p] = [];
+        byParent[p].push(s);
     });
+    Object.keys(byParent).forEach(function(p){
+        byParent[p].sort(function(a, b){
+            var ta = a.created_at || a.updated_at || '';
+            var tb = b.created_at || b.updated_at || '';
+            return ta.localeCompare(tb);
+        });
+    });
+    var out = [];
+    var placed = {};
+    normals.forEach(function(c){
+        out.push(c);
+        (byParent[c.id] || []).forEach(function(s){ out.push(s); placed[s.id] = 1; });
+    });
+    subs.forEach(function(s){ if (!placed[s.id]) out.push(s); });
+    return out;
+}
+
+function renderConversationList(list) {
+    var sorted = orderConversations(list);
     list = sorted;
     var box = document.getElementById('convList');
     if (!list || list.length === 0) {
@@ -2295,6 +2320,7 @@ function handleWsData(data) {
                 status: 'running',
                 updated_at: new Date().toISOString(),
                 is_sub: true,
+                parent_session: data.parent_session || currentConversationId || '',
             };
             mergeSubSessionsIntoConversations();
             renderConversationList(conversations);
@@ -2342,14 +2368,18 @@ function handleWsData(data) {
     if (type === 'error') { removeThinkingLine(); addAssistantMessage('❌ ' + (data.error || data.message || '')); refreshActivity(); return; }
 }
 function mergeSubSessionsIntoConversations() {
-    conversations = conversations.filter(function(c){ return !c.id.startsWith('sub_'); });
-    Object.keys(subSessions).forEach(function(sid){ conversations.push(subSessions[sid]); });
-    conversations.sort(function(a, b) {
-        var aSub = a.id.startsWith('sub_') ? 1 : 0;
-        var bSub = b.id.startsWith('sub_') ? 1 : 0;
-        if (aSub !== bSub) return aSub - bSub;
-        return (b.updated_at || '').localeCompare(a.updated_at || '');
+    // 记住服务端返回的「分身 → 父会话」关系（live 分身状态优先）
+    var parentMap = {};
+    conversations.forEach(function(c){
+        if (c && c.id && c.id.indexOf('sub_') === 0 && c.parent_session) parentMap[c.id] = c.parent_session;
     });
+    conversations = conversations.filter(function(c){ return !c.id.startsWith('sub_'); });
+    Object.keys(subSessions).forEach(function(sid){
+        var live = subSessions[sid];
+        if (!live.parent_session && parentMap[sid]) live.parent_session = parentMap[sid];
+        conversations.push(live);
+    });
+    conversations = orderConversations(conversations);
 }
 function handleSubEvent(data) {
     var type = data.type || '';
@@ -2366,6 +2396,11 @@ function handleSubEvent(data) {
         if (status === 'reply' && data.is_final) { handleReplyEnd(data); return; }
         if (status === 'interrupting') { handleInterrupting(); return; }
         if (status === 'interrupted') { handleInterrupted(); return; }
+        if (status === 'retrying') {
+            var line = ensureThinkingLine();
+            if (line) line.textContent = '💭 ' + (data.msg || '正在重试...');
+            return;
+        }
         return;
     }
     if (type === 'summary_stream') { updateThinkingLine(data.chunk || ''); return; }
@@ -2697,7 +2732,7 @@ async function reloadCron() {
             html += '<div style="padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface-2)">';
             html += '<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-family:var(--font-mono);color:var(--brand);font-size:11px">'+escapeHtml(tid)+'</span>';
             html += '<button onclick="deleteCron(\''+escapeHtml(tid)+'\')" style="background:transparent;border:1px solid rgba(229,72,77,0.3);color:var(--err);border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;font-family:inherit">'+(_lang==='zh'?'删除':'Delete')+'</button></div>';
-            html += '<div style="font-size:11px;color:var(--text-3);margin-top:4px">🎯 '+escapeHtml(tk.target_receiver||'?')+' · '+(tk.running?(_lang==='zh'?'运行中':'Running'):(_lang==='zh'?'已停止':'Stopped'))+'</div>';
+            html += '<div style="font-size:11px;color:var(--text-3);margin-top:4px">🎯 '+escapeHtml(tk.target_receiver||'?')+' · '+(tk.running?(_lang==='zh'?'运行中':'Running'):(_lang==='zh'?'已停止':'Stopped'))+(tk.once?' · '+(_lang==='zh'?'一次性':'Once'):'')+'</div>';
             html += '</div>';
         });
         box.innerHTML = html;
