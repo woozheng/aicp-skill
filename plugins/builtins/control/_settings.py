@@ -6,29 +6,29 @@ import shutil
 from pathlib import Path
 
 ENV_VAR_PATTERN = re.compile(r'\$\{(\w+)\}')
+SECRET_PREFIX = "secret:"
 
 
 def _mask_api_key(api_key):
-    """安全处理 api_key 显示"""
+    """api_key 脱敏：环境变量/密文引用原样，明文只返回掩码"""
     if not api_key or api_key == "none":
         return api_key
-    if ENV_VAR_PATTERN.match(str(api_key)):
-        return api_key  # 环境变量原样返回
-    # 明文密钥：返回完整值 + 掩码标记
-    return api_key
+    s = str(api_key)
+    if ENV_VAR_PATTERN.match(s) or s.startswith(SECRET_PREFIX):
+        return s
+    from plugins.os import _secrets as _sec
+    return _sec.mask(s)
 
 
 def _mask_sensitive_config(config):
-    """递归处理敏感字段，保留原始值但标记"""
+    """递归处理敏感字段：api_key 一律不返回明文"""
     if not isinstance(config, dict):
         return config
 
     if "models" in config and "providers" in config["models"]:
         for name, p in config["models"]["providers"].items():
-            if "api_key" in p and p["api_key"] and p["api_key"] != "none":
-                if not ENV_VAR_PATTERN.match(str(p["api_key"])):
-                    # 明文密钥：保留完整值，前端会处理显示
-                    pass  # 不做截断！
+            if isinstance(p, dict) and p.get("api_key"):
+                p["api_key"] = _mask_api_key(p["api_key"])
     return config
 
 
@@ -47,6 +47,7 @@ async def execute(envelop, agent):
         else:
             config = {}
 
+        _mask_sensitive_config(config)
         envelop.payload = config
         return envelop
 

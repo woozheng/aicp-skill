@@ -42,6 +42,21 @@ def _base_dir() -> Path:
     return MEMORY_DIR_REL
 
 
+def _rel_path(p: Path) -> str:
+    """把路径转成相对仓库根的相对路径，避免跨机器失效。
+
+    基准为仓库根（data/memories/main_agent 的上上级），统一产出
+    data/memories/main_agent/users/... 风格，与 file_utils_api 一致。
+    """
+    base = _base_dir()
+    for root in (base, base.parent.parent.parent):
+        try:
+            return str(p.relative_to(root)).replace("\\", "/")
+        except Exception:
+            continue
+    return str(p).replace("\\", "/")
+
+
 def _parse_date(date_str: str) -> Optional[datetime]:
     try:
         return datetime.strptime(date_str, "%Y-%m-%d")
@@ -920,7 +935,7 @@ async def execute(envelop, agent):
         for f in _session_files(sid, user_id):
             if f not in files:
                 files.append(f)
-                resolved.append(str(f))
+                resolved.append(_rel_path(f))
     if not files:
         envelop.payload = {
             "ok": False,
@@ -948,8 +963,6 @@ async def execute(envelop, agent):
         missing = []
         for n in rounds:
             grp = by_no.get(n)
-            if grp is None and 1 <= n <= len(round_groups):
-                grp = round_groups[n - 1]
             if grp is None:
                 missing.append(n)
                 continue
@@ -995,8 +1008,6 @@ async def execute(envelop, agent):
                 continue
             rn, sn = int(m.group(1)), int(m.group(2))
             grp = by_no.get(rn)
-            if grp is None and 1 <= rn <= len(round_groups):
-                grp = round_groups[rn - 1]
             if grp is None:
                 missing.append(str(ref))
                 continue

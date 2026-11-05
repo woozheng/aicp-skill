@@ -70,5 +70,10 @@ Thumbs.db
 .clinerules/
 scripts/
 
+# 运行时备份与上传产物（不提交）
+_backup/
+www/uploads/
+*.bak
+
 # 系统
 desktop.ini

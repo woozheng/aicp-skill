@@ -26,7 +26,7 @@ import core
 
 ACTIONS_SCHEMA = {
     "create": {
-        "description": "创建一个分身任务（自动分配 session，异步执行）",
+        "description": "创建一个分身任务（自动分配 session，异步执行，创建完无需等待或收集，分身完成自动回复）",
         "params": {
             "description": {"type": "string", "description": "任务简述（用于列表展示）"},
             "task": {"type": "string", "description": "给分身的完整任务描述"}
@@ -63,7 +63,7 @@ ACTIONS_SCHEMA = {
         "required": ["task_id"]
     },
     "collect": {
-        "description": "收集所有已完成任务的结果",
+        "description": "收集所有已完成任务的结果，平时不用主动收集，分身完成后会主动推送给你结果",
         "params": {
             "task_id": {"type": "string", "description": "可选，指定单个任务 ID"},
             "wait": {"type": "boolean", "description": "是否等待未完成任务（默认 false）"},
@@ -199,6 +199,28 @@ def _check_timeouts(user_id: str, parent_session: str):
         _save_tasks(user_id, parent_session, tasks)
 
 
+async def _push_subtasks_changed(agent, user_id: str, session_id: str, msg: str = ""):
+    """通知前端：分身集合发生变化（新建/删除/清理），让它立刻重拉会话列表。"""
+    try:
+        await agent.system.call(core.Envelop(
+            sender="builtins/tools/task_manager",
+            receiver="os/_websocket",
+            payload={
+                "action": "push",
+                "channel_id": f"pa_{user_id}",
+                "data": {
+                    "type": "progress",
+                    "session_id": session_id,
+                    "step": "subtasks_changed",
+                    "msg": msg or "分身列表已更新",
+                    "agent_type": "task_manager",
+                },
+            },
+        ))
+    except Exception:
+        pass
+
+
 def _format_summary(user_id: str, parent_session: str) -> str:
     tasks = _load_tasks(user_id, parent_session)
     if not tasks:
@@ -305,47 +327,44 @@ async def _handle_create(agent, args, user_id, session_id, flow):
     }
     _save_tasks(user_id, session_id, tasks)
 
+    # ★ task_id / parent_session 放 payload，不放 meta
+    payload = {
+        "content": task_text,
+        "session_id": task_id,
+        "action": "",
+        "task_id": task_id,
+        "parent_session": session_id,
+    }
     call_meta = {
         "user_id": user_id,
         "callback_receiver": "builtins/tools/task_manager",
         "callback_session_id": session_id,
-        "_task_id": task_id,
-        "_parent_session": session_id,
-        "_description": description,   # ★ 加
+        "_description": description,
     }
 
-        # ★ 提交到后台，不阻塞 create 返回（否则主控 _process_internal 挂起，
-        #   前端在等 create 的 HTTP 响应期间，session 列表/flow 都刷不出来）
-    async def _run_sub():
-        # asyncio.create_task 不继承 contextvars，显式设置当前 session
-        try:
-            from runtime._llm import set_current_session
-            set_current_session(task_id)
-        except Exception:
-            pass
-        try:
-            await agent.system.call(core.Envelop(
-                sender="builtins/tools/task_manager",
-                receiver="builtins/agents/main_agent",
-                payload={
-                    "content": task_text,
-                    "session_id": task_id,
-                    "action": "",
-                },
-                meta=call_meta,
-            ), timeout=SUB_AGENT_TIMEOUT)
-        except Exception as e:
-            _update_task(user_id, session_id, task_id, {
-                "status": "failed",
-                "error": f"创建分身失败: {e}",
-                "finished_at": _now(),
-            })
+    # ★ 直接 await，core 内部走异步分支，返回 {status: processing}
+    try:
+        await agent.system.call(core.Envelop(
+            sender="builtins/tools/task_manager",
+            receiver="builtins/agents/main_agent",
+            payload=payload,
+            meta=call_meta,
+        ), timeout=SUB_AGENT_TIMEOUT)
+    except Exception as e:
+        _update_task(user_id, session_id, task_id, {
+            "status": "failed",
+            "error": f"创建分身失败: {e}",
+            "finished_at": _now(),
+        })
+        return {"ok": False, "think": f"创建分身失败: {e}"}
 
-    asyncio.create_task(_run_sub())
+    # ★ 创建成功立刻广播，前端会话列表即时出现新分身
+    await _push_subtasks_changed(agent, user_id, session_id,
+                                 f"新建分身：{task_id} {description}")
 
     return {
         "ok": True,
-        "think": f"✅ 分身任务已创建：{task_id}",
+        "think": f"✅ 分身任务已创建：{task_id}（完成会自动推送给你结果，无需 collect，直接reply用户即可）",
         "data": {
             "task_id": task_id,
             "description": description,
@@ -373,54 +392,46 @@ async def _handle_send(agent, args, user_id, session_id, flow):
         "error": None,
     })
 
+    payload = {
+        "content": message,
+        "session_id": task_id,
+        "action": "",
+        "task_id": task_id,
+        "parent_session": session_id,
+    }
     call_meta = {
         "user_id": user_id,
         "callback_receiver": "builtins/tools/task_manager",
         "callback_session_id": session_id,
-        "_task_id": task_id,
-        "_parent_session": session_id,
+        "_description": t.get("description", ""),
     }
 
-    # ★ 提交到后台，不阻塞 create 返回（否则主控 _process_internal 挂起，
-    #   前端在等 create 的 HTTP 响应期间，session 列表/flow 都刷不出来）
-    async def _run_sub():
-        # asyncio.create_task 不继承 contextvars，显式设置当前 session
-        try:
-            from runtime._llm import set_current_session
-            set_current_session(task_id)
-        except Exception:
-            pass
-        try:
-            await agent.system.call(core.Envelop(
-                sender="builtins/tools/task_manager",
-                receiver="builtins/agents/main_agent",
-                payload={
-                    "content": task_text,
-                    "session_id": task_id,
-                    "action": "",
-                },
-                meta=call_meta,
-            ), timeout=SUB_AGENT_TIMEOUT)
-        except Exception as e:
-            _update_task(user_id, session_id, task_id, {
-                "status": "failed",
-                "error": f"创建分身失败: {e}",
-                "finished_at": _now(),
-            })
-
-    asyncio.create_task(_run_sub())
+    try:
+        await agent.system.call(core.Envelop(
+            sender="builtins/tools/task_manager",
+            receiver="builtins/agents/main_agent",
+            payload=payload,
+            meta=call_meta,
+        ), timeout=SUB_AGENT_TIMEOUT)
+    except Exception as e:
+        _update_task(user_id, session_id, task_id, {
+            "status": "failed",
+            "error": f"发送消息失败: {e}",
+            "finished_at": _now(),
+        })
+        return {"ok": False, "think": f"发送消息失败: {e}"}
 
     return {
         "ok": True,
-        "think": f"✅ 分身任务已创建：{task_id}",
+        "think": f"✅ 消息已发送到分身：{task_id}（完成会自动推送给你，无需主动 collect，直接reply用户）",
         "data": {
             "task_id": task_id,
-            "description": description,
+            "description": t.get("description", ""),
+            "message": message,
             "status": "running",
         },
         "_summary": _format_summary(user_id, session_id),
     }
-
 
 async def _handle_list(agent, args, user_id, session_id, flow):
     _check_timeouts(user_id, session_id)
@@ -615,7 +626,7 @@ async def _handle_clear(agent, args, user_id, session_id, flow):
                 "data": {
                     "type": "progress",
                     "session_id": session_id,
-                    "step": "done",
+                    "step": "subtasks_changed",
                     "msg": f"清理分身：{removed} 个记录，{deleted_flows} 个 flow",
                     "agent_type": "task_manager"
                 }
@@ -665,7 +676,7 @@ async def _handle_delete(agent, args, user_id, session_id, flow):
         deleted.append(tid)
 
     _save_tasks(user_id, session_id, tasks)
-    deleted_flows = _delete_flow_files(user_id, removed_tids)
+    deleted_flows = _delete_flow_files(user_id, deleted)
 
     try:
         await agent.system.call(core.Envelop(
@@ -677,7 +688,7 @@ async def _handle_delete(agent, args, user_id, session_id, flow):
                 "data": {
                     "type": "progress",
                     "session_id": session_id,
-                    "step": "done",
+                    "step": "subtasks_changed",
                     "msg": f"删除分身：{len(deleted)} 个记录，{deleted_flows} 个 flow",
                     "agent_type": "task_manager"
                 }
@@ -705,15 +716,19 @@ async def _handle_delete(agent, args, user_id, session_id, flow):
 async def _handle_callback(envelop, agent, user_id):
     """分身完成后的回调。每次回调都通知 main_agent，由 LLM 自主决策。"""
     meta = envelop.meta or {}
-    task_id = meta.get("_task_id", "")
-    parent_session = meta.get("callback_session_id", "")
-
-    if not task_id or not parent_session:
-        return envelop
-
     payload = envelop.payload or {}
     if not isinstance(payload, dict):
         payload = {"data": payload}
+
+    # ★ 从 payload 读，不从 meta 读
+    task_id = payload.get("task_id", "") or meta.get("_task_id", "")
+    parent_session = (
+        payload.get("parent_session", "")
+        or meta.get("callback_session_id", "")
+    )
+
+    if not task_id or not parent_session:
+        return envelop
 
     # 中间态：分身刚提交，不更新状态
     p_status = str(payload.get("status") or "").lower()
@@ -749,18 +764,22 @@ async def _handle_callback(envelop, agent, user_id):
         "error": error or None,
     })
 
-    # ★ 每次回调都通知 main_agent（LLM 自己决定 reply / send / collect）
+    # ★ 通知 main_agent：task_id 放 payload，meta 只保留 is_callback
     try:
         await agent.system.call(core.Envelop(
             sender="builtins/tools/task_manager",
             receiver="builtins/agents/main_agent",
-            payload={"content": "", "action": ""},
+            payload={
+                "content": "",
+                "action": "",
+                "task_id": task_id,
+                "parent_session": parent_session,
+            },
             meta={
                 "session_id": parent_session,
                 "user_id": user_id,
                 "is_callback": True,
                 "callback_session_id": parent_session,
-                "_task_id": task_id,
                 "_task_summary": _format_summary(user_id, parent_session),
             },
         ))
@@ -854,7 +873,7 @@ def help():
         "examples": [
             'create(description="调研 A", task="详细调研 A 方向的三个子问题") → 自动分配 sub_xxx',
             'send(task_id="sub_xxx", message="把 X 部分重做，用 Y 角度") → 分身带着记忆继续',
-            'collect() → {"done": {"sub_xxx": {"content": "正文", ...}}, "running": {...}, "failed": {...}}',
+            'collect() → {"done": {"sub_xxx": {"content": "正文", ...}}, "running": {...}, "failed": {...}} 分身完成后会主动推送，不需要自己主动收集，发出后reply等结果' ,
             'delete(task_ids=["sub_a3f8b2c1", "sub_9e520e28"]) → 精确删除多个分身',
             'clear() → 批量清理所有已结束的分身（含 flow 文件）',
         ],

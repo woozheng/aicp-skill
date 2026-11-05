@@ -1,6 +1,6 @@
 name: Notes Demo
 id: _demo
 version: 1.0
-description: 系统示例应用，不可删除（最小全栈示例 For Developers）
+description: 系统示例应用，不可删除（最小全栈示例 For LLM Developers）
 description_en: System example app - cannot be deleted (minimal full-stack demo for developers)
 static_root: www/apps/_demo

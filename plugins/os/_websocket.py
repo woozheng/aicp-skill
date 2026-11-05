@@ -19,6 +19,19 @@ import aiohttp
 from aiohttp import web
 import core
 
+import importlib
+import sys
+
+# ★ 延迟导入 _service_restart：加载器按文件名字母序遍历 plugins/**/*.py，
+#   os/_service_restart.py 排在本文件之后（s > w），模块级 import 会因
+#   「还没加载到」抛 ModuleNotFoundError → 引擎起不来。只在要用时 import。
+
+
+def _sr():
+    """延迟取得 _service_restart 模块（见上方注释：不能模块级 import）。"""
+    import importlib
+    return importlib.import_module("plugin_os__service_restart")
+
 
 # 单次发送超时（秒）。对端不读 -> 超时 -> 剔除，避免 push 卡死。
 WS_SEND_TIMEOUT = 2.0
@@ -29,6 +42,7 @@ class WebSocketGateway:
         self._channels = {}
         self._ws_to_channels = {}
         self._ws_id = {}
+        self._send_fail_count: Dict[Any, int] = {}
 
     def register(self, ws, channel_id):
         if channel_id not in self._channels:
@@ -55,7 +69,7 @@ class WebSocketGateway:
         self._ws_id.pop(ws, None)
 
     async def push(self, channel_id, data):
-        """向 channel 推送。单次 send 2s 超时，死连接剔除。"""
+        """向 channel 推送。单次 send 超时后强制 close，连续失败剔除。"""
         sent = 0
         dead = []
         for ws in list(self._channels.get(channel_id, set())):
@@ -65,18 +79,29 @@ class WebSocketGateway:
             try:
                 await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
                 sent += 1
+                self._send_fail_count.pop(ws, None)
             except asyncio.TimeoutError:
-                print(f"[WS Gateway] push 超时（{WS_SEND_TIMEOUT}s），剔除死连接 channel={channel_id}")
+                cnt = self._send_fail_count.get(ws, 0) + 1
+                self._send_fail_count[ws] = cnt
+                print(
+                    f"[WS Gateway] push 超时（{WS_SEND_TIMEOUT}s）"
+                    f" 第 {cnt} 次，强制关闭 channel={channel_id}"
+                )
+                try:
+                    await asyncio.wait_for(ws.close(code=1001), timeout=1.0)
+                except Exception:
+                    pass
                 dead.append(ws)
             except Exception as e:
                 print(f"[WS Gateway] push 发送异常: {e}")
                 dead.append(ws)
         for ws in dead:
             self.unregister(ws)
+            self._send_fail_count.pop(ws, None)
         return sent
 
     async def broadcast(self, data):
-        """向所有连接广播。单次 send 2s 超时，死连接剔除。"""
+        """向所有连接广播。单次 send 超时后强制 close，死连接剔除。"""
         sent = 0
         dead = []
         for ws in list(self._ws_to_channels.keys()):
@@ -86,13 +111,21 @@ class WebSocketGateway:
             try:
                 await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
                 sent += 1
+                self._send_fail_count.pop(ws, None)
             except asyncio.TimeoutError:
-                print(f"[WS Gateway] broadcast 超时（{WS_SEND_TIMEOUT}s），剔除死连接")
+                cnt = self._send_fail_count.get(ws, 0) + 1
+                self._send_fail_count[ws] = cnt
+                print(f"[WS Gateway] broadcast 超时（{WS_SEND_TIMEOUT}s）第 {cnt} 次，强制关闭")
+                try:
+                    await asyncio.wait_for(ws.close(code=1001), timeout=1.0)
+                except Exception:
+                    pass
                 dead.append(ws)
             except Exception:
                 dead.append(ws)
         for ws in dead:
             self.unregister(ws)
+            self._send_fail_count.pop(ws, None)
         return sent
 
     def get_status(self):
@@ -170,6 +203,33 @@ async def execute(envelop, agent):
     gateway = getattr(agent, "ws_gateway", None)
     action = envelop.payload.get("action", "")
 
+    if action == "START":
+        # 起 WebSocket 服务（幂等：已在跑就先停）
+        host = envelop.payload.get("host", getattr(agent, "_ws_host", "0.0.0.0"))
+        port = int(envelop.payload.get("port", getattr(agent, "_ws_port", 9001)))
+        if getattr(agent, "_ws_runner", None) is not None:
+            await _stop_ws(agent)
+        runner = await start_websocket_server(agent, host=host, port=port)
+        envelop.payload = {"ok": True, "status": "listening", "host": host, "port": port}
+        return envelop
+
+    if action == "STOP":
+        await _stop_ws(agent)
+        envelop.payload = {"ok": True, "status": "stopped"}
+        return envelop
+
+    if action == "restart":
+        # ★ 优雅重启：释放端口 + 用新代码重新起
+        host = getattr(agent, "_ws_host", "0.0.0.0")
+        port = int(getattr(agent, "_ws_port", 9001))
+        ok = await _sr().restart_service_and_watch(
+            agent, "os/_websocket", port=port, host=host,
+            start_payload={"action": "START", "host": host, "port": port},
+        )
+        envelop.payload = {"ok": ok, "status": "restarted" if ok else "restart_failed",
+                           "port": port}
+        return envelop
+
     if action == "push":
         channel_id = envelop.payload.get("channel_id", "")
         data = envelop.payload.get("data", {})
@@ -219,14 +279,24 @@ async def execute(envelop, agent):
                     try:
                         await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
                         sent += 1
+                        gateway._send_fail_count.pop(ws, None)
                     except asyncio.TimeoutError:
-                        agent.log.info(f"[WS] push_to_ws 超时（{WS_SEND_TIMEOUT}s），剔除")
+                        cnt = gateway._send_fail_count.get(ws, 0) + 1
+                        gateway._send_fail_count[ws] = cnt
+                        agent.log.info(
+                            f"[WS] push_to_ws 超时（{WS_SEND_TIMEOUT}s）第 {cnt} 次，强制关闭"
+                        )
+                        try:
+                            await asyncio.wait_for(ws.close(code=1001), timeout=1.0)
+                        except Exception:
+                            pass
                         dead.append(ws)
                     except Exception as e:
                         agent.log.info(f"[WS] push_to_ws error: {e}")
                         dead.append(ws)
             for ws in dead:
                 gateway.unregister(ws)
+                gateway._send_fail_count.pop(ws, None)
             envelop.payload = {"ok": True, "sent": sent, "ws_id": ws_id}
         else:
             envelop.payload = {"error": "ws_gateway not ready"}
@@ -254,6 +324,23 @@ async def execute(envelop, agent):
     else:
         envelop.payload = {"error": f"Unknown action: {action}"}
         return envelop
+
+
+async def _stop_ws(agent):
+    """停掉 WebSocket 服务，释放端口。"""
+    runner = getattr(agent, "_ws_runner", None)
+    if runner:
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
+        agent._ws_runner = None
+    # 兜底：老代码没存 runner 时端口可能被孤儿 socket 占着
+    try:
+        port = int(getattr(agent, "_ws_port", 9001))
+        await _sr().kill_port_holders(port)
+    except Exception:
+        pass
 
 
 async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for_local=False):
@@ -403,4 +490,12 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
     await web.TCPSite(runner, host, port).start()
 
     agent.log.info(f"[WS] WebSocket server listening on ws://{host}:{port}/ws")
+    # ★ runner / 端口记到 agent 上，否则没法优雅重启（端口会被占死）
+    agent._ws_runner = runner
+    agent._ws_host = host
+    agent._ws_port = port
+    # 自愈：模块热重载后自动重启（handler 闭包持有旧 globals）
+    _sr().ensure_hot_reload_watch(
+        agent, "os/_websocket", port=port, host=host,
+    )
     return runner

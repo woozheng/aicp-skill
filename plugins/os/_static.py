@@ -4,6 +4,18 @@ import mimetypes
 import os
 
 
+# ============================================================
+# data/ 下允许公开访问的前缀白名单
+# - uploads/ : file_receiver 默认写入的上传文件
+# - cache/   : 插件生成物（tts/ images/ ...），统一放这
+# 其他 data/ 下内容（memories/ workspace/ os_cron/ 等）一律 403
+# ============================================================
+DATA_PUBLIC_PREFIXES = (
+    "uploads/",
+    "cache/",
+)
+
+
 def _guess_type(path: Path) -> str:
     """根据文件扩展名猜测 MIME 类型"""
     mime, _ = mimetypes.guess_type(str(path))
@@ -61,11 +73,11 @@ def _normalize_path(base: Path, file_path: str) -> Path | None:
     """规范化路径并确保在 base 目录内"""
     target = (base / file_path).resolve()
     base_resolved = base.resolve()
-    
+
     # 确保解析后的路径在 base 目录内
     if not str(target).startswith(str(base_resolved)):
         return None
-    
+
     return target
 
 
@@ -79,17 +91,17 @@ def _try_files(base: Path, file_path: str) -> Path | None:
     target = _normalize_path(base, file_path)
     if target and target.exists() and target.is_file():
         return target
-    
+
     # 补全 .html
     target = _normalize_path(base, f"{file_path}.html")
     if target and target.exists() and target.is_file():
         return target
-    
+
     # 目录下的 index.html
     target = _normalize_path(base, f"{file_path}/index.html")
     if target and target.exists() and target.is_file():
         return target
-    
+
     return None
 
 
@@ -104,25 +116,25 @@ def _serve_file(found: Path, envelop):
 
 async def execute(envelop, agent):
     action = envelop.payload.get("action", "serve")
-    
+
     # ============================================================
     # serve — 提供静态文件
     # ============================================================
     if action == "serve":
         file_path = envelop.payload.get("file_path", "")
-        
+
         # 从 meta 里拿路径（Gateway 可能放在这里）
         if not file_path:
             file_path = envelop.meta.get("path", "").lstrip("/")
-        
+
         if not file_path:
             file_path = "index.html"
-        
+
         # 安全检查
         if not _safe_path(file_path):
             envelop.payload = {"error": "Forbidden"}
             return envelop
-        
+
         # 1. 先查项目 www/ 目录
         parts = file_path.split("/", 1)
         if len(parts) == 2:
@@ -134,7 +146,7 @@ async def execute(envelop, agent):
                     _serve_file(found, envelop)
                     envelop.meta["source_dir"] = f"plugins/{project}/www"
                     return envelop
-        
+
         # 2. 再查全局 www/ 目录
         global_www = Path("www")
         found = _try_files(global_www, file_path)
@@ -142,38 +154,43 @@ async def execute(envelop, agent):
             _serve_file(found, envelop)
             envelop.meta["source_dir"] = "www"
             return envelop
-        
-        # 3. 查 data/ 目录（如果允许）
+
+        # 3. 查 data/www 目录（如果允许）
         data_www = Path("data/www")
         found = _try_files(data_www, file_path)
         if found:
             _serve_file(found, envelop)
             envelop.meta["source_dir"] = "data/www"
             return envelop
-        
+
         envelop.payload = {"error": "Not found"}
         return envelop
-    
+
     # ============================================================
-    # serve_data — 提供 data/ 目录下的文件
+    # serve_data — 提供 data/ 目录下的文件（白名单）
     # ============================================================
     elif action == "serve_data":
         file_path = envelop.payload.get("file_path", "")
-        
+
         if not _safe_path(file_path):
             envelop.payload = {"error": "Forbidden"}
             return envelop
-        
+
+        # ★ 白名单：只放开 uploads/ 和 cache/
+        if not any(file_path.startswith(p) for p in DATA_PUBLIC_PREFIXES):
+            envelop.payload = {"error": "Forbidden"}
+            return envelop
+
         data_dir = Path("data")
         target = _normalize_path(data_dir, file_path)
-        
+
         if target and target.exists() and target.is_file():
             _serve_file(target, envelop)
             return envelop
-        
+
         envelop.payload = {"error": "Not found"}
         return envelop
-    
+
     # ============================================================
     # list_apps — 列出 www/apps/ 下的所有应用
     # ============================================================
@@ -216,7 +233,7 @@ async def execute(envelop, agent):
     elif action == "list":
         pages = []
         seen = set()
-        
+
         # 项目 www/ 目录
         plugins_dir = Path("plugins")
         if plugins_dir.exists():
@@ -225,7 +242,7 @@ async def execute(envelop, agent):
                     continue
                 if project_dir.name in ("os", "__pycache__", "builtins"):
                     continue
-                
+
                 www_dir = project_dir / "www"
                 if www_dir.exists():
                     for f in www_dir.rglob("*.html"):
@@ -239,7 +256,7 @@ async def execute(envelop, agent):
                                 "size": f.stat().st_size,
                             }
                             pages.append(_apply_meta(entry, f))
-        
+
         # 全局 www/ 目录
         global_www = Path("www")
         if global_www.exists():
@@ -254,12 +271,12 @@ async def execute(envelop, agent):
                         "size": f.stat().st_size,
                     }
                     pages.append(_apply_meta(entry, f))
-        
+
         # 排序：目录在前，文件名升序
         pages.sort(key=lambda p: (p["path"].count("/"), p["path"]))
-        
+
         envelop.payload = {"pages": pages, "total": len(pages)}
         return envelop
-    
+
     envelop.payload = {"error": f"Unknown action: {action}"}
     return envelop

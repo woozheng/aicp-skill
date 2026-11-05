@@ -522,11 +522,17 @@ async def _maybe_restore_external(agent):
             pass
 
 
+# 对外隐藏的应用目录（模板/内置 demo 等），list 不返回、不暴露
+HIDDEN_APP_PREFIXES = ("applications/_demo/",)
+
+
 async def _handle_list(envelop, agent):
     _registry._scan_plugins()  # ★ 先扫描，清理已删文件
     await _maybe_restore_external(agent)
     include_unloaded = envelop.payload.get("include_unloaded", False)
     plugins = _registry.list_plugins(include_unloaded)
+    # ★ 过滤隐藏应用
+    plugins = [p for p in plugins if not any(p["name"].startswith(pfx) for pfx in HIDDEN_APP_PREFIXES)]
     envelop.payload = {
         "ok": True,
         "apis": plugins,

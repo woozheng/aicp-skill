@@ -13,8 +13,16 @@
 
 import asyncio
 import json
+import sys
 import time
 import uuid
+
+import importlib
+import sys
+
+# ★ 延迟导入 _service_restart：加载器按文件名字母序遍历 plugins/**/*.py，
+#   os/_service_restart.py 排在本文件之后（s > m），模块级 import 会因
+#   「还没加载到」抛 ModuleNotFoundError → 引擎起不来。只在要用时 import。
 from collections import defaultdict
 from aiohttp import web
 
@@ -44,6 +52,23 @@ ERR_SESSION_EXPIRED = -32013
 # Session
 SESSION_IDLE_TIMEOUT = 3600
 SESSION_CLEANUP_INTERVAL = 300
+
+# 请求体上限
+# 与网关 os/_gateway.py 共用同一个配置项（aicp.yaml max_body_size，缺省 10MB）。
+# MCP 的 JSON-RPC 消息和网关的 JSON API 都是"结构化 JSON 请求体"，
+# 体积特征一致，用同一个上限，不搞第三套标准。
+DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def _resolve_max_body_size(agent) -> int:
+    """读取 JSON 请求体上限：aicp.yaml max_body_size，缺省 10MB。
+    与网关 os/_gateway.py 的 _resolve_max_body_size 读同一个配置键。"""
+    val = agent.config.get("max_body_size", DEFAULT_MAX_BODY_SIZE) if agent else DEFAULT_MAX_BODY_SIZE
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        val = DEFAULT_MAX_BODY_SIZE
+    return val if val > 0 else DEFAULT_MAX_BODY_SIZE
 
 # 限流
 MAX_CONCURRENT_PER_SESSION = 10
@@ -177,7 +202,153 @@ class Metrics:
 # 自描述（initialize 注入，skill 零复制的关键）
 # ============================================================
 
-AICP_INSTRUCTIONS = """你是接入 AICP 引擎的外部 agent。AICP 不是工具集合，是能力底座：插件提供能力，你负责编排。
+# ★ 热重载友好：instructions 必须从「当前活着的模块」读，不能用启动时捕获的模块全局。
+#   原因：_start() 创建的 aiohttp 路由闭包持有启动那一刻的模块 globals；
+#   热重载会 exec 出新模块对象并重绑 core.plugins，但已在跑的 handler 仍指向旧模块。
+#   结果 = 改了提示词但要重启引擎才生效。现改成每次请求现取 live 模块。
+_LIVE_MODULE_NAME = "plugin_os__mcp_server"
+
+
+def _sr():
+    """延迟取得 _service_restart 模块（见上方注释：不能模块级 import）。"""
+    import importlib
+    return importlib.import_module("plugin_os__service_restart")
+
+
+def _live_instructions() -> str:
+    """取当前生效的 AICP_INSTRUCTIONS（热重载后立即变）。"""
+    mod = sys.modules.get(_LIVE_MODULE_NAME)
+    text = getattr(mod, "AICP_INSTRUCTIONS", "") if mod else ""
+    return text or AICP_INSTRUCTIONS
+
+
+AICP_INSTRUCTIONS = """你是接入 AICP 引擎的外部 agent。AICP 不是工具集合，是实时能力底座：插件提供能力，你负责编排。
+
+# 这个mcp server是什么？
+这是一个协议驱动，envelop传递、实时python插件生成、热重载引擎，你写出来的aicp引擎插件、应用，生成即可预览，落盘即下一步即可被调用，你不需要熟悉框架，只精通python3.12和前端开发。
+生成即可为客户实时展现效果。你用五个工具可以造出新的引擎内置插件和应用。
+
+## ⚠ 先读这一条：造应用前必须先读 _demo
+`_demo` 不是可运行示例，是**强制规范**（源文件里写着「造应用照抄本 demo 时必须遵守」）。
+开工前先把它读完，不要边写边猜。它有 5 个文件，全部是规范的一部分：
+
+    plugins/applications/_demo/app.yaml            应用注册清单（name/id/version/static_root）——照抄这个格式
+    plugins/applications/_demo/notes.py             后端插件范本（execute 契约、状态持久化、action 分发）
+    plugins/applications/_demo/notes.contract.json  action 契约（机器可读，params/returns/confidence）
+    plugins/applications/_demo/ping.py              第二个插件：跨插件调用范本
+    plugins/applications/_demo/collab.py            协作类插件范本
+    www/apps/_demo/index.html                       前端范本（调用后端、上传、错误处理）
+
+读它的收益不是"参考"，是**避开一整类返工**：上传协议、action 命名、payload 结构、
+鉴权、状态持久化、错误处理约定，全都在 _demo 里写死了。照抄机制，不要自由发挥。
+读法：用 file_utils_api 的 read_file 读全文（大文件会自动返回 code_structure 结构地图）。
+
+**新建应用必须先写 app.yaml**，否则应用不会注册、页面也访问不到。字段照抄 _demo 的：
+`name`（显示名）、`id`（项目名，与目录同名）、`version`、`description`、
+`description_en`、`static_root`（= www/apps/<id>）。
+
+## aicp 引擎内部写入规则
+**可写文件位置
+plugins/mythools  你创建的纯后端工具位置
+plugins/applications 应用后端文件夹，每个项目一个子目录 {project}/
+www/apps/ 应用前端为文件夹，每个项目一个子目录和后端对齐 {project}/   对应实时访问地址 {本机基址}/apps/xxx
+data/workspace  你的工作区文件夹，
+data/cache      临时产物展示区， 用于引擎页面展示，展示地址：{本机基址}/data/cache/xxxx
+data/skills/aicp/{skill_id}  总结skill写入目录（每个 skill 一个子目录，内含 SKILL.md），用于总结自己通过aicp 引擎得到的经验
+data/uploads/   用于应用上传功能。 `data/uploads/`（`{本机基址}/data/uploads/xxx`）
+其他位置均为只读区域，严禁写入
+
+## 文件操作：只用 file_utils_api（别用客户端自带的编辑/搜索工具）
+客户端自带的编辑器和文件搜索**不认识 AICP 的目录约定，也没有写后校验**，用它会多绕很多步。
+读写文件一律走 MCP 插件：
+
+    call_plugin(receiver="builtins/tools/file_utils_api", action="<action>", params={...})
+
+14 个 action：
+  read_file / read_file_lines   读文件（read_file_lines 可按行范围读）
+  write_file / append_file      写文件（append 追加）
+  edit_file /replace_lines/ apply_patch       改文件（edit_file 按 find→replace 精确替换/replace_lines 按行号替换 使用前必须读文件确认行号)
+  file_exists / list_dir / mkdir / delete_file / file_stat
+  code_structure                大文件结构地图
+  search                        搜文件
+
+四个必须知道的语义（踩过坑）：
+
+1. **write_file / append_file / edit_file 写完自动校验**，返回里带
+   `data.validation = {checked, ok, error, kind}`。
+   覆盖 .py(ast.parse) / .json / .html / .js / .ts / .vue 等；
+   失败时返回 `validation_failed: true` 和 `warning`（文件已落盘但有语法问题）。
+   → **看到 validation_failed 就当场改，不要等下一步才发现。**
+
+2. **search 的两个参数别搞反**：
+   `pattern` = 文件名 glob（"*.py"），`content` = 要找的子串。
+   写反会返回 `scanned: 0` 的**静默空结果**，会被误判成"代码里没有"。
+   正确：`{pattern:"*.py", content:"MAX_PDF_BYTES"}`。
+
+3. **edit_file 要求 find 唯一**，匹配多处会报错要求你加长 find。
+   这比"默认替换第一处"安全，是保护不是限制。
+
+4. **路径规则**：`/data/uploads/x` 是**引擎相对路径**（解析到引擎根目录），
+   `C:/xxx` 才是真绝对路径。只拦系统目录黑名单，其他位置放行。
+
+**code_runner 用来做什么**：跑脚本做端到端验证、起子进程、调 HTTP 接口探活、看环境版本。
+**不要用 code_runner 手搓正则去搜代码**——那是 file_utils_api.search 的活。
+
+**code_runner 的沙箱契约（照抄这段，别自己发挥）**
+
+沙箱有三条硬约束，违反了直接报错：
+
+1. **全部逻辑必须写在 `async def execute(envelop, agent):` 内部。**
+   顶层写任何可执行语句会被 AST 预检拦下：
+   `【错误分类】LLM_CODE / 禁止顶层执行代码，全部逻辑写在 execute 函数内`
+2. **`import` 必须写在 `execute` 内部**，不能放模块级。
+   放外面会在函数体里报 `NameError: name 'xxx' is not defined`（沙箱不注入模块命名空间）。
+3. **返回值必须是 `{"data": ...}`**，缺 `data` 键报
+   `【一句话】返回值缺少 data 字段`。
+
+正确骨架（照抄）：
+
+```python
+async def execute(envelop, agent):
+    import json
+    import os
+
+    async def post(route, payload):
+        return await post_json(f"{base_url}/api/{route}", payload)
+
+    result = await post("applications/x/y", {"action": "list"})
+    return {"data": {"ok": True, "result": result}}
+```
+
+沙箱自带助手（直接用，别 import aiohttp/urllib 打本机）：
+
+- `await post_json(url, dict)` → POST JSON 并解析响应（**打本机网关用这个**）
+- `await fetch_async(url)` → 异步 GET（**打本机页面用这个**）
+- 同步 `urllib` / `requests` 打 127.0.0.1 会被拦；打外部站点才可用
+- `subprocess.run` 是同步函数，`await` 它会抛 `TypeError` → 用 `await asyncio.to_thread(subprocess.run, ...)`
+- `exec()` 被 AST 预检拦；`importlib.util.spec_from_file_location` + `exec_module` 可以用
+
+`env` 里会带环境真相，动手前先看：`mem_available_gb`（可用内存）、`exec_timeout_s`（单次硬超时，默认 60）、`libs_missing`、`net`（pypi/hf-mirror/modelscope 连通性）、`gpu`。
+
+**60 秒是硬超时**：长任务分步跑，别一次串完。**沙箱里能拿到的是独立进程视角**，验主控热重载要看主进程 `sys.modules`，code_runner 看不到。
+
+**沙箱禁用的是会毁系统的东西**（`rm -rf /`、`format`、`mkfs` 等黑名单），不是普通能力；`import requests` / `subprocess` / HTTP 都能用。但它和引擎同进程，`os._exit()` 会直接干掉引擎——只跑你自己写的验证脚本。
+
+**核心认知**
+在aicp引擎内 自带部署网关，基础地址：{本机基址}
+-目录即路由：
+插件文件地址 :plugins/xxxx目录/xxx.py  对应call_plugin receiver参数地址 xxxx目录/xxx
+-源码即契约
+插件必须存在签名函数 async def execute(envelop, agent) 必须return envelop
+envelop.payload 内部实现 ’aciton 、自定义参数、业务逻辑‘
+-envelop唯一真相源
+envelop.payload 内部结构自己根据业务逻辑设计，按demo实现功能路由和参数传递，插件内状态存储写入 data/{项目或插件}/
+-最小应用项目示例（含前后端代码）
+项目名： _demo
+后端文件目录： plugins/applications/_demo
+前端文件目录： www/apps/_demo
+项目名和目录名须对齐
+
 
 ## 五个工具
 - call_plugin(receiver, action?, params?)：万能调用，receiver 是插件完整路由
@@ -203,6 +374,7 @@ action 只写一处：写在顶层 action 字段，params 里绝对不要再写�
 服务端会丢掉 params.action（以顶层为准），但重复写法是噪音，不要写。
 没有 action 的插件（如 code_runner、save_blocks）就只传 params。
 action 只写一处：写在顶层 action 字段，params 里绝对不要再写一份。
+
 ## 路由规则
 receiver 必须写完整路径，不是插件名：
   builtins/tools/code_runner、builtins/tools/save_blocks、os/_cron、applications/<project>/<name>
@@ -211,28 +383,62 @@ receiver 必须写完整路径，不是插件名：
 ## 常规路径
 1. 先 list_capabilities 看有没有现成的，能复用就不新写
 2. 算数据 / 爬网页 / 调 API / 处理文件 → builtins/tools/code_runner
-   code 必须含 async def execute(envelop, agent):，且 return {"data": ...}
+   code 只有一个函数 async def execute(envelop, agent): 必须第一行,import在其内部，且 return {"data": ...}
+   参数`agent` 上挂着的能力：`agent.llm`（`chat` / `chat_json` / `chat_stream` / `chat_tool_stream`）、`agent.system.call(envelop)`（调其他插件）、`agent.config`（配置）、`agent.log`（日志）、`agent.base_url`（对外地址）。需要 LLM 或跨插件调用时直接
    代码若调用 agent.llm：必须先 `if not agent.llm:` 兜底；若工具结果带 llm_notice 或提示「未配置模型」，
    说明引擎 aicp.yaml 没配 models.providers，告知用户先配置模型，不要重试 LLM 调用
+   aicp如果是本机地址，可调用本机所有资源完成需求
 3. 定时 / 实时推送 / 持久化 / 串行编排 → os/_cron、os/_websocket、os/_db、os/_workflow
 4. 参数不确定 → get_contract；要源码 → get_contract(plugin="<receiver>", detail="source")，它返回该插件 execute 的源码片段（detail="tools" 给 Function Calling schema）
 5. ⚠ 不要在你本地磁盘上找引擎：引擎和你的工作目录不是同一处，`where /r C:\ save_blocks.py`、`dir C:\aicp-engin`、`ls ~/aicp*` 这类搜索全是白费功夫，会把一轮对话耗光。源码只能通过 get_contract(detail="source") / call_plugin 拿；契约里出现的 `source` / `contract_file` 是服务器侧路径，你打不开，也不要去开。想确认某个能力有没有，用 list_capabilities，不要翻文件系统。
 
-## 造应用（必须按规范，不许猜结构）
-第一步永远先 get_contract(plugin="builtins/tools/save_blocks")，它会返回完整造应用规范
-（app.yaml / 后端插件 / 前端三件套的模板、块格式、铁律、踩坑）。严格照它写。
-不要靠读现成应用代码猜结构——旧应用可能是错的；规范有冲突时以 usage 为准。
-一次 save_blocks 只传一个文件块（APP → PLUGIN → HTML），save 后看返回的 checks/errors。
-errors 非空必须修完再交付；warnings 要读一遍判断是否影响功能。
+## 造应用、造插件、写前端页面（照抄 _demo，不要自由发挥）
+参考_demo项目（已实现所有引擎前后端对齐模式，系统提供的基础设施实现方法，正在运行时，直接照抄机制,仅前端页面只需要读app.yaml，静态页面已网关托管直接写）
+验收可用code_runner 直接写代码跑整体校验，省token
+
+### 造应用的推荐节奏：读 demo → 一次写完 → 一次验证
+别把一次应用开发拆成几十轮"改一处→读回验→再改"。那是低效的主要来源。正确做法：
+_demo主要描述前后端通讯完整功能，无后端服务需求、纯浏览器存储的需求页面，仅需读app.yaml,直接写前端页面。
+1. **读 _demo 全部 6 个文件**（见上文清单），拿到后端契约、前端骨架、action 命名、
+   payload 结构、上传协议、目录布局、app.yaml 字段。
+2. **一次 write_file 写完所有文件**，各文件一个调用，不要挤在一次里（超长会超时）：
+   - plugins/applications/<project>/app.yaml         应用注册清单（必写，照抄 _demo/app.yaml）
+   - plugins/applications/<project>/<name>.py        后端插件
+   - plugins/applications/<project>/<name>.contract.json  action 契约（照抄 _demo/notes.contract.json 的格式）
+   - www/apps/<project>/index.html                  前端页面
+   - plugins/applications/<project>/<name>_skill.md  契约文档（_demo 有就照抄这个）
+   write_file 返回的 validation 就是免费的语法检查，**写完当场看一眼**。
+3. **一次 code_runner 跑整体验收**：编译后端 + 起浏览器/调接口跑端到端 + 断言关键结果。
+   一次跑完，别拆成"编译一次、接口一次、浏览器一次"三轮。
+
+一次应用通常 3～6 个工具调用就够。超过 10 次说明流程跑偏了，回头看是不是在重复验证。
+
+### 踩过的坑（别重走）
+- **上传一律 multipart 直传**，不要把文件转 base64 走网关 JSON：
+  网关 MAX_BODY_SIZE 有 10MB 硬限，base64 还涨 33%，浏览器内存占用约 2.3 倍，
+  还得自己写分片+合并。标准流程是
+  `GET /api/upload_config` 拿动态 url → `XMLHttpRequest`+`FormData` 直传 → `xhr.upload.onprogress` 真实进度。
+  **上传地址永远别写死 127.0.0.1**（局域网访问会打到客户端本机），交给 /api/upload_config 按请求 hostname 生成。
+- **同站判断只按 host 比对，不看端口**：网关(9000)和上传接收器(9002)是同一站点的兄弟服务。
+- **网关 API 的 body 是扁平的** `{action, ...参数}`，不是嵌套的 `{action, payload:{...}}`。
+- **应用宣称的文件大小上限必须和上传接收器 MAX_UPLOAD_SIZE(50MB) 对齐**，
+  不然大文件能过前端校验却在上传时被服务端拒。
 
 ## 交付：直接给可点击链接
-save_blocks 返回 preview_url（形如 http://127.0.0.1:9000/<project>/）。回复用户时必须原样给一行 markdown 链接：
-  [打开应用](http://127.0.0.1:9000/<project>/)
+回复用户时必须原样给一行 markdown 链接：
+  [打开应用]({本机基址}/apps/<project>/)
+注意是 `/apps/<project>/`，不是 `/<project>/`。
 不要只说“已创建”，也不要让用户自己去拼地址。
 其他插件返回 url / open_url / link 字段时，同样原样给用户。
 
+## 静态文件（写文件给用户看时用）
+- 公开目录：`www/`（`{本机基址}/xxx`）、`data/uploads/`（`{本机基址}/data/uploads/xxx`）、`data/cache/`（`{本机基址}/data/cache/xxx`）
+- 要给用户看文件（图片 / SVG / 音频 / PDF），写到  `data/cache/`，然后给 `{本机基址}/data/cache/...` 链接
+
 ## 节奏
-一次只做一个动作，拿到结果再决定下一步；不要试图在一次调用里做完所有事。
+一次只做**一个阶段**（读规范 → 写文件 → 验证），拿到结果再决定下一步；
+但一个阶段内部该并行/批量就批量，不要拆成几十个来回。
+掌握了系统架构和认知用code_runner 可省token，尤其搜索、定位、验证等综合性判断
 连续两次同样错误 → 换思路，或把错误原样告诉用户，不要重复重试。
 
 ## 结果太长 / 出现缓存文件时
@@ -476,10 +682,13 @@ MCP_TOOLS = [
         "name": "call_plugin",
         "description": (
             "调用任意 AICP 插件。receiver 必须是完整路由，不是插件名："
-            "builtins/tools/code_runner / builtins/tools/save_blocks / os/_cron / applications/<project>/<name>。"
+            "builtins/tools/file_utils_api / builtins/tools/code_runner / builtins/tools/save_blocks / "
+            "os/_cron / applications/<project>/<name>。"
             "示例1 算数据：{receiver:'builtins/tools/code_runner', params:{code:'async def execute(envelop, agent):\\n    return {\"data\": 1+1}'}}；"
-            "示例2 造应用：{receiver:'builtins/tools/save_blocks', params:{text:'=== PLUGIN: ... ===\\n...\\n=== END ==='}}。"
+            "示例2 读写文件：{receiver:'builtins/tools/file_utils_api', action:'write_file', params:{path:'/plugins/applications/x/x.py', content:'...'}}；"
+            "示例3 造应用：{receiver:'builtins/tools/save_blocks', params:{text:'=== PLUGIN: ... ===\\n...\\n=== END ==='}}。"
             "不知道有什么能力先调 list_capabilities；不知道参数先调 get_contract。"
+            "⚠ 写文件/改文件/搜文件优先用 builtins/tools/file_utils_api（写完自带语法校验），别用客户端自带的编辑器。"
         ),
         "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -639,6 +848,20 @@ async def execute(envelop, agent):
         return await _start(envelop, agent)
     elif action == "STOP":
         return await _stop(envelop, agent)
+
+    elif action == "restart":
+        # ★ 优雅重启：释放端口 + 用新代码重新起（改了提示词不必重启引擎）
+        ok = await _sr().restart_service_and_watch(
+            agent, "os/_mcp_server",
+            port=getattr(agent, "_mcp_port", 9100),
+            host=getattr(agent, "_mcp_host", "127.0.0.1"),
+            start_payload={"action": "START",
+                           "host": getattr(agent, "_mcp_host", "127.0.0.1"),
+                           "port": getattr(agent, "_mcp_port", 9100)},
+        )
+        envelop.payload = {"ok": ok, "status": "restarted" if ok else "restart_failed",
+                           "port": getattr(agent, "_mcp_port", 9100)}
+        return envelop
     elif action == "sessions":
         store = getattr(agent, "_mcp_sessions", None)
         if store:
@@ -672,7 +895,7 @@ async def _start(envelop, agent):
     store = agent._mcp_sessions
     metrics = agent._mcp_metrics
 
-    app = web.Application(client_max_size=10 * 1024 * 1024)
+    app = web.Application(client_max_size=_resolve_max_body_size(agent))
 
     @web.middleware
     async def cors(request, handler):
@@ -874,6 +1097,17 @@ async def _start(envelop, agent):
         if "application/json" not in accept and "text/event-stream" not in accept:
             return _rpc_error(None, ERR_INVALID_REQUEST, "Accept must include application/json or text/event-stream")
 
+        max_body_size = _resolve_max_body_size(agent)
+        # 先按 Content-Length 拒一次，好给出结构化诊断；
+        # aiohttp 的 client_max_size 兜底只会抛裸 413，agent 看不出下一步该做什么。
+        # 注意：body 还没解析，拿不到 JSON-RPC 的 id，按规范用 null。
+        content_length = request.content_length
+        if content_length and content_length > max_body_size:
+            return _rpc_error(None, ERR_INVALID_REQUEST,
+                              f"request body too large: {content_length} > {max_body_size} bytes "
+                              f"(aicp.yaml max_body_size); shrink the payload or upload files via "
+                              f"the file_utils_api tool instead of inlining them")
+
         try:
             body = await request.json()
         except Exception:
@@ -897,7 +1131,8 @@ async def _start(envelop, agent):
             session["client_name"] = client_name
 
             # 工作台摘要：MCP 无状态，客户端不会主动来查，所以由 initialize 主动回灌
-            instructions = AICP_INSTRUCTIONS
+            # ★ 用 _live_instructions() 而非模块全局：热重载后立即生效，不用重启引擎
+            instructions = _live_instructions()
             try:
                 ws = await _call_internal(session, "os/_mcp_agent", action="summary",
                                           params={"client": client_name})
@@ -905,6 +1140,9 @@ async def _start(envelop, agent):
                     instructions = AICP_INSTRUCTIONS + "\n\n---\n\n" + ws["text"]
             except Exception as e:
                 await _log("warning", "workspace_summary_failed", error=str(e))
+
+            _base = (getattr(agent, "base_url", "") or "http://127.0.0.1:9000").rstrip("/")
+            instructions = instructions.replace("{本机基址}", _base)
 
             result = {
                 "protocolVersion": client_proto,
@@ -1045,6 +1283,8 @@ async def _start(envelop, agent):
     await web.TCPSite(runner, host, port).start()
 
     agent._mcp_runner = runner
+    agent._mcp_host = host
+    agent._mcp_port = port
 
     async def _cleanup_loop():
         while True:
@@ -1060,6 +1300,15 @@ async def _start(envelop, agent):
 
     agent._mcp_cleanup_task = asyncio.create_task(_cleanup_loop())
 
+    # ★ 自愈监听（统一走 os/_service_restart）：
+    #   本模块被热重载后，aiohttp app 里注册的 handler 闭包仍持有旧模块的
+    #   globals（AICP_INSTRUCTIONS 不会更新）。watcher 检测到模块被换掉就自动
+    #   重启 MCP server —— 否则「改了提示词却要重启引擎才生效」。
+    _sr().ensure_hot_reload_watch(
+        agent, "os/_mcp_server", port=port, host=host,
+        start_payload={"action": "START", "host": host, "port": port},
+    )
+
     agent.log.info(f"[MCP] Server listening on http://{host}:{port}/mcp")
 
     envelop.payload = {
@@ -1073,11 +1322,30 @@ async def _start(envelop, agent):
     return envelop
 
 
-async def _stop(envelop, agent):
+async def _stop(envelop, agent, keep_watcher: bool = False):
     store = getattr(agent, "_mcp_sessions", None)
     if store:
         for sid in list(store.sessions.keys()):
             await store.remove(sid)
+
+    if not keep_watcher:
+        rtask = getattr(agent, "_mcp_reload_task", None)
+        if rtask:
+            # ★ 只 cancel 不 await：若这次 STOP 是 watcher 自己触发的，
+            #   await 自己会死锁（task 等不到自己结束）。cancel 后让它自然收尾。
+            try:
+                rtask.cancel()
+            except Exception:
+                pass
+            agent._mcp_reload_task = None
+
+        swatch = getattr(agent, "_service_watch_os__mcp_server", None)
+        if swatch:
+            try:
+                swatch.cancel()
+            except Exception:
+                pass
+            agent._service_watch_os__mcp_server = None
 
     task = getattr(agent, "_mcp_cleanup_task", None)
     if task:

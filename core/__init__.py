@@ -36,9 +36,10 @@
 #   remote_node              回调透传（跨节点标识）
 #   remote_plugin            回调透传（远程插件标识）
 #   signature                _http_callback 发送时写入，接收方校验
+#   token                    调用方提供的回调 token，core 原样带上，不签发
 #
-# 仅"透传"不等于"行为键"：remote_node / remote_plugin / signature 不改变
-# route 的分支走向，只被带到回调消息里。
+# 仅"透传"不等于"行为键"：remote_node / remote_plugin / signature / token
+# 不改变 route 的分支走向，只被带到回调消息里。
 # ============================================================
 
 # ============================================================
@@ -63,7 +64,8 @@
 # meta：投递指令，半开放
 #   只有"路由行为键"（见上方清单）会改变 route 行为，必须显式登记。
 #   不在清单上的键 = 插件私货：route 不读，异步回调也不保证透传
-#   （当前只透传 remote_node / remote_plugin / callback_session_id / session_id）。
+#   （当前只透传 remote_node / remote_plugin / callback_session_id /
+#     session_id / user_id / token）。
 #
 # route 返回契约：永远返回 Envelop，不返回 None
 #   禁止改变。
@@ -297,25 +299,6 @@ def _strip_async_meta(meta: dict) -> dict:
     return cleaned
 
 
-def _get_callback_token(agent: Agent = None) -> str:
-    """回调用的 token。优先 HMAC 签发（与 os/_auth 共享 BIO_SECRET），
-    其次静态 tokens，最后环境变量。"""
-    # 1. 尝试 HMAC 签发（内部回调，用 system 身份）
-    try:
-        from importlib import import_module
-        auth_mod = import_module("plugins.os._auth")
-        return auth_mod.issue_hmac_token("system", ttl_seconds=300)   # 5 分钟短期
-    except Exception as e:
-        print(f"[callback] HMAC 签发失败，回退静态 token: {e}")
-    # 2. 静态 tokens
-    if agent and hasattr(agent, 'config'):
-        tokens = agent.config.get("tokens", [])
-        if tokens:
-            return tokens[0]
-    # 3. 环境变量
-    return os.environ.get("AICP_TOKEN", "")
-
-
 def _attach_traceback(envelop: "Envelop"):
     """把完整 traceback 放进 meta。
 
@@ -411,9 +394,9 @@ async def route(envelop: Envelop, agent: Agent = None, timeout: float = 600.0) -
     # ============================================================
     # 模式 1：同步执行
     # ============================================================
+    task = asyncio.ensure_future(plugin(envelop, agent))
     try:
-        result = await asyncio.wait_for(plugin(envelop, agent), timeout=timeout)
-        # ★ 新增：插件返回 None 时兜底，保证 route 永远返回 Envelop
+        result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         if result is None:
             envelop.status = STATUS_EXCEPTION
             envelop.payload = {**envelop.payload, "error": "Plugin returned None"}
@@ -421,13 +404,17 @@ async def route(envelop: Envelop, agent: Agent = None, timeout: float = 600.0) -
             return envelop
         return result
     except asyncio.TimeoutError:
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
         envelop.status = STATUS_TIMEOUT
         envelop.payload = {**envelop.payload, "error": f"Plugin timeout after {timeout}s"}
         return envelop
     except Exception as e:
         envelop.status = STATUS_EXCEPTION
         envelop.payload = {**envelop.payload, "error": f"Plugin execution error: {str(e)[:200]}"}
-        # 完整堆栈进 meta：payload 只有截断的 200 字，自改需要全貌
         _attach_traceback(envelop)
         return envelop
 
@@ -453,12 +440,18 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
     try:
         plugin = plugins.get(envelop.receiver)
         if plugin:
-            result = await asyncio.wait_for(plugin(envelop, agent), timeout=timeout)
+            _t = asyncio.ensure_future(plugin(envelop, agent))
+            try:
+                result = await asyncio.wait_for(asyncio.shield(_t), timeout=timeout)   # ← 加 result =
+            except asyncio.TimeoutError:
+                _t.cancel()
+                try:
+                    await asyncio.wait_for(_t, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                raise
         else:
-            result = Envelop(
-                payload={"error": f"Plugin not found: {envelop.receiver}"},
-                status=STATUS_MISSING,
-            )
+            result = Envelop(payload={"error": f"Plugin not found: {envelop.receiver}"}, status=STATUS_MISSING)
     except asyncio.TimeoutError:
         result = Envelop(
             payload={"error": f"Plugin timeout after {timeout}s"},
@@ -491,7 +484,7 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
 
     # 透传业务信息（不是异步标记）
     # 注意：只有下列键被透传；其他 meta 键（插件私货）不保证带到回调。
-    for key in ("remote_node", "remote_plugin", "callback_session_id", "user_id"):
+    for key in ("remote_node", "remote_plugin", "callback_session_id", "user_id", "token"):
         if envelop.meta.get(key):
             result.meta[key] = envelop.meta[key]
 
@@ -514,7 +507,12 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
 
 
 async def _http_callback(url: str, envelop: Envelop, timeout: float, agent: Agent = None):
-    """HTTP 回调：把结果 POST 到远程地址。"""
+    """HTTP 回调：把结果 POST 到远程地址。
+
+    core 只做投递，不签发 token：
+    - token 由调用方放在 envelop.meta["token"]，core 原样带上
+    - 没有 token 就不带，接收方决定是否放行
+    """
     import aiohttp
 
     if "://" not in url:
@@ -528,14 +526,14 @@ async def _http_callback(url: str, envelop: Envelop, timeout: float, agent: Agen
     if signature:
         envelop.meta["signature"] = signature
 
-    # ★ token 从 agent.config 读，不硬编码
-    token = _get_callback_token(agent)
+    # token 由调用方提供，core 不签发
+    token = envelop.meta.get("token", "")
 
     body = {
         "token": token,
         "payload": envelop.payload,
         "meta": envelop.meta,
-        "status": envelop.status,   # 新增：把协议级状态一起发送
+        "status": envelop.status,
     }
 
     try:

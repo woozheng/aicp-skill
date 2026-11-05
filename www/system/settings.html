@@ -92,6 +92,11 @@ input::placeholder,textarea::placeholder{color:#6b7280}
 .form-row input,.form-row select,.form-row textarea{flex:1;min-width:120px}
 .form-row .short{flex:0 0 120px;min-width:90px}
 
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 14px}
+.fg-item{display:flex;flex-direction:column;gap:5px}
+.fg-item label{font-size:11px;color:#9ca3af;font-weight:500}
+.fg-item input,.fg-item select{width:100%}
+
 .tabs{display:flex;gap:2px;margin-bottom:18px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.08)}
 .tab-btn{padding:8px 15px;border:none;background:transparent;cursor:pointer;font-size:13px;border-radius:0;white-space:nowrap;color:#9ca3af;transition:0.15s;font-family:inherit;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
 .tab-btn:hover{color:#e5e7eb}
@@ -218,73 +223,38 @@ input::placeholder,textarea::placeholder{color:#6b7280}
         <!-- ============ 配置 ============ -->
         <div id="settings" class="panel">
             <h2><span data-i18n="settings.title">⚙️ 系统设置</span></h2>
-            <div class="tabs">
-                <div class="tab-btn active" data-stab="engine" data-i18n="tab.engine">🌐 引擎</div>
-                <div class="tab-btn" data-stab="models" data-i18n="tab.models">🤖 模型</div>
-                <div class="tab-btn" data-stab="roles" data-i18n="tab.roles">🎯 角色</div>
-            </div>
-
             <div id="engineTab" class="tab-content active">
                 <div class="card">
                     <div class="card-title"><span class="left" data-i18n="engine.server">🌐 服务器</span></div>
-                    <div class="form-row">
-                        <label>host</label><input id="cfgHost" class="short" placeholder="0.0.0.0">
-                        <label>port</label><input id="cfgPort" type="number" class="short" placeholder="9000">
+                    <div class="form-grid">
+                        <div class="fg-item"><label>host</label><input id="cfgHost" placeholder="0.0.0.0"></div>
+                        <div class="fg-item"><label>port</label><input id="cfgPort" type="number" placeholder="9000"></div>
                     </div>
-                    <div class="form-row"><label>static_dir</label><input id="cfgStaticDir" placeholder="www"></div>
-                    <div class="form-row"><label>data_dir</label><input id="cfgDataDir" placeholder="data"></div>
-                    <div class="form-row"><label>plugins_dir</label><input id="cfgPluginsDir" placeholder="plugins"></div>
                 </div>
                 <div class="card">
-                    <div class="card-title"><span class="left" data-i18n="engine.ws">🔌 WebSocket</span></div>
-                    <div class="form-row"><label>external_url</label><input id="cfgWsUrl" placeholder="ws://host:9001/ws"></div>
+                    <div class="card-title"><span class="left" data-i18n="engine.ws">🔌 WebSocket / 📤 上传</span></div>
+                    <div class="form-grid">
+                        <div class="fg-item"><label>websocket</label><input id="cfgWsUrl" placeholder="ws://host:9001/ws"></div>
+                        <div class="fg-item"><label>upload</label><input id="cfgUploadUrl" placeholder="http://host:9002/upload"></div>
+                    </div>
                 </div>
                 <div class="card">
-                    <div class="card-title"><span class="left" data-i18n="engine.upload">📤 上传</span></div>
-                    <div class="form-row"><label>external_url</label><input id="cfgUploadUrl" placeholder="http://host:9002/upload"></div>
+                    <div class="card-title"><span class="left" data-i18n="engine.viz">📊 可视化</span></div>
+                    <div class="form-grid">
+                        <div class="fg-item"><label>enabled</label>
+                            <select id="cfgVizEnabled" class="short">
+                                <option value="false" data-i18n="common.off">关闭</option>
+                                <option value="true" data-i18n="common.on">开启</option>
+                            </select>
+                        </div>
+                        <div class="fg-item"><label>queue_size</label><input id="cfgVizQueue" type="number" min="1" placeholder="1000"></div>
+                        <div class="fg-item"><label>channel</label><input id="cfgVizChannel" readonly placeholder="pa_visualizer" style="opacity:.6"></div>
+                    </div>
+                    <p class="help-text" style="margin-top:10px" data-i18n="engine.vizHint">本页所有更改保存后均需重启生效。channel 为固定通道，不可修改。</p>
                 </div>
                 <button class="btn btn-primary" onclick="saveEngineConfig()" data-i18n="engine.save">💾 保存引擎配置</button>
             </div>
 
-            <div id="modelsTab" class="tab-content">
-                <div class="notice">
-                    <span class="ico">💡</span>
-                    <span data-i18n="models.notice">仅当应用需要调用 LLM 时才需配置模型；不使用 LLM 的应用可跳过此项。</span>
-                </div>
-
-                <div class="card">
-                    <div class="card-title"><span class="left" data-i18n="models.global">📋 全局参数</span></div>
-                    <div class="form-row">
-                        <label>max_retries</label><input id="cfgMaxRetries" type="number" class="short" min="1" max="10">
-                        <label>request_timeout</label><input id="cfgReqTimeout" type="number" class="short" min="10" max="600">
-                    </div>
-                    <div class="form-row">
-                        <label>stream_timeout</label><input id="cfgStreamTimeout" type="number" class="short" min="10" max="600">
-                        <label>max_concurrent</label><input id="cfgMaxConcurrent" type="number" class="short" min="1" max="50">
-                    </div>
-                    <button class="btn btn-primary btn-sm" onclick="saveGlobalParams()" data-i18n="models.saveGlobal">保存全局参数</button>
-                </div>
-
-                <div class="card">
-                    <div class="card-title">
-                        <span class="left">📦 Providers</span>
-                        <button class="btn btn-success btn-sm" onclick="showAddProviderModal()" data-i18n="models.addProvider">+ 新增 Provider</button>
-                    </div>
-                    <div id="providerList"></div>
-                </div>
-            </div>
-
-            <div id="rolesTab" class="tab-content">
-                <div class="card">
-                    <div class="card-title"><span class="left" data-i18n="roles.title">🎯 角色映射</span></div>
-                    <p class="help-text" style="margin-bottom:13px" data-i18n="roles.desc">先选 Provider，模型输入框会自动从该端点拉取候选（下拉可选，也可手输）；端点不支持 /models 时直接敲模型名即可。</p>
-                    <div id="roleList"></div>
-                    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
-                        <button class="btn btn-primary" onclick="saveRoles()" data-i18n="roles.save">💾 保存角色配置</button>
-                    </div>
-                </div>
-                <div class="card" id="rolesPreview" style="font-family:'SF Mono',Monaco,monospace;font-size:11px;white-space:pre-wrap;max-height:240px;overflow-y:auto;color:#818cf8;background:rgba(255,255,255,0.05)"></div>
-            </div>
         </div>
 
         <!-- ============ Token 管理 ============ -->
@@ -436,42 +406,6 @@ input::placeholder,textarea::placeholder{color:#6b7280}
     </main>
 </div>
 
-<!-- Provider Modal -->
-<div id="providerModal" class="modal">
-    <div class="modal-content">
-        <h3 id="providerModalTitle" data-i18n="modal.providerAdd">新增 Provider</h3>
-        <input type="hidden" id="editProviderName">
-        <div class="form-row"><label data-i18n="modal.name">名称</label><input id="providerNameInput" placeholder="如: openai" data-i18n-ph="modal.namePh"></div>
-        <div class="form-row"><label>base_url</label><input id="providerBaseUrl" placeholder="https://api.openai.com/v1"></div>
-        <div class="form-row"><label>api_key</label><input id="providerApiKey" placeholder="sk-... / ${ENV_VAR} / none" data-i18n-ph="modal.keyPh"></div>
-        <p class="help-text" style="margin-top:8px" data-i18n="modal.keyHint">支持：明文密钥(sk-xxx)、环境变量(${VAR})、无密钥(none)</p>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
-            <button class="btn" onclick="closeProviderModal()" data-i18n="common.cancel">取消</button>
-            <button class="btn btn-primary" onclick="saveProvider()" data-i18n="common.save">保存</button>
-        </div>
-    </div>
-</div>
-
-<!-- Model Pick Modal (for roles) -->
-<div id="modelPickModal" class="modal">
-    <div class="modal-content" style="width:560px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px">
-            <h3 id="pickModalTitle" data-i18n="pick.title" style="margin:0">选择模型</h3>
-            <div style="display:flex;gap:8px;align-items:center">
-                <button class="btn btn-primary" onclick="confirmPick()" data-i18n="pick.confirm">确认选择</button>
-                <button class="btn" onclick="closePickModal()" data-i18n-title="pick.close" title="Close" style="padding:6px 10px;line-height:1">✕</button>
-            </div>
-        </div>
-        <div class="form-row">
-            <input id="pickSearch" placeholder="搜索模型..." data-i18n-ph="pick.searchPh" oninput="filterPickList(this.value)" style="flex:1">
-            <button class="btn btn-sm" onclick="refreshPickList()" data-i18n="pick.refresh">🔄 刷新</button>
-        </div>
-        <div id="pickModelList" style="max-height:400px;overflow-y:auto;border:1px solid rgba(255,255,255,0.08);border-radius:7px;padding:4px"></div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
-            <span id="pickStatus" style="font-size:11px;color:#9ca3af"></span>
-        </div>
-    </div>
-</div>
 
 <script>
 
@@ -494,17 +428,10 @@ const I18N = {
     'common.on':'开启','common.off':'关闭','common.fail':'加载失败','common.empty':'暂无应用，让 AI 造一个吧',
     'common.edit':'编辑',
     'settings.title':'⚙️ 系统设置',
-    'tab.engine':'🌐 引擎','tab.models':'🤖 模型','tab.roles':'🎯 角色',
+    'tab.engine':'🌐 引擎',
     'engine.server':'🌐 服务器','engine.ws':'🔌 WebSocket','engine.upload':'📤 上传',
+    'engine.viz':'📊 可视化','engine.vizHint':'本页所有更改保存后均需重启生效。channel 为固定通道，不可修改。',
     'engine.save':'💾 保存引擎配置',
-    'models.notice':'仅当应用需要调用 LLM 时才需配置模型；不使用 LLM 的应用可跳过此项。',
-    'models.global':'📋 全局参数','models.saveGlobal':'保存全局参数','models.addProvider':'+ 新增 Provider','models.empty':'暂无 Provider',
-    'roles.title':'🎯 角色映射','roles.desc':'先选 Provider，模型输入框会自动从该端点拉取候选（下拉可选，也可手输）；端点不支持 /models 时直接敲模型名即可。',
-    'roles.default':'通用任务','roles.coding':'代码生成','roles.reasoning':'复杂推理','roles.image':'多模态','roles.save':'💾 保存角色配置',
-    'roles.modelPh':'选择或输入模型名','roles.pick':'📋 选择','roles.multimodal':'多模态理解','roles.imageGen':'图像生成',
-    'pick.title':'选择模型','pick.searchPh':'搜索模型...','pick.refresh':'🔄 刷新','pick.confirm':'确认选择','pick.close':'关闭',
-    'pick.needProvider':'请先选择 Provider','pick.needModel':'请选择一个模型','pick.noMatch':'无匹配模型',
-    'pick.loadFail':'加载失败','pick.refreshing':'刷新中...','pick.endpointCount':'端点返回 {n} 个模型','pick.onlyConfigured':'仅显示已配置模型',
     'mcp.title':'🔌 MCP 配置','mcp.endpoint':'📡 端点配置','mcp.tools':'🛠 工具列表','mcp.copy':'📋 复制配置','mcp.test':'⚡ 测试连接',
     'mcp.hint':'加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。',
     'mcp.toolDesc':'统一调用入口，通过 receiver / action / params 派发。',
@@ -513,10 +440,9 @@ const I18N = {
     'modal.name':'名称','modal.namePh':'如: openai','modal.modelId':'模型 ID','modal.roleNone':'— 不绑定角色 —',
     'modal.keyHint':'支持：明文密钥(sk-xxx)、环境变量(${VAR})、无密钥(none)','modal.keyPh':'sk-... / ${ENV_VAR} / none',
     'msg.pageCount':'个页面','msg.pages':'页','msg.delete':'删除','msg.deleteAppConfirm':'确定删除应用','msg.deleteFail':'删除失败: ',
-    'msg.savedEngine':'✅ 引擎配置已保存，重启后生效','msg.savedGlobal':'✅ 全局参数已保存','msg.savedRoles':'✅ 角色配置已保存',
-    'msg.savedProvider':'✅ Provider 已保存','msg.deletedProvider':'Provider 已删除','msg.addedModel':'模型已添加','msg.deletedModel':'模型已删除',
+    'msg.savedEngine':'✅ 引擎配置已保存，重启后生效',
     'msg.saveFail':'保存失败: ','msg.addFail':'添加失败: ','msg.enterModelId':'请输入模型 ID','msg.enterName':'请输入名称',
-    'msg.providerNotExist':'Provider 不存在','msg.modelNotExist':'模型不存在','msg.exists':'已存在',
+    'msg.exists':'已存在',
     'msg.testing':'测试中...','msg.connOk':'✓ 连接正常','msg.connAbnormal':'✗ 返回异常','msg.connFail':'✗ 连接失败',
     'msg.running':'运行中...','msg.requesting':'// 请求中...','msg.done':'✓ 完成','msg.failed':'✗ 失败',
     'msg.jsonParseFail':'✗ JSON 解析失败: ','msg.reqFail':'✗ 请求失败: ','msg.emptyResp':'// 空响应',
@@ -555,17 +481,10 @@ const I18N = {
     'common.on':'On','common.off':'Off','common.fail':'Failed to load','common.empty':'No apps yet — let AI build one',
     'common.edit':'Edit',
     'settings.title':'⚙️ System Settings',
-    'tab.engine':'🌐 Engine','tab.models':'🤖 Models','tab.roles':'🎯 Roles',
+    'tab.engine':'🌐 Engine',
     'engine.server':'🌐 Server','engine.ws':'🔌 WebSocket','engine.upload':'📤 Upload',
+    'engine.viz':'📊 Visualization','engine.vizHint':'All changes on this page take effect after restart. channel is fixed and cannot be modified.',
     'engine.save':'💾 Save Engine Config',
-    'models.notice':'Models are only required when an app needs to call an LLM. Apps without LLM usage can skip this.',
-    'models.global':'📋 Global Parameters','models.saveGlobal':'Save Global Parameters','models.addProvider':'+ Add Provider','models.empty':'No providers yet',
-    'roles.title':'🎯 Role Mapping','roles.desc':'Pick a Provider first; the model input fetches candidates from that endpoint (dropdown or free text). If the endpoint has no /models, just type the model name.',
-    'roles.default':'General','roles.coding':'Code generation','roles.reasoning':'Complex reasoning','roles.image':'Multimodal','roles.save':'💾 Save Roles',
-    'roles.modelPh':'Select or type a model name','roles.pick':'📋 Pick','roles.multimodal':'Multimodal understanding','roles.imageGen':'Image generation',
-    'pick.title':'Select model','pick.searchPh':'Search models...','pick.refresh':'🔄 Refresh','pick.confirm':'Confirm','pick.close':'Close',
-    'pick.needProvider':'Please select a Provider first','pick.needModel':'Please select a model','pick.noMatch':'No matching models',
-    'pick.loadFail':'Failed to load','pick.refreshing':'Refreshing...','pick.endpointCount':'{n} models from endpoint','pick.onlyConfigured':'Only configured models shown',
     'mcp.title':'🔌 MCP Configuration','mcp.endpoint':'📡 Endpoint','mcp.tools':'🛠 Tools','mcp.copy':'📋 Copy Config','mcp.test':'⚡ Test Connection',
     'mcp.hint':'Add to the MCP config of Cline / Cursor / Claude Desktop.',
     'mcp.toolDesc':'Unified call entry dispatched via receiver / action / params.',
@@ -574,10 +493,9 @@ const I18N = {
     'modal.name':'Name','modal.namePh':'e.g. openai','modal.modelId':'Model ID','modal.roleNone':'— No role bound —',
     'modal.keyHint':'Supported: plain key (sk-xxx), env var (${VAR}), or none','modal.keyPh':'sk-... / ${ENV_VAR} / none',
     'msg.pageCount':'pages','msg.pages':'pages','msg.delete':'Delete','msg.deleteAppConfirm':'Delete app','msg.deleteFail':'Delete failed: ',
-    'msg.savedEngine':'✅ Engine config saved, restart to apply','msg.savedGlobal':'✅ Global parameters saved','msg.savedRoles':'✅ Roles saved',
-    'msg.savedProvider':'✅ Provider saved','msg.deletedProvider':'Provider deleted','msg.addedModel':'Model added','msg.deletedModel':'Model deleted',
+    'msg.savedEngine':'✅ Engine config saved, restart to apply',
     'msg.saveFail':'Save failed: ','msg.addFail':'Add failed: ','msg.enterModelId':'Please enter model ID','msg.enterName':'Please enter name',
-    'msg.providerNotExist':'Provider does not exist','msg.modelNotExist':'Model does not exist','msg.exists':'already exists',
+    'msg.exists':'already exists',
     'msg.testing':'Testing...','msg.connOk':'✓ Connected','msg.connAbnormal':'✗ Abnormal response','msg.connFail':'✗ Connection failed',
     'msg.running':'Running...','msg.requesting':'// Requesting...','msg.done':'✓ Done','msg.failed':'✗ Failed',
     'msg.jsonParseFail':'✗ JSON parse failed: ','msg.reqFail':'✗ Request failed: ','msg.emptyResp':'// Empty response',
@@ -635,14 +553,7 @@ function applyLang(lang){
   if (lt) lt.textContent = lang === 'zh' ? 'EN' : '中';
   document.documentElement.lang = lang;
   document.title = I18N[lang]['page.title'] || document.title;
-  if (typeof refreshPickTitle === 'function') refreshPickTitle();
-  // 角色行的描述文本随语种刷新（不整表重绘，避免清掉用户正在输入的内容）
-  document.querySelectorAll('.role-desc-text').forEach(el => {
-    const key = el.dataset.descKey;
-    if (I18N[lang][key] !== undefined) el.textContent = I18N[lang][key];
-  });
   loadApps();
-  loadModels();
   // 反向同步：把本页当前语种通知外层控制台（iframe 内点语言按钮时，外层也要跟着变）
   notifyParentLang(lang);
 }
@@ -692,25 +603,6 @@ function switchPanel(name) {
     if (name === 'tokens') checkTokenAdmin();
 }
 
-document.querySelectorAll('#settings .tabs').forEach(function(tabsEl) {
-    tabsEl.addEventListener('click', function(e) {
-        const btn = e.target.closest('.tab-btn');
-        if (!btn) return;
-        switchSettingsTab(btn.dataset.stab);
-    });
-});
-
-function switchSettingsTab(name) {
-    document.querySelectorAll('#settings .tab-btn').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('#settings .tab-content').forEach(c => c.classList.remove('active'));
-    const btn = document.querySelector(`#settings .tab-btn[data-stab="${name}"]`);
-    if (btn) btn.classList.add('active');
-    const tab = document.getElementById(name + 'Tab');
-    if (tab) tab.classList.add('active');
-    if (name === 'models') loadModels();
-    if (name === 'engine') loadEngineConfig();
-    if (name === 'roles') loadRoles();
-}
 
 /* ============ 应用 ============ */
 const API_APPS = '/api/builtins/control/apps';
@@ -796,11 +688,12 @@ async function loadEngineConfig(){
         const config = resp.payload || resp.data || resp || {};
         document.getElementById('cfgHost').value = config.host || '0.0.0.0';
         document.getElementById('cfgPort').value = config.port || 9000;
-        document.getElementById('cfgStaticDir').value = config.static_dir || 'www';
-        document.getElementById('cfgDataDir').value = config.data_dir || 'data';
-        document.getElementById('cfgPluginsDir').value = config.plugins_dir || 'plugins';
         document.getElementById('cfgWsUrl').value = (config.websocket || {}).external_url || ('ws://' + location.hostname + ':9001/ws');
         document.getElementById('cfgUploadUrl').value = (config.upload || {}).external_url || ('http://' + location.hostname + ':9002/upload');
+        const viz = config.visualization || {};
+        document.getElementById('cfgVizEnabled').value = viz.enabled ? 'true' : 'false';
+        document.getElementById('cfgVizQueue').value = viz.queue_size || 1000;
+        document.getElementById('cfgVizChannel').value = viz.channel || 'pa_visualizer';
     } catch(e) { console.error(e); }
 }
 
@@ -808,11 +701,10 @@ async function saveEngineConfig(){
     const updates = {
         host: document.getElementById('cfgHost').value||'0.0.0.0',
         port: parseInt(document.getElementById('cfgPort').value)||9000,
-        static_dir: document.getElementById('cfgStaticDir').value||'www',
-        data_dir: document.getElementById('cfgDataDir').value||'data',
-        plugins_dir: document.getElementById('cfgPluginsDir').value||'plugins',
         websocket: {external_url: document.getElementById('cfgWsUrl').value},
-        upload: { external_url: document.getElementById('cfgUploadUrl').value }
+        upload: { external_url: document.getElementById('cfgUploadUrl').value },
+        'visualization.enabled': document.getElementById('cfgVizEnabled').value === 'true',
+        'visualization.queue_size': parseInt(document.getElementById('cfgVizQueue').value) || 1000
     };
     for (const [key, value] of Object.entries(updates)) {
         await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
@@ -820,384 +712,8 @@ async function saveEngineConfig(){
     alert(t('msg.savedEngine'));
 }
 
-/* ============ 模型 ============ */
-async function loadModels(){
-    try {
-        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
-        const resp = await res.json();
-        const config = resp.payload || resp.data || resp || {};
-        _rawConfig = JSON.parse(JSON.stringify(config));
-        _providers = config.models?.providers || {};
-        _roles = config.models?.roles || {};
-        _allModelIds = [];
-        document.getElementById('cfgMaxRetries').value = config.models?.max_retries || 3;
-        document.getElementById('cfgReqTimeout').value = config.models?.request_timeout || 60;
-        document.getElementById('cfgStreamTimeout').value = config.models?.stream_timeout || 300;
-        document.getElementById('cfgMaxConcurrent').value = config.models?.max_concurrent || 10;
-        for (const [pn, p] of Object.entries(_providers)) for (const m of (p.models || [])) _allModelIds.push(m.id);
 
-        let html = '';
-        for (const [pn, p] of Object.entries(_providers)) {
-            const baseUrl = p.base_url || '';
-            const apiKey = p.api_key || '';
-            const modelCount = (p.models || []).length;
-            const isNebula = pn.startsWith('nebula') || apiKey === 'none';
-            let keyBadge = `<span class="badge badge-none">—</span>`;
-            if (apiKey && apiKey !== 'none') {
-                if (/^\$\{\w+\}$/.test(apiKey)) keyBadge = `<span class="badge badge-env">${apiKey}</span>`;
-                else keyBadge = `<span class="badge badge-plain">${apiKey.substring(0,12)}***</span>`;
-            }
-            html += `<div class="provider-group">
-                <div class="provider-header">
-                    <div>
-                        <div style="font-weight:600;color:#e5e7eb;font-size:13px">${isNebula?'🕵️':'📦'} ${pn}</div>
-                        <div style="font-size:11px;color:#9ca3af;margin-top:2px">${baseUrl||'-'}</div>
-                        <div style="margin-top:5px;display:flex;gap:10px;align-items:center">
-                            🔑 ${keyBadge}
-                            <span class="badge badge-info">${modelCount} ${_lang === 'zh' ? '个模型' : 'models'}</span>
-                        </div>
-                    </div>
-                    <div style="display:flex;gap:5px">
-                        <button class="btn btn-sm" onclick="editProvider('${pn}')">${t('common.edit')}</button>
-                        <button class="btn btn-danger btn-sm" onclick="deleteProvider('${pn}')">${t('msg.delete')}</button>
-                    </div>
-                </div>
-            </div>`;
-        }
-        if (!Object.keys(_providers).length) html = `<div class="empty" style="padding:24px">${t('models.empty')}</div>`;
-        document.getElementById('providerList').innerHTML = html;
-        loadRoles();
-    } catch(e) { console.error(e); }
-}
 
-async function saveGlobalParams(){
-    const updates = {
-        'models.max_retries': parseInt(document.getElementById('cfgMaxRetries').value)||3,
-        'models.request_timeout': parseInt(document.getElementById('cfgReqTimeout').value)||60,
-        'models.stream_timeout': parseInt(document.getElementById('cfgStreamTimeout').value)||300,
-        'models.max_concurrent': parseInt(document.getElementById('cfgMaxConcurrent').value)||10,
-    };
-    for (const [key, value] of Object.entries(updates)) {
-        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key,value})});
-    }
-    alert(t('msg.savedGlobal'));
-}
-
-/* 模型编辑弹窗已移除 — 模型管理合并到角色页的 datalist 中 */
-
-function showAddProviderModal(){
-    document.getElementById('providerModalTitle').innerText = t('modal.providerAdd');
-    document.getElementById('editProviderName').value='';
-    document.getElementById('providerNameInput').value=''; document.getElementById('providerNameInput').disabled=false;
-    document.getElementById('providerBaseUrl').value=''; document.getElementById('providerApiKey').value='';
-    document.getElementById('providerModal').classList.add('show');
-}
-
-function editProvider(pn){
-    const rawProviders = _rawConfig.models?.providers || {};
-    const p = rawProviders[pn] || _providers[pn];
-    if (!p) return;
-    document.getElementById('providerModalTitle').innerText = t('modal.providerEdit');
-    document.getElementById('editProviderName').value=pn;
-    document.getElementById('providerNameInput').value=pn; document.getElementById('providerNameInput').disabled=true;
-    document.getElementById('providerBaseUrl').value=p.base_url||'';
-    document.getElementById('providerApiKey').value=p.api_key||'';
-    document.getElementById('providerModal').classList.add('show');
-}
-
-function closeProviderModal(){
-    document.getElementById('providerModal').classList.remove('show');
-    document.getElementById('providerNameInput').disabled=false;
-}
-
-async function saveProvider() {
-    const editName = document.getElementById('editProviderName').value;
-    const name = document.getElementById('providerNameInput').value.trim();
-    if (!name) return alert(t('msg.enterName'));
-    const baseUrl = document.getElementById('providerBaseUrl').value.trim();
-    const apiKey = document.getElementById('providerApiKey').value.trim();
-    try {
-        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
-        const data = await res.json();
-        const config = data.payload || data || {};
-        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
-        if (editName && editName !== name) { if (providers[editName]) { providers[name] = providers[editName]; delete providers[editName]; } }
-        if (!providers[name]) providers[name] = { models: [] };
-        providers[name].base_url = baseUrl;
-        providers[name].api_key = apiKey;
-        const saveRes = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
-        const saveData = await saveRes.json();
-        if (!saveData.ok && !saveData.payload?.ok) throw new Error(saveData.error || t('msg.saveFail'));
-        closeProviderModal();
-        _providers = {}; _rawConfig = {};
-        await loadModels();
-        alert(t('msg.savedProvider'));
-    } catch (e) { alert(t('msg.saveFail') + e.message); }
-}
-
-async function deleteProvider(pn) {
-    if (!confirm(`${t('msg.deleteProviderConfirm')} (${pn})`)) return;
-    try {
-        const res = await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'get'})});
-        const data = await res.json();
-        const config = data.payload || data || {};
-        let providers = JSON.parse(JSON.stringify(config.models?.providers || {}));
-        let roles = JSON.parse(JSON.stringify(config.models?.roles || {}));
-        if (!providers[pn]) return alert(`${t('msg.providerNotExist')}: ${pn}`);
-        const providerModels = (providers[pn]?.models || []).map(m => m.id);
-        for (const [role, entry] of Object.entries(roles)) {
-            const ref = typeof entry === 'string' ? entry : (entry?.model || '');
-            if (providerModels.includes(ref)) delete roles[role];
-        }
-        delete providers[pn];
-        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
-        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.providers',value:providers})});
-        _providers = {}; _rawConfig = {}; _allModelIds = [];
-        await loadModels();
-        alert(`✅ ${t('msg.deletedProvider')}: ${pn}`);
-    } catch (e) { alert(t('msg.deleteFail') + e.message); }
-}
-
-/* ============ 角色 ============ */
-const ROLE_DEFS = [
-    { key: 'default', label: 'default', descKey: 'roles.default' },
-    { key: 'coding', label: 'coding', descKey: 'roles.coding' },
-    { key: 'reasoning', label: 'reasoning', descKey: 'roles.reasoning' },
-    { key: 'image', label: 'image', descKey: 'roles.image' },
-    { key: 'multimodal', label: 'multimodal', descKey: 'roles.multimodal' },
-];
-
-let _providerModels = {};  // { providerName: [modelIds] }
-let _providerFetching = {}; // { providerName: true/false }
-
-function _parseRoleRef(ref) {
-    // 支持 "provider/model" 或裸 modelId
-    if (!ref) return { provider: '', model: '' };
-    const idx = ref.indexOf('/');
-    if (idx > 0) return { provider: ref.slice(0, idx), model: ref.slice(idx + 1) };
-    // 裸 id：在所有 provider 里找第一个匹配的
-    for (const pn in _providers) {
-        if ((_providers[pn].models || []).some(m => m.id === ref)) return { provider: pn, model: ref };
-    }
-    return { provider: '', model: ref };
-}
-
-async function _fetchProviderModels(pn) {
-    if (_providerModels[pn]) return _providerModels[pn];
-    if (_providerFetching[pn]) return [];
-    _providerFetching[pn] = true;
-    try {
-        const res = await fetch(API_MODEL_PICKER, {
-            method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({action:'endpoint_models', provider: pn})
-        });
-        const d = await res.json();
-        const list = (d.models || d.data?.models || []).map(m => m.id || m).filter(Boolean);
-        _providerModels[pn] = list;
-        _updateDatalists(pn);
-        return list;
-    } catch(e) { _providerModels[pn] = []; return []; }
-    finally { _providerFetching[pn] = false; }
-}
-
-function _updateDatalists(pn) {
-    const opts = (_providerModels[pn] || []).map(id => `<option value="${id}">`).join('');
-    document.querySelectorAll(`.role-model-list[data-provider="${pn}"]`).forEach(dl => { dl.innerHTML = opts; });
-    // 已配置模型也要混进去（防止端点拉不到但本地有配置）
-    const configured = ((_providers[pn]||{}).models || []).map(m => m.id);
-    const set = new Set([...(_providerModels[pn] || []), ...configured]);
-    const merged = [...set].map(id => `<option value="${id}">`).join('');
-    document.querySelectorAll(`.role-model-list[data-provider="${pn}"]`).forEach(dl => { dl.innerHTML = merged; });
-}
-
-function renderRoles() {
-    const list = document.getElementById('roleList');
-    if (!list) return;
-    const providerNames = Object.keys(_providers);
-    let html = '';
-    for (const r of ROLE_DEFS) {
-        const entry = _roles[r.key] || {};
-        const ref = typeof entry === 'string' ? entry : (entry.model || '');
-        const { provider, model } = _parseRoleRef(ref);
-        // 参数绑角色：直接读角色自身配置，缺失则留空（不伪造默认值）
-        const tokens = (typeof entry === 'object' && entry.max_tokens != null) ? entry.max_tokens : '';
-        const temp = (typeof entry === 'object' && entry.temperature != null) ? entry.temperature : '';
-        const providerOpts = providerNames.map(pn =>
-            `<option value="${pn}" ${provider===pn?'selected':''}>${pn}</option>`
-        ).join('');
-        html += `<div class="form-row" style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.06)">
-            <label style="min-width:110px;font-weight:600;color:#e5e7eb">${r.label} <span class="role-desc-text" data-desc-key="${r.descKey}" style="font-weight:400;font-size:11px;color:#9ca3af">${t(r.descKey)}</span></label>
-            <select class="role-provider-sel short" data-role="${r.key}" onchange="onRoleProviderChange('${r.key}')" style="flex:0 0 140px">
-                <option value="">--</option>
-                ${providerOpts}
-            </select>
-            <input list="role-models-${r.key}" class="role-model-input" data-role="${r.key}" data-i18n-ph="roles.modelPh" placeholder="${t('roles.modelPh')}" style="flex:1;min-width:140px" value="${model}">
-            <datalist id="role-models-${r.key}" class="role-model-list" data-provider="${provider}"></datalist>
-            <button class="btn btn-sm" data-i18n="roles.pick" onclick="pickModelForRole('${r.key}')" style="flex-shrink:0">${t('roles.pick')}</button>
-            <input type="number" class="role-tokens short" data-role="${r.key}" placeholder="tokens" value="${tokens}" title="max_tokens">
-            <input type="number" step="0.1" class="role-temp short" data-role="${r.key}" placeholder="temp" value="${temp}" title="temperature">
-        </div>`;
-    }
-    list.innerHTML = html;
-    // 预填充已选 provider 的 datalist
-    for (const r of ROLE_DEFS) {
-        const sel = document.querySelector(`.role-provider-sel[data-role="${r.key}"]`);
-        if (sel && sel.value) _fetchProviderModels(sel.value);
-    }
-    _updateRolesPreview();
-}
-
-function onRoleProviderChange(roleKey) {
-    const sel = document.querySelector(`.role-provider-sel[data-role="${roleKey}"]`);
-    const dl = document.getElementById(`role-models-${roleKey}`);
-    const pn = sel.value;
-    if (dl) dl.dataset.provider = pn;
-    if (pn) {
-        _fetchProviderModels(pn);
-    } else if (dl) {
-        dl.innerHTML = '';
-    }
-    _updateRolesPreview();
-}
-
-function _collectRoles() {
-    const roles = {};
-    for (const r of ROLE_DEFS) {
-        const pn = document.querySelector(`.role-provider-sel[data-role="${r.key}"]`)?.value || '';
-        const mid = document.querySelector(`.role-model-input[data-role="${r.key}"]`)?.value?.trim() || '';
-        const tk = document.querySelector(`.role-tokens[data-role="${r.key}"]`)?.value?.trim() || '';
-        const tp = document.querySelector(`.role-temp[data-role="${r.key}"]`)?.value?.trim() || '';
-        if (!pn || !mid) continue;
-        const entry = { model: `${pn}/${mid}` };
-        if (tk !== '') entry.max_tokens = parseInt(tk);
-        if (tp !== '') entry.temperature = parseFloat(tp);
-        roles[r.key] = entry;
-    }
-    return roles;
-}
-
-function _updateRolesPreview() {
-    const preview = document.getElementById('rolesPreview');
-    if (!preview) return;
-    const roles = _collectRoles();
-    preview.textContent = JSON.stringify(roles, null, 2) || '{}';
-}
-
-function loadRoles(){
-    // 兼容旧数据（裸 modelId），首次渲染时会自动解析
-    renderRoles();
-}
-
-/* ============ Pick 弹窗 ============ */
-let _pickRoleKey = '';
-let _pickAllModels = [];
-let _pickSelected = '';
-
-async function pickModelForRole(roleKey) {
-    const pn = document.querySelector(`.role-provider-sel[data-role="${roleKey}"]`)?.value || '';
-    if (!pn) { alert(t('pick.needProvider')); return; }
-    _pickRoleKey = roleKey;
-    _pickSelected = document.querySelector(`.role-model-input[data-role="${roleKey}"]`)?.value?.trim() || '';
-    refreshPickTitle();
-    document.getElementById('pickSearch').value = '';
-    document.getElementById('pickStatus').textContent = t('common.loading');
-    document.getElementById('modelPickModal').classList.add('show');
-    await _loadPickList(pn, false);
-}
-
-async function refreshPickList() {
-    const pn = document.querySelector(`.role-provider-sel[data-role="${_pickRoleKey}"]`)?.value || '';
-    if (!pn) return;
-    document.getElementById('pickStatus').textContent = t('pick.refreshing');
-    _providerModels[pn] = null; // 清缓存强制重拉
-    await _loadPickList(pn, true);
-}
-
-async function _loadPickList(pn, force) {
-    try {
-        const res = await fetch(API_MODEL_PICKER, {
-            method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({action:'endpoint_models', provider: pn, force: !!force})
-        });
-        const d = await res.json();
-        const list = (d.models || d.data?.models || []).map(m => m.id || m).filter(Boolean);
-        // 混进已配置模型
-        const configured = ((_providers[pn]||{}).models || []).map(m => m.id);
-        const set = new Set([...list, ...configured]);
-        _pickAllModels = [...set];
-        _providerModels[pn] = _pickAllModels; // 同步缓存
-        _updateDatalists(pn);
-        filterPickList('');
-        const src = d.source === 'endpoint' ? t('pick.endpointCount').replace('{n}', _pickAllModels.length) : (d.note || t('pick.onlyConfigured'));
-        document.getElementById('pickStatus').textContent = src;
-    } catch(e) {
-        _pickAllModels = [];
-        document.getElementById('pickModelList').innerHTML = `<div class="empty">${t('pick.loadFail')}: ${escapeHtml(e.message)}</div>`;
-        document.getElementById('pickStatus').textContent = t('pick.loadFail');
-    }
-}
-
-function filterPickList(q) {
-    const box = document.getElementById('pickModelList');
-    if (!box) return;
-    const query = (q || '').toLowerCase().trim();
-    const filtered = query
-        ? _pickAllModels.filter(id => id.toLowerCase().includes(query))
-        : _pickAllModels;
-    if (!filtered.length) {
-        box.innerHTML = `<div class="empty" style="padding:24px">${t('pick.noMatch')}</div>`;
-        return;
-    }
-    box.innerHTML = filtered.map(id => {
-        const selected = id === _pickSelected ? 'background:rgba(99,102,241,0.12);border-color:#818cf8' : '';
-        return `<div onclick="selectPickItem('${id}')" style="padding:8px 12px;cursor:pointer;border-radius:6px;font-size:12px;font-family:'SF Mono',Monaco,monospace;color:#e5e7eb;margin-bottom:2px;border:1px solid transparent;transition:.15s;${selected}" data-id="${id}">${escapeHtml(id)}</div>`;
-    }).join('');
-}
-
-function selectPickItem(id) {
-    _pickSelected = id;
-    document.querySelectorAll('#pickModelList > div').forEach(el => {
-        const isSel = el.dataset.id === id;
-        el.style.background = isSel ? 'rgba(99,102,241,0.12)' : '';
-        el.style.borderColor = isSel ? '#6366f1' : 'transparent';
-    });
-}
-
-function confirmPick() {
-    if (!_pickSelected) { alert(t('pick.needModel')); return; }
-    const input = document.querySelector(`.role-model-input[data-role="${_pickRoleKey}"]`);
-    if (input) input.value = _pickSelected;
-    closePickModal();
-    _updateRolesPreview();
-}
-
-function refreshPickTitle(){
-    try {
-        if (!_pickRoleKey) return;
-        const pn = document.querySelector(`.role-provider-sel[data-role='${_pickRoleKey}']`)?.value || '';
-        const el = document.getElementById('pickModalTitle');
-        if (el) el.textContent = `${t('pick.title')}${pn ? ' · ' + pn : ''}`;
-    } catch(e){}
-}
-
-function closePickModal() {
-    document.getElementById('modelPickModal').classList.remove('show');
-    _pickRoleKey = '';
-    _pickAllModels = [];
-    _pickSelected = '';
-}
-
-async function saveRoles(){
-    const roles = _collectRoles();
-    // 只写 models.roles —— 参数绑角色，不再往 provider.models 里塞条目
-    try {
-        await fetch(API_SETTINGS, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set',key:'models.roles',value:roles})});
-        _roles = roles;
-        _providerModels = {}; // 清缓存
-        loadModels();
-        alert(t('msg.savedRoles'));
-    } catch (e) { alert(t('msg.saveFail') + e.message); }
-}
 
 /* ============ Token 管理 ============ */
 const API_TOKEN_MGR = '/api/os/_token_manager';

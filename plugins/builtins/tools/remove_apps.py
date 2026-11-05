@@ -1,4 +1,4 @@
-"""remove_tool — 删除已有工具/应用（完全独立）"""
+"""remove_apps — 删除已有工具/应用（完全独立）"""
 
 import json
 import re
@@ -56,7 +56,7 @@ async def _find_project(agent, target: str) -> Optional[str]:
     direct_path = Path(f"plugins/applications/{target}")
     if direct_path.exists() and direct_path.is_dir():
         return target
-    
+
     # 去掉 _api 后缀再检查
     clean_target = re.sub(r'_api$', '', target)
     clean_target = re.sub(r'\.py$', '', clean_target)
@@ -178,10 +178,10 @@ async def execute(envelop, agent):
     """删除已有工具（删除整个项目）"""
     # ★★★ 兼容两种传参方式 ★★★
     params = envelop.payload.get("params", {})
-    
+
     if not params:
         params = {k: v for k, v in envelop.payload.items() if k != "action"}
-    
+
     target = params.get("target", "")
 
     if not target:
@@ -266,7 +266,7 @@ async def execute(envelop, agent):
 
 def help():
     return {
-        "route": "builtins/tools/remove_tool",
+        "route": "builtins/tools/remove_apps",
         "description": (
             "删除整个项目：后端目录 plugins/applications/{project}、前端 www/apps/{project}、"
             "旧版 data/www/{project}、应用数据目录 data/{project}，并清理数据里登记过的"

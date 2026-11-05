@@ -1,21 +1,55 @@
 """文件接收插件 — 端口 = gateway + 2，接收 multipart 上传
 兼容：拆片机（只传 file）和标准 AICP（file + session_id + callback）
 
-v2.1 改造：
+v2.2 改造：
 - 上传接口接入 os/_auth 鉴权（local/hybrid/token 三档）
 - 来源判断查 X-Forwarded-For，反向代理后不误判本机
 - 文件名清洗防路径穿越
 - CORS 允许 Authorization 头
+- ★ watch 注册收口到 START 唯一入口，修复 start/restart 双触发导致反复重载
+- ★ _stop 的 kill_port_holders 加守卫，避免热重载期间杀到自己写坏文件
+- ★ 上传落盘改「临时文件 + 原子 rename」，防中断留下半截文件
+- ★ restart 改为 stop→START，不再调 restart_service_and_watch
 """
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 from aiohttp import web
 import core
 
+import importlib
+import sys
+
+# ★ 延迟导入 _service_restart：加载器按文件名字母序遍历 plugins/**/*.py，
+#   os/_service_restart.py 排在本文件之后（s > f），模块级 import 会因
+#   「还没加载到」抛 ModuleNotFoundError → 引擎起不来。只在要用时 import。
+
+
+def _sr():
+    """延迟取得 _service_restart 模块（见上方注释：不能模块级 import）。"""
+    import importlib
+    return importlib.import_module("plugin_os__service_restart")
+
 
 DEFAULT_UPLOAD_DIR = "data/uploads"
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024   # 50MB
+
+# 单文件上传上限（50MB）。
+# 与网关 os/_gateway.py 的 DEFAULT_MAX_UPLOAD_SIZE 是同一个值，
+# 两边都从 aicp.yaml 的 upload.max_size 读取（缺省 50MB），
+# 这样改一处配置即可，不会再出现"前端宣称的上限和接收器不一致"。
+DEFAULT_MAX_UPLOAD_SIZE = 50 * 1024 * 1024   # 50MB
+
+
+def _resolve_max_upload_size(agent) -> int:
+    """读取上传大小上限：aicp.yaml upload.max_size，缺省 50MB。"""
+    cfg = agent.config.get("upload", {}) if agent else {}
+    val = cfg.get("max_size", DEFAULT_MAX_UPLOAD_SIZE)
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        val = DEFAULT_MAX_UPLOAD_SIZE
+    return val if val > 0 else DEFAULT_MAX_UPLOAD_SIZE
 
 
 def _get_upload_dir(agent) -> str:
@@ -82,11 +116,30 @@ def _is_local_request(request) -> bool:
 
 
 def _is_same_origin(request) -> bool:
+    """判断 Origin 是否属于本服务所在的“站点”。
+
+    上传接收器（9002）与网关（9000）是同一台机器上的兄弟服务，
+    页面 Origin 必然带网关端口（如 http://192.168.1.5:9000），
+    而 request.host 是接收器自己的端口（192.168.1.5:9002）。
+    只比端口会把合法的同站请求误判成跨站 → 401。
+
+    因此这里只比“主机名 + 协议”，不要求端口相同。
+    """
     origin = request.headers.get("Origin", "")
     if not origin:
         return False
-    host = request.host
-    return origin in (f"http://{host}", f"https://{host}")
+    try:
+        o = urlsplit(origin)
+    except ValueError:
+        return False
+    if not o.hostname:
+        return False
+    # request.host 形如 "192.168.1.5:9002"
+    host = request.host.split(":")[0]
+    if o.hostname != host:
+        return False
+    # 协议需与本服务一致（http 上来的 Origin 不用 https）
+    return o.scheme in ("http", "https")
 
 
 async def _check_auth(request, agent) -> tuple[bool, str, str]:
@@ -157,6 +210,38 @@ async def execute(envelop, agent):
     receiver = getattr(agent, "file_receiver", None)
     action = envelop.payload.get("action", "status")
 
+    if action == "START":
+        host = envelop.payload.get("host", getattr(agent, "_file_host", "0.0.0.0"))
+        port = int(envelop.payload.get("port", getattr(agent, "_file_port", 9002)))
+        if getattr(agent, "_file_runner", None) is not None:
+            await _stop_file_receiver(agent)
+        await start_file_receiver(agent, host=host, port=port)
+        # ★ watch 的唯一注册点：start / restart 都汇聚到这里，
+        #   避免在 start_file_receiver 里再注册一次导致双触发。
+        _sr().ensure_hot_reload_watch(
+            agent, "os/_file_receiver", port=port, host=host,
+        )
+        envelop.payload = {"ok": True, "status": "listening", "host": host, "port": port}
+        return envelop
+
+    if action == "STOP":
+        await _stop_file_receiver(agent)
+        envelop.payload = {"ok": True, "status": "stopped"}
+        return envelop
+
+    if action == "restart":
+        # ★ 优雅重启：先显式停掉，再走 START（START 内部注册 watch）。
+        #   不再调用 restart_service_and_watch，避免 watch 双注册。
+        host = getattr(agent, "_file_host", "0.0.0.0")
+        port = int(getattr(agent, "_file_port", 9002))
+        await _stop_file_receiver(agent)
+        await start_file_receiver(agent, host=host, port=port)
+        _sr().ensure_hot_reload_watch(
+            agent, "os/_file_receiver", port=port, host=host,
+        )
+        envelop.payload = {"ok": True, "status": "restarted", "port": port}
+        return envelop
+
     if action == "status":
         envelop.payload = receiver.get_status() if receiver else {"error": "not started"}
         return envelop
@@ -203,6 +288,7 @@ async def handle_upload(request):
         return web.json_response({"success": False, "error": err}, status=401)
 
     upload_dir = _get_upload_dir(agent)
+    max_upload_size = _resolve_max_upload_size(agent)
 
     reader = await request.multipart()
     file_path = None
@@ -229,23 +315,27 @@ async def handle_upload(request):
             os.makedirs(task_dir, exist_ok=True)
             file_path = os.path.join(task_dir, safe_name)
 
-            with open(file_path, "wb") as f:
+            # ★ 先写临时文件，完整写完后再 os.replace 原子落盘。
+            #   即使热重载 / 进程中断打断，也不会在目标路径留下半截坏文件。
+            tmp_path = file_path + ".part"
+            with open(tmp_path, "wb") as f:
                 while True:
                     chunk = await part.read_chunk(8192)
                     if not chunk:
                         break
                     size_accum += len(chunk)
-                    if size_accum > MAX_UPLOAD_SIZE:
+                    if size_accum > max_upload_size:
                         f.close()
                         try:
-                            os.unlink(file_path)
+                            os.unlink(tmp_path)
                         except Exception:
                             pass
                         return web.json_response(
-                            {"success": False, "error": f"file too large (> {MAX_UPLOAD_SIZE // (1024*1024)}MB)"},
+                            {"success": False, "error": f"file too large (> {max_upload_size // (1024*1024)}MB)"},
                             status=413,
                         )
                     f.write(chunk)
+            os.replace(tmp_path, file_path)
 
         elif part.name == "session_id":
             session_id = (await part.text()).strip()
@@ -298,26 +388,54 @@ async def handle_upload(request):
     })
 
 
+async def _stop_file_receiver(agent):
+    """停掉文件接收器，释放端口。"""
+    runner = getattr(agent, "_file_runner", None)
+    if runner:
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
+        agent._file_runner = None
+    # ★ 只有 runner 已彻底清空才兜底杀端口；否则会杀到自己，
+    #   热重载期间打断 import 会写坏文件。
+    if getattr(agent, "_file_runner", None) is None:
+        try:
+            port = int(getattr(agent, "_file_port", 9002))
+            await _sr().kill_port_holders(port)
+        except Exception:
+            pass
+
+
 async def start_file_receiver(agent, host="0.0.0.0", port=9002):
     upload_dir = _get_upload_dir(agent)
     receiver = FileReceiver(upload_dir)
     agent.file_receiver = receiver
     agent.file_receiver_port = port
 
-    app = web.Application(client_max_size=MAX_UPLOAD_SIZE)
+    max_upload_size = _resolve_max_upload_size(agent)
+    app = web.Application(client_max_size=max_upload_size)
     app["agent"] = agent
 
     @web.middleware
     async def cors(request, handler):
+        # ★ 回显真实 Origin，而不是 "*"：
+        #   浏览器带 cookie 的跨端口请求不接受 "*"，
+        #   回显 Origin 才能让 cookie / Authorization 正常随请求发出。
+        origin = request.headers.get("Origin", "")
+        allow_origin = origin if origin else "*"
         if request.method == "OPTIONS":
             return web.Response(status=200, headers={
-                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Origin": allow_origin,
                 "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                 # ★ 允许 Authorization，前端带 token 预检才能过
                 "Access-Control-Allow-Headers": "Content-Type, Authorization, X-AICP-Token",
+                "Access-Control-Allow-Credentials": "true",
+                "Vary": "Origin",
             })
         resp = await handler(request)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Origin"] = allow_origin
+        resp.headers["Vary"] = "Origin"
         return resp
 
     app.middlewares.append(cors)
@@ -328,4 +446,11 @@ async def start_file_receiver(agent, host="0.0.0.0", port=9002):
     await runner.setup()
     await web.TCPSite(runner, host, port).start()
 
+    # ★ runner / 端口记到 agent 上，否则没法优雅重启（端口会被占死）
+    agent._file_runner = runner
+    agent._file_host = host
+    agent._file_port = port
+    # ★ 注意：watch 的注册统一收口到 execute() 的 START 分支，
+    #   这里不再重复注册，否则 start + restart 会双触发，
+    #   导致模块反复重载、文件被反复重写（曾把文件写坏的根因之一）。
     return runner

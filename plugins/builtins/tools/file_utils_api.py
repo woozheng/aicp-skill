@@ -8,7 +8,7 @@ from datetime import datetime
 
 # read_file 超过此大小时，不返回尾部预览，改返回 code_structure（结构地图）
 # 设为 0 表示禁用（永远返回尾部预览）
-READ_FILE_STRUCTURE_THRESHOLD = 100 * 1024
+READ_FILE_STRUCTURE_THRESHOLD = 50 * 1024
 # ============================================================
 # 基准目录 —— 相对路径统一基于此解析（可用环境变量覆盖）
 # ============================================================
@@ -16,6 +16,31 @@ READ_FILE_STRUCTURE_THRESHOLD = 100 * 1024
 WORKSPACE_ROOT = Path(
     os.environ.get("AICP_WORKSPACE_ROOT", os.getcwd())
 ).resolve()
+
+
+def _rel_path(p) -> str:
+    """返回相对 WORKSPACE_ROOT 的路径（正斜杠），跨环境/跨机器可用。
+
+    不在 WORKSPACE_ROOT 内时（如绝对路径访问外部目录）回落到绝对路径。
+    """
+    try:
+        rel = Path(p).resolve().relative_to(WORKSPACE_ROOT)
+    except (ValueError, OSError):
+        return str(p).replace("\\", "/")
+    text = rel.as_posix()
+    return text if text else "."
+
+
+def _path_kind(p) -> str:
+    """标注路径展示形态：仓库内 relative / 仓库外 absolute。
+
+    与 _rel_path 判定一致——仓库内输出相对路径，仓库外输出绝对路径。
+    """
+    try:
+        Path(p).resolve().relative_to(WORKSPACE_ROOT)
+    except (ValueError, OSError):
+        return "absolute"
+    return "relative"
 
 # ============================================================
 # 黑名单配置 —— 只禁止系统目录，其他全放行
@@ -132,172 +157,16 @@ def _resolve_path(path_str: str) -> Path:
 
 
 # ============================================================
-# apply_patch — 应用 unified diff 补丁（按行号锚定）
+# 安全写盘辅助 —— 写前备份（改坏可秒回）
 # ============================================================
 
-_HUNK_HEADER_RE = re.compile(
-    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
-)
+def _write_with_backup(p: Path, new_text: str, old_text: str) -> None:
+    """直接写盘，不生成 .bak 备份。
 
-
-def _parse_patch(patch: str):
-    """解析 unified diff，返回 hunks 列表。
-
-    每个 hunk: {
-        "old_start": int, "old_count": int,
-        "new_start": int, "new_count": int,
-        "lines": [("context"|"remove"|"add", text, is_split_artifact), ...]
-    }
+    保留 old_text 参数仅为兼容现有调用（_write_file_sync / _edit_file_sync /
+    _delete_lines_sync 都传了），函数签名不变，调用方无需改。
     """
-    patch_lines = patch.split("\n")
-    hunks = []
-    current = None
-    current_header = None
-
-    def _push():
-        nonlocal current, current_header
-        if current is None:
-            return
-        # 删除末尾由 split 产生的伪影空 context（不是文件真实空行）
-        # 真实空行在 diff 里写作 " "（一个空格），split 后 line[1:] == ""，
-        # 但 is_split_artifact 为 False（因为 line != ""）
-        while (
-            current
-            and current[-1][0] == "context"
-            and current[-1][2] is True
-        ):
-            current.pop()
-        if current:
-            old_lines = [t for typ, t, _ in current if typ in ("context", "remove")]
-            new_lines = [t for typ, t, _ in current if typ in ("context", "add")]
-            hunks.append({
-                "old_start": current_header[0],
-                "old_count": current_header[1],
-                "new_start": current_header[2],
-                "new_count": current_header[3],
-                "lines": current,
-                "_old_lines_count": len(old_lines),
-                "_new_lines_count": len(new_lines),
-            })
-        current = None
-        current_header = None
-
-    for line in patch_lines:
-        if line.startswith("---") or line.startswith("+++"):
-            continue
-
-        m = _HUNK_HEADER_RE.match(line)
-        if m:
-            _push()
-            old_start = int(m.group(1))
-            old_count = int(m.group(2)) if m.group(2) is not None else 1
-            new_start = int(m.group(3))
-            new_count = int(m.group(4)) if m.group(4) is not None else 1
-            current = []
-            current_header = (old_start, old_count, new_start, new_count)
-            continue
-
-        if current is None:
-            continue
-
-        if line.startswith(" "):
-            current.append(("context", line[1:], False))
-        elif line.startswith("-"):
-            current.append(("remove", line[1:], False))
-        elif line.startswith("+"):
-            current.append(("add", line[1:], False))
-        elif line == "":
-            # split 产生的伪影空行（patch 末尾换行导致）
-            current.append(("context", "", True))
-
-    _push()
-    return hunks
-
-
-def _apply_patch(content: str, patch: str) -> dict:
-    """应用 unified diff 补丁，返回 {ok, result, error}。
-
-    按 hunk 头的行号定位，并维护 offset 处理多 hunk 偏移。
-    """
-    try:
-        hunks = _parse_patch(patch)
-    except Exception as e:
-        return {"ok": False, "error": f"patch 解析失败: {e}"}
-
-    if len(hunks) == 0:
-        return {"ok": False, "error": "没有找到有效的 hunk"}
-
-    # 按文件行应用：content 按 \n 切分（保留结构），最后再拼回
-    # 注意：split("\n") 会丢失行尾信息，但 unified diff 本身也是按行操作的，
-    # 这里以"行列表"为单位操作，最后用 \n 拼接，末尾是否换行取决于原内容。
-    file_lines = content.split("\n")
-    offset = 0  # 已应用 hunk 造成的行号偏移
-
-    for h, hunk in enumerate(hunks):
-        # 行数一致性校验
-        if hunk["_old_lines_count"] != hunk["old_count"]:
-            return {
-                "ok": False,
-                "error": (
-                    f"hunk #{h + 1} 行数不一致：头声明 -{hunk['old_count']} 行，"
-                    f"实际 {hunk['_old_lines_count']} 行"
-                ),
-            }
-        if hunk["_new_lines_count"] != hunk["new_count"]:
-            return {
-                "ok": False,
-                "error": (
-                    f"hunk #{h + 1} 行数不一致：头声明 +{hunk['new_count']} 行，"
-                    f"实际 {hunk['_new_lines_count']} 行"
-                ),
-            }
-
-        # 计算目标区间（old_start 是 1-based）
-        start_idx = hunk["old_start"] - 1 + offset
-        if start_idx < 0:
-            start_idx = 0
-        end_idx = start_idx + hunk["old_count"]
-
-        if end_idx > len(file_lines):
-            return {
-                "ok": False,
-                "error": (
-                    f"hunk #{h + 1} 超出文件范围：需要行 {start_idx + 1}-{end_idx}，"
-                    f"文件共 {len(file_lines)} 行"
-                ),
-            }
-
-        # 校验原文匹配
-        expected_old = [
-            t for typ, t, _ in hunk["lines"] if typ in ("context", "remove")
-        ]
-        actual_old = file_lines[start_idx:end_idx]
-        if expected_old != actual_old:
-            # 给出第一个不匹配位置
-            mismatch_at = None
-            for i, (exp, act) in enumerate(zip(expected_old, actual_old)):
-                if exp != act:
-                    mismatch_at = i
-                    break
-            detail = ""
-            if mismatch_at is not None:
-                detail = (
-                    f"（第 {mismatch_at + 1} 行期望 {expected_old[mismatch_at]!r}，"
-                    f"实际 {actual_old[mismatch_at]!r}）"
-                )
-            return {
-                "ok": False,
-                "error": f"hunk #{h + 1} 内容不匹配{detail}",
-            }
-
-        # 构造新行
-        new_block = [
-            t for typ, t, _ in hunk["lines"] if typ in ("context", "add")
-        ]
-        file_lines[start_idx:end_idx] = new_block
-        offset += len(new_block) - len(actual_old)
-
-    return {"ok": True, "result": "\n".join(file_lines)}
+    p.write_text(new_text, encoding="utf-8")
 
 
 # ============================================================
@@ -899,7 +768,7 @@ def _read_file_sync(path_str):
             "hint": (
                 f"文件超过 {READ_FILE_STRUCTURE_THRESHOLD // 1024}KiB"
                 f"（{round(file_size/1024,1)}KiB），已自动返回 code_structure 结构地图，"
-                f"不返回全文。用 read_file_lines(path, start_line, end_line) 读关键定义。"
+                f"不返回全文。用 read_file_lines(path, start_line, end_line) 读关键定义。或者自行用code_runner写代码读取组合片段"
                 f"如需强制读尾部预览，把 READ_FILE_STRUCTURE_THRESHOLD 设为 0 或调大阈值。"
             ),
         }
@@ -1023,7 +892,7 @@ def _read_file_lines_sync(path_str, start_line=None, end_line=None, with_line_nu
 def _write_file_sync(path_str, content):
     p = _resolve_path(path_str)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
+    _write_with_backup(p, content, p.read_text(encoding="utf-8") if p.exists() else "")
     return p
 
 
@@ -1053,7 +922,7 @@ def _edit_file_sync(path_str, find, replace):
         raise ValueError("find 不唯一，匹配到多个位置，请扩长 find 字符串")
 
     new_content = content[:idx] + replace + content[idx + len(find):]
-    p.write_text(new_content, encoding="utf-8")
+    _write_with_backup(p, new_content, content)
 
     return {
         "path": str(p),
@@ -1063,7 +932,8 @@ def _edit_file_sync(path_str, find, replace):
     }
 
 
-def _apply_patch_sync(path_str, patch):
+def _delete_lines_sync(path_str, start_line, end_line):
+    """按行号区间删除行。改代码优先用 edit_file(find/replace)，删整段可用本入口。"""
     p = _resolve_path(path_str)
     if not p.exists():
         raise FileNotFoundError(f"文件不存在: {path_str}")
@@ -1071,19 +941,39 @@ def _apply_patch_sync(path_str, patch):
         raise IsADirectoryError(f"路径不是文件: {path_str}")
 
     content = p.read_text(encoding="utf-8")
-    result = _apply_patch(content, patch)
+    lines = content.split("\n")
+    total = len(lines)
 
-    if not result["ok"]:
-        raise ValueError(result["error"])
+    if start_line < 1:
+        raise ValueError(f"start_line 必须 >= 1，收到 {start_line}")
+    if end_line < start_line:
+        raise ValueError(
+            f"end_line {end_line} 小于 start_line {start_line}（删除模式要求 end_line >= start_line）"
+        )
+    if start_line > total:
+        raise ValueError(
+            f"start_line {start_line} 超出文件范围（共 {total} 行）"
+        )
+    if end_line > total:
+        raise ValueError(f"end_line {end_line} 超出文件范围（共 {total} 行）")
 
-    new_content = result["result"]
-    p.write_text(new_content, encoding="utf-8")
+    old_block = lines[start_line - 1:end_line]
+    del lines[start_line - 1:end_line]
+    new_text = "\n".join(lines)
+    _write_with_backup(p, new_text, content)
 
     return {
         "path": str(p),
-        "patched": True,
+        "start_line": start_line,
+        "end_line": end_line,
+        "mode": "delete",
+        "old_lines": len(old_block),
+        "new_lines": 0,
+        "old_total": total,
+        "new_total": len(lines),
         "old_size": len(content),
-        "new_size": len(new_content),
+        "new_size": len(new_text),
+        "deleted_preview": old_block[:3],
     }
 
 
@@ -1161,7 +1051,7 @@ def _parse_code_structure_sync(path_str: str) -> dict:
     size = p.stat().st_size
 
     base = {
-        "path": str(p).replace("\\", "/"),
+        "path": _rel_path(p),
         "size": size,
         "size_kb": round(size / 1024, 1),
         "total_lines": total_lines,
@@ -1514,11 +1404,13 @@ def _parse_config_structure(text: str, ext: str) -> dict:
 
     return {"keys": keys[:100]}
 
-def _search_files_sync(path_str, pattern="*", content=None, max_results=50):
+def _search_files_sync(path_str, pattern="*", content=None, max_results=50, context=0):
     """按文件名 glob + 内容关键词搜索文件，返回匹配列表。
 
     - 单文件超过 SEARCH_MAX_FILE_BYTES 跳过（防 OOM）
     - 内容匹配流式逐行读取
+    - context>0 时：同一文件的**每一处**匹配都列出，并带上前后各 context 行原文，
+      调用方拿到后可直接定位修改位置，省掉一轮 read_file_lines。
     """
     p = _resolve_path(path_str)
     if not p.exists():
@@ -1527,6 +1419,7 @@ def _search_files_sync(path_str, pattern="*", content=None, max_results=50):
     root = p if p.is_dir() else p.parent
     matches = []
     scanned = 0
+    ctx = max(0, min(int(context or 0), 10))
 
     skip_dirs = {"__pycache__", ".git", "node_modules", ".venv", "dist", "build"}
 
@@ -1549,26 +1442,38 @@ def _search_files_sync(path_str, pattern="*", content=None, max_results=50):
             if fsize > SEARCH_MAX_FILE_BYTES:
                 continue  # 跳过超大文件，防 OOM
             try:
-                line_num = None
+                lines = []
                 with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-                    for ln, line in enumerate(fh, 1):
-                        if content in line:
-                            line_num = ln
-                            break
-                if line_num is None:
+                    for line in fh:
+                        lines.append(line.rstrip("\r\n"))
+                hit_lines = [ln for ln, line in enumerate(lines, 1) if content in line]
+                if not hit_lines:
                     continue
-                matches.append({
-                    "path": str(f).replace("\\", "/"),
-                    "size": fsize,
-                    "line": line_num,
-                })
+                if ctx == 0:
+                    matches.append(
+                        {"path": _rel_path(f), "size": fsize, "line": hit_lines[0]}
+                    )
+                else:
+                    for ln in hit_lines:
+                        lo = max(1, ln - ctx)
+                        hi = min(len(lines), ln + ctx)
+                        matches.append(
+                            {
+                                "path": _rel_path(f),
+                                "size": fsize,
+                                "line": ln,
+                                "context": [
+                                    {"line": n, "text": lines[n - 1]}
+                                    for n in range(lo, hi + 1)
+                                ],
+                            }
+                        )
+                        if len(matches) >= max_results:
+                            break
             except Exception:
                 continue
         else:
-            matches.append({
-                "path": str(f).replace("\\", "/"),
-                "size": fsize,
-            })
+            matches.append({"path": _rel_path(f), "size": fsize})
 
         if len(matches) >= max_results:
             break
@@ -1578,6 +1483,7 @@ def _search_files_sync(path_str, pattern="*", content=None, max_results=50):
         "total": len(matches),
         "scanned": scanned,
         "truncated": len(matches) >= max_results,
+        "context": ctx,
     }
 
 
@@ -1644,10 +1550,13 @@ async def execute(envelop, agent):
                 }
                 return envelop
             # ★ 写前记录原大小，供上层判断"是否把有内容的文件写空了"
+            #   必须用 _resolve_path 解析，与 _write_file_sync 内部规则完全一致
+            #   （黑名单逃逸检查、前导 "/" 处理、相对根目录都靠它）
             old_size = 0
             try:
-                if p.exists():
-                    old_size = p.stat().st_size
+                target = _resolve_path(path_str)
+                if target.exists():
+                    old_size = target.stat().st_size
             except Exception:
                 old_size = 0
 
@@ -1665,7 +1574,8 @@ async def execute(envelop, agent):
             actual_size = p.stat().st_size
             validation = _validate_written_file(p)
             data = {
-                "path": str(p),
+                "path": _rel_path(p),
+                "path_kind": _path_kind(p),
                 "size": actual_size,
                 "old_size": old_size,          # ★ 新增
                 "new_size": actual_size,       # ★ 新增
@@ -1686,7 +1596,11 @@ async def execute(envelop, agent):
                 return envelop
             p = await loop.run_in_executor(None, lambda: _append_file_sync(path_str, content))
             validation = _validate_written_file(p)
-            data = {"path": str(p), "validation": validation}
+            data = {
+                "path": _rel_path(p),
+                "path_kind": _path_kind(p),
+                "validation": validation,
+            }
             if validation.get("checked") and not validation.get("ok"):
                 data["validation_failed"] = True
                 data["warning"] = f"追加后校验失败：{validation['error']}"
@@ -1710,25 +1624,39 @@ async def execute(envelop, agent):
             if validation.get("checked") and not validation.get("ok"):
                 result["validation_failed"] = True
                 result["warning"] = f"编辑后校验失败：{validation['error']}"
+            # ★ 校验依赖绝对路径，转相对必须放在校验之后
+            abs_path = result["path"]
+            result["path"] = _rel_path(abs_path)
+            result["path_kind"] = _path_kind(abs_path)
             envelop.payload = {"ok": True, "data": result}
             return envelop
 
-        elif action == "apply_patch":
-            patch = envelop.payload.get("content")
-            if not patch or not isinstance(patch, str):
-                envelop.payload = {"ok": False, "error": "缺少 content 参数（patch 内容）"}
+        elif action == "delete_lines":
+            start_line = envelop.payload.get("start_line")
+            end_line = envelop.payload.get("end_line")
+            if start_line is None or end_line is None:
+                envelop.payload = {"ok": False, "error": "缺少 start_line 或 end_line 参数"}
                 return envelop
-            result = await loop.run_in_executor(
-                None, lambda: _apply_patch_sync(path_str, patch)
-            )
+            start_line = int(start_line)
+            end_line = int(end_line)
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: _delete_lines_sync(path_str, start_line, end_line),
+                )
+            except ValueError as e:
+                envelop.payload = {"ok": False, "error": str(e)}
+                return envelop
             validation = _validate_written_file(Path(result["path"]))
             result["validation"] = validation
             if validation.get("checked") and not validation.get("ok"):
                 result["validation_failed"] = True
-                result["warning"] = f"打补丁后校验失败：{validation['error']}"
+                result["warning"] = f"删除后校验失败：{validation['error']}"
+            abs_path = result["path"]
+            result["path"] = _rel_path(abs_path)
+            result["path_kind"] = _path_kind(abs_path)
             envelop.payload = {"ok": True, "data": result}
             return envelop
-
         elif action == "file_exists":
             exists = await loop.run_in_executor(None, lambda: _file_exists_sync(path_str))
             envelop.payload = {"ok": True, "data": {"exists": exists}}
@@ -1741,7 +1669,13 @@ async def execute(envelop, agent):
 
         elif action == "mkdir":
             created_path = await loop.run_in_executor(None, lambda: _mkdir_sync(path_str))
-            envelop.payload = {"ok": True, "data": {"path": created_path}}
+            envelop.payload = {
+                "ok": True,
+                "data": {
+                    "path": _rel_path(created_path),
+                    "path_kind": _path_kind(created_path),
+                },
+            }
             return envelop
 
         elif action == "delete_file":
@@ -1765,9 +1699,10 @@ async def execute(envelop, agent):
             pattern = envelop.payload.get("pattern", "*")
             content = envelop.payload.get("content")
             max_results = int(envelop.payload.get("max_results", 50))
+            context = int(envelop.payload.get("context", 0) or 0)
             result = await loop.run_in_executor(
                 None,
-                lambda: _search_files_sync(path_str, pattern, content, max_results),
+                lambda: _search_files_sync(path_str, pattern, content, max_results, context),
             )
             envelop.payload = {"ok": True, "data": result}
             return envelop
@@ -1775,8 +1710,8 @@ async def execute(envelop, agent):
         else:
             available = (
                 "code_structure/read_file/read_file_lines/write_file/append_file/"
-                "edit_file/apply_patch/file_exists/list_dir/mkdir/delete_file/"
-                "file_stat/search"
+                "edit_file/delete_lines/file_exists/list_dir/mkdir/"
+                "delete_file/file_stat/search"
             )
             if not action:
                 envelop.payload = {
@@ -1796,4 +1731,4 @@ async def execute(envelop, agent):
     except Exception as e:
         envelop.payload = {"ok": False, "error": f"操作失败: {str(e)}"}
         return envelop
-# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,apply_patch,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,patched,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,pattern,max_results | type_values=directory,file
+# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,delete_lines,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys,start_line,end_line,mode,old_lines,new_lines | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,pattern,max_results,context | type_values=directory,file

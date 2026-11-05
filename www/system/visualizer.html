@@ -114,6 +114,7 @@ button{font-family:inherit}
 .legend-item .dotnode.gateway{background:var(--c-gateway);box-shadow:0 0 8px var(--c-gateway)}
 .legend-item .dotnode.wsgateway{background:var(--c-ws);box-shadow:0 0 8px var(--c-ws)}
 .legend-item .dotnode.plugin{background:var(--brand);box-shadow:0 0 6px var(--brand)}
+.legend-item .dotnode.session{background:#F59E0B;box-shadow:0 0 8px #F59E0B}
 .mono-list{font-family:var(--font-mono);font-size:10.5px;color:var(--text-3);line-height:1.75;max-height:190px;overflow-y:auto}
 .mono-list .hl{color:var(--brand-hover)}
 .empty{color:var(--text-4)}
@@ -200,6 +201,7 @@ button{font-family:inherit}
         <div class="legend-item"><span class="dotnode gateway"></span> <span data-i18n="viz.lgGateway">HTTP Gateway (in)</span></div>
         <div class="legend-item"><span class="dotnode wsgateway"></span> <span data-i18n="viz.lgWs">WS Gateway (out)</span></div>
         <div class="legend-item"><span class="dotnode plugin"></span> <span data-i18n="viz.lgPlugin">Plugin (dynamic)</span></div>
+        <div class="legend-item"><span class="dotnode session"></span> <span data-i18n="viz.lgSession">Session agent (split by session)</span></div>
         <div class="legend-item" style="margin-top:4px"><span class="swatch gw"></span> <span data-i18n="viz.lgGwEdge">Gateway forward (out)</span></div>
         <div class="legend-item"><span class="swatch sync"></span> <span data-i18n="viz.lgSync">Sync call (out)</span></div>
         <div class="legend-item"><span class="swatch async"></span> <span data-i18n="viz.lgAsync">Async / callback (out)</span></div>
@@ -231,10 +233,10 @@ var I18N = {
     'viz.views':'视图','viz.all':'全部','viz.business':'业务','viz.hot':'热点','viz.ops':'操作','viz.reset':'重置视角',
     'viz.channel':'频道','viz.session':'会话','viz.frame':'帧',
     'viz.inflight':'在飞','viz.nodes':'节点','viz.persec':'/秒','viz.hint':'悬停查看节点详情',
-    'viz.legend':'图例','viz.lgGateway':'HTTP 网关（入口）','viz.lgWs':'WS 网关（出口）','viz.lgPlugin':'插件（动态）',
+    'viz.legend':'图例','viz.lgGateway':'HTTP 网关（入口）','viz.lgWs':'WS 网关（出口）','viz.lgPlugin':'插件（动态）','viz.lgSession':'会话 Agent（按 session 拆分）',
     'viz.lgGwEdge':'网关转发（出）','viz.lgSync':'同步调用（出）','viz.lgAsync':'异步 / 回调（出）','viz.lgReturn':'返回（入）',
     'viz.total':'总节点','viz.active':'活跃节点','viz.maxflow':'最大流量','viz.top':'Top 节点','viz.recent':'最近事件',
-    'viz.type':'类型','viz.count':'事件数','viz.lastActive':'最近活跃','viz.sAgo':'秒前','viz.noData':'暂无数据','viz.noEvents':'暂无事件'
+    'viz.type':'类型','viz.sessionName':'会话名','viz.sessionId':'会话 ID','viz.count':'事件数','viz.lastActive':'最近活跃','viz.sAgo':'秒前','viz.noData':'暂无数据','viz.noEvents':'暂无事件'
   },
   en: {
     'viz.title':'Envelop Flow','viz.pause':'Pause','viz.resume':'Resume','viz.clear':'Clear','viz.labels':'Labels',
@@ -242,10 +244,10 @@ var I18N = {
     'viz.views':'Views','viz.all':'All','viz.business':'Business','viz.hot':'Hot','viz.ops':'Operations','viz.reset':'Reset View',
     'viz.channel':'Channel','viz.session':'Session','viz.frame':'Frame',
     'viz.inflight':'In Flight','viz.nodes':'Nodes','viz.persec':'/sec','viz.hint':'Hover to inspect nodes',
-    'viz.legend':'Legend','viz.lgGateway':'HTTP Gateway (in)','viz.lgWs':'WS Gateway (out)','viz.lgPlugin':'Plugin (dynamic)',
+    'viz.legend':'Legend','viz.lgGateway':'HTTP Gateway (in)','viz.lgWs':'WS Gateway (out)','viz.lgPlugin':'Plugin (dynamic)','viz.lgSession':'Session agent (split by session)',
     'viz.lgGwEdge':'Gateway forward (out)','viz.lgSync':'Sync call (out)','viz.lgAsync':'Async / callback (out)','viz.lgReturn':'Return (in)',
     'viz.total':'Total','viz.active':'Active','viz.maxflow':'Max flow','viz.top':'Top Nodes','viz.recent':'Recent Events',
-    'viz.type':'Type','viz.count':'Events','viz.lastActive':'Last active','viz.sAgo':'s ago','viz.noData':'No data','viz.noEvents':'No events'
+    'viz.type':'Type','viz.sessionName':'Session','viz.sessionId':'Session ID','viz.count':'Events','viz.lastActive':'Last active','viz.sAgo':'s ago','viz.noData':'No data','viz.noEvents':'No events'
   }
 };
 var lang = localStorage.getItem('aicp_lang') || 'en';
@@ -283,7 +285,13 @@ var paused = false, showLabels = true, currentView = 'all';
 var eventRate = { count:0, lastReset:Date.now(), rate:0 };
 var recentEvents = [], hotNodes = {};
 var CHANNEL_PLUGINS = ['os/_websocket','builtins/notify/ws','os/_visualizer'];
-var COLORS = { gateway:'#3B82F6', wsgateway:'#A855F7', plugin:'#5E6AD2', sync:'#5E6AD2', async:'#D9A441', return:'#4CB782' };
+var COLORS = { gateway:'#3B82F6', wsgateway:'#A855F7', plugin:'#5E6AD2', sync:'#5E6AD2', async:'#D9A441', return:'#4CB782', session:'#F59E0B' };
+
+/* ★ session 级插件：同一路由可能对应多个会话，渲染时按 session_id 拆成多个节点 */
+var SESSION_AWARE = ['builtins/agents/main_agent'];
+function baseId(id){ return String(id||'').split('@')[0]; }
+function isSessionAware(id){ return SESSION_AWARE.indexOf(baseId(id)) !== -1; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 
 var canvas = document.getElementById('flowCanvas');
 var ctx = canvas.getContext('2d');
@@ -305,18 +313,27 @@ function bootstrapNodes(){
 }
 function classifyNode(id){
   if (!id) return 'plugin';
-  if (id === 'os/_websocket') return 'wsgateway';
-  if (id.indexOf('gateway') !== -1) return 'gateway';
+  var b = baseId(id);
+  if (b === 'os/_websocket') return 'wsgateway';
+  if (b.indexOf('gateway') !== -1) return 'gateway';
   return 'plugin';
 }
 function nodeColor(type){ return COLORS[type] || COLORS.plugin; }
-function ensureNode(id, type){
+function ensureNode(id, type, info){
   if (!nodes[id]){
     var angle = Math.random()*Math.PI*2, radius = Math.min(W,H)*0.3;
+    var t = type || (isSessionAware(id) ? 'session' : classifyNode(id));
     nodes[id] = { id:id, x:W/2+Math.cos(angle)*radius, y:H/2+Math.sin(angle)*radius, vx:0, vy:0,
-      count:0, lastActive:Date.now(), type:type||classifyNode(id), alpha:1, pinned:false };
+      count:0, lastActive:Date.now(), type:t, alpha:1, pinned:false,
+      label:id, base:baseId(id), sessionId:'', sessionTitle:'' };
   }
-  return nodes[id];
+  var n = nodes[id];
+  if (info){
+    if (info.sessionId) n.sessionId = info.sessionId;
+    if (info.sessionTitle) n.sessionTitle = info.sessionTitle;
+    if (info.label) n.label = info.label;
+  }
+  return n;
 }
 function shouldSkipChannel(id){
   for (var i=0;i<CHANNEL_PLUGINS.length;i++) if (id.indexOf(CHANNEL_PLUGINS[i]) !== -1) return true;
@@ -340,20 +357,32 @@ function shouldSkipEdge(from, to){
 /* ================= 事件处理 ================= */
 function handleEnvelop(evt){
   if (paused) return;
-  var from = evt.sender || 'unknown', to = evt.receiver || 'unknown';
+  var fromBase = evt.sender || 'unknown', toBase = evt.receiver || 'unknown';
   var intent = evt.intent || '', direction = evt.direction || 'out';
-  if (from === 'os/_visualizer') return;
+  if (fromBase === 'os/_visualizer') return;
+  /* ★ session 维度：main_agent 是 session 级插件，同一路由按 session 拆成多个节点 */
+  var fromSid = evt.from_session_id || '', fromTitle = evt.from_session_title || '';
+  var toSid = evt.to_session_id || '', toTitle = evt.to_session_title || '';
+  if (fromSid || toSid){
+    var se = document.getElementById('sideSession');
+    if (se) se.textContent = fromSid || toSid;
+  }
+  var fromSess = !!(fromSid && isSessionAware(fromBase));
+  var toSess = !!(toSid && isSessionAware(toBase));
+  var from = fromSess ? (fromBase + '@' + fromSid) : fromBase;
+  var to = toSess ? (toBase + '@' + toSid) : toBase;
   var pFrom = direction === 'in' ? to : from;
   var pTo   = direction === 'in' ? from : to;
-  var fn = ensureNode(from), tn = ensureNode(to);
+  var fn = ensureNode(from, null, fromSess ? {sessionId:fromSid, sessionTitle:fromTitle, label:(fromTitle||fromSid)} : null);
+  var tn = ensureNode(to, null, toSess ? {sessionId:toSid, sessionTitle:toTitle, label:(toTitle||toSid)} : null);
   fn.count++; fn.lastActive = Date.now(); tn.lastActive = Date.now();
 
   var key = from + '|' + to;
   if (!links[key]) links[key] = { count:0, lastActive:Date.now(), kind:'sync' };
   links[key].count++; links[key].lastActive = Date.now();
 
-  var isGateway = from.indexOf('gateway') !== -1 || to.indexOf('gateway') !== -1;
-  var isWs = from === 'os/_websocket' || to === 'os/_websocket';
+  var isGateway = fromBase.indexOf('gateway') !== -1 || toBase.indexOf('gateway') !== -1;
+  var isWs = fromBase === 'os/_websocket' || toBase === 'os/_websocket';
   var isAsync = intent === 'CALLBACK' || intent === 'ASYNC' || (evt.has_response === false);
   if (isGateway) links[key].kind = 'gateway';
   else if (isAsync) links[key].kind = 'async';
@@ -369,7 +398,7 @@ function handleEnvelop(evt){
     width: direction==='in' ? 1.5 : (isWs ? 3.5 : (isGateway ? 3 : 2)), dashed:isAsync, kind:kind, born:Date.now() });
 
   eventRate.count++;
-  recentEvents.unshift({ from:from, to:to, intent:intent, ts:Date.now(), direction:direction, kind:kind });
+  recentEvents.unshift({ from:from, to:to, fromLabel:fn.label, toLabel:tn.label, intent:intent, ts:Date.now(), direction:direction, kind:kind });
   if (recentEvents.length > 8) recentEvents.pop();
   renderRecentEvents();
 }
@@ -462,7 +491,7 @@ function draw(){
   for (var j=0;j<ids.length;j++){
     var n = nodes[ids[j]];
     if (shouldSkipNode(n.id)) continue;
-    var r = (n.type==='gateway'||n.type==='wsgateway') ? 13 : 9;
+    var r = (n.type==='gateway'||n.type==='wsgateway') ? 13 : (n.type==='session' ? 10 : 9);
     var color = nodeColor(n.type);
     var halo = ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r*3);
     halo.addColorStop(0, hexA(color, 0.4*n.alpha)); halo.addColorStop(1,'rgba(0,0,0,0)');
@@ -472,10 +501,11 @@ function draw(){
     ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.beginPath(); ctx.arc(n.x,n.y,r*0.4,0,Math.PI*2); ctx.fill();
     ctx.restore();
     if (showLabels){
-      var shortName = n.id.length > 28 ? n.id.slice(0,26)+'…' : n.id;
+      var lbl = n.label || n.id;
+      var shortName = lbl.length > 26 ? lbl.slice(0,24)+'…' : lbl;
       ctx.save(); ctx.globalAlpha = n.alpha*0.85;
       ctx.font = '10px ' + "'SF Mono',Menlo,Consolas,monospace";
-      ctx.fillStyle = '#B4B8C0'; ctx.textAlign = 'center';
+      ctx.fillStyle = (n.type==='session') ? COLORS.session : '#B4B8C0'; ctx.textAlign = 'center';
       ctx.fillText(shortName, n.x, n.y+r+14); ctx.restore();
     }
   }
@@ -568,8 +598,9 @@ function renderTopNodes(){
   if (!ids.length){ box.innerHTML = '<div class="empty">' + t('viz.noData') + '</div>'; return; }
   var html = '';
   ids.forEach(function(id, idx){
-    var shortId = id.length > 24 ? '…' + id.slice(-22) : id;
-    html += '<div>' + (idx+1) + '. ' + shortId + ' <span class="hl">' + nodes[id].count + '</span></div>';
+    var lbl = nodes[id].label || id;
+    var shortId = lbl.length > 24 ? '…' + lbl.slice(-22) : lbl;
+    html += '<div>' + (idx+1) + '. ' + esc(shortId) + ' <span class="hl">' + nodes[id].count + '</span></div>';
   });
   box.innerHTML = html;
 }
@@ -581,9 +612,10 @@ function renderRecentEvents(){
     var time = new Date(ev.ts).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour12:false });
     var color = ev.kind==='return' ? COLORS.return : (ev.kind==='wsgateway' ? COLORS.wsgateway : (ev.kind==='gateway' ? COLORS.gateway : (ev.kind==='async' ? COLORS.async : COLORS.sync)));
     var arrow = (ev.direction === 'in') ? '←' : (ev.kind === 'gateway' ? '⇢' : '→');
-    var fromShort = ev.from.length > 18 ? '…' + ev.from.slice(-16) : ev.from;
-    var toShort = ev.to.length > 18 ? '…' + ev.to.slice(-16) : ev.to;
-    html += '<div style="color:' + color + '">' + time + ' ' + arrow + ' ' + fromShort + ' → ' + toShort + '</div>';
+    var fL = ev.fromLabel || ev.from, tL = ev.toLabel || ev.to;
+    var fromShort = fL.length > 18 ? '…' + fL.slice(-16) : fL;
+    var toShort = tL.length > 18 ? '…' + tL.slice(-16) : tL;
+    html += '<div style="color:' + color + '">' + time + ' ' + arrow + ' ' + esc(fromShort) + ' → ' + esc(toShort) + '</div>';
   });
   box.innerHTML = html;
 }
@@ -630,8 +662,14 @@ canvas.addEventListener('mousemove', function(e){
   var detail = document.getElementById('nodeDetail');
   if (hovered){
     var age = ((Date.now()-hovered.lastActive)/1000).toFixed(1);
+    var sessRows = '';
+    if (hovered.sessionId){
+      sessRows = '<div class="nd-row"><span>' + t('viz.sessionName') + '</span><b>' + esc(hovered.sessionTitle || '-') + '</b></div>' +
+                 '<div class="nd-row"><span>' + t('viz.sessionId') + '</span><b>' + esc(hovered.sessionId) + '</b></div>';
+    }
     detail.innerHTML =
-      '<div class="nd-id">' + hovered.id + '</div>' +
+      '<div class="nd-id">' + esc(hovered.label || hovered.id) + '</div>' +
+      sessRows +
       '<div class="nd-row"><span>' + t('viz.type') + '</span><b>' + hovered.type + '</b></div>' +
       '<div class="nd-row"><span>' + t('viz.count') + '</span><b>' + hovered.count + '</b></div>' +
       '<div class="nd-row"><span>' + t('viz.lastActive') + '</span><b>' + age + ' ' + t('viz.sAgo') + '</b></div>';

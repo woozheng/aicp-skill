@@ -6,7 +6,7 @@ from pathlib import Path
 PROTECTED_APPS = {"_demo"}
 
 
-async def execute(envelop, agent):  
+async def execute(envelop, agent):
     action = envelop.payload.get("action", "list")
 
     if action == "list":
@@ -86,6 +86,8 @@ async def execute(envelop, agent):
         if www_dir.exists():
             for d in sorted(www_dir.iterdir()):
                 if not d.is_dir() or d.name.startswith(".") or d.name == "__pycache__":
+                    continue
+                if d.name == "_demo":
                     continue
                 index_html = d / "index.html"
                 if not index_html.exists():

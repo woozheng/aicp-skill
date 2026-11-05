@@ -1,12 +1,12 @@
 """
 契约智能体 — 专用 LLM，只做一件事：读源码，提取契约
+
 - 有 .contract.json 且 source_hash 一致：直接返回（落盘缓存）
 - 无契约 或 hash 不一致：读源码 → LLM 输出 LLC 行式紧凑契约 → 解析成标准 JSON → 保存
 - LLM 提取失败：返回 fallback（正则粗扫 action 名单）
 - 返回：契约（不含源码片段）
 - get_tools：返回 Function Calling tools schema
-- ★ 支持外部来源分流：mcp/server/tool → 读 _mcp_client 契约；skill/xxx → 读 data/skills 文档
-- ★ usage 加载到 active_skills，返回一手事实字段
+- 外部来源：mcp/server/tool → 读 _mcp_client 契约；skill/xxx → 读 data/skills 文档
 """
 
 import ast
@@ -19,7 +19,7 @@ import core
 
 
 # ============================================================
-# LLC 格式说明（给 LLM 看，也给人看）
+# LLC 格式说明
 # ============================================================
 
 LLC_FORMAT = """
@@ -140,7 +140,7 @@ def parse_llc(text: str) -> dict:
 
 
 # ============================================================
-# 正则校验：补漏 action、删多余 action
+# 正则校验
 # ============================================================
 
 _ACTION_REGEXES = [
@@ -179,7 +179,7 @@ def _validate_against_source(contract: dict, source_code: str) -> dict:
 
 
 # ============================================================
-# 契约 → Function Calling tools 转换
+# 契约 → Function Calling tools
 # ============================================================
 
 _TYPE_MAP = {
@@ -234,112 +234,6 @@ def contract_to_tools(plugin_name: str, contract: dict) -> list:
 
 def calc_source_hash(source_code: str) -> str:
     return hashlib.md5(source_code.encode("utf-8")).hexdigest()
-
-
-# ============================================================
-# usage 加载
-# ============================================================
-
-def _load_usage(plugin_file: Path) -> str:
-    skill_file = plugin_file.parent / f"{plugin_file.stem}_skill.md"
-    if not skill_file.exists():
-        return ""
-    try:
-        text = skill_file.read_text(encoding="utf-8")
-    except Exception:
-        return ""
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            return parts[2].strip()
-    return text.strip()
-
-
-def _auto_load_enabled(envelop) -> bool:
-    """auto_load 开关：true=查契约即钉住用法全文（旧行为）；false=只查契约不钉住。"""
-    raw = (getattr(envelop, "payload", None) or {}).get("auto_load", True)
-    if isinstance(raw, bool):
-        return raw
-    if raw is None:
-        return True
-    return str(raw).strip().lower() not in ("false", "0", "no", "off", "none")
-
-
-async def _load_usage_into_skill(agent, plugin_file: Path, plugin_name: str, envelop) -> dict:
-    result = {
-        "hint": "", "file": None, "file_size": 0,
-        "loaded": False, "skipped": False, "error": None,
-        "auto_load": True,
-    }
-
-    if plugin_name in ("builtins/agents/main_agent", "main_agent"):
-        result["hint"] = "（main_agent 的 skill 已在 system 中，不重复加载）"
-        return result
-
-    skill_file = plugin_file.parent / f"{plugin_file.stem}_skill.md"
-    result["file"] = str(skill_file)
-
-    if not skill_file.exists():
-        return result
-
-    try:
-        content = skill_file.read_text(encoding="utf-8").strip()
-    except Exception as e:
-        result["error"] = f"读取 skill 文件失败: {e}"
-        result["hint"] = result["error"]
-        return result
-
-    if not content:
-        return result
-
-    result["file_size"] = len(content)
-    session_id = (envelop.meta or {}).get("session_id", "")
-
-    # ★ auto_load=false：只报告用法文件位置，不钉住（不占上下文）
-    if not _auto_load_enabled(envelop):
-        result["hint"] = (
-            f"用法未自动加载（auto_load=false，{result['file_size']} 字）：{skill_file.name}。"
-            "需要时用 use_tool 显式钉住 skill 路径，或再次调用 contract_agent.get(auto_load=true)。"
-        )
-        result["auto_load"] = False
-        return result
-
-    try:
-        load_result = await agent.system.call(core.Envelop(
-            sender="builtins/agents/contract_agent",
-            receiver="builtins/tools/skill_loader",
-            payload={"action": "loadfromfile", "path": str(skill_file)},
-            meta={
-                "user_id": (envelop.meta or {}).get("user_id", "local"),
-                "session_id": session_id,
-            },
-        ))
-        if load_result and load_result.payload.get("ok"):
-            skipped = bool(load_result.payload.get("skipped", False))
-            reloaded = bool(load_result.payload.get("reloaded", False))
-            result["skipped"] = skipped
-            result["loaded"] = (not skipped) or reloaded
-
-            if skipped and not reloaded:
-                result["hint"] = (
-                    f"用法文件当前 {result['file_size']} 字，"
-                    f"但 skill_loader 判定该路径已加载过、本次跳过。"
-                    f"system 里的版本可能不是最新；如确认文件已更新，"
-                    f"需要 skill_loader 支持按内容 hash 重载（或先 unload 再 load）。"
-                )
-            elif reloaded:
-                result["hint"] = f"用法已重新加载到 system（{result['file_size']} 字，内容已变更）"
-            else:
-                result["hint"] = f"用法已加载到 system（{result['file_size']} 字）"
-        else:
-            err = load_result.payload.get("error", "未知") if load_result else "无响应"
-            result["error"] = err
-            result["hint"] = f"用法加载失败: {err}（文件 {result['file_size']} 字）"
-    except Exception as e:
-        result["error"] = str(e)
-        result["hint"] = f"用法加载异常: {e}（文件 {result['file_size']} 字）"
-
-    return result
 
 
 # ============================================================
@@ -522,7 +416,10 @@ async def _call_llm_extract(agent, plugin_name: str, source_code: str) -> dict:
     )
 
     try:
-        llm_output = await agent.llm.chat([{"role": "user", "content": prompt}], role="code")
+        llm_output = await asyncio.wait_for(
+            agent.llm.chat([{"role": "user", "content": prompt}], role="code"),
+            timeout=120.0,   # 契约提取给 2 分钟
+        )
         if not llm_output:
             return {"ok": False, "error": "LLM 返回为空"}
 
@@ -611,9 +508,6 @@ async def _handle_mcp_contract(plugin_name: str, action: str, envelop) -> object
             "usage": desc,
             "usage_file": str(f),
             "usage_file_size": len(desc),
-            "usage_loaded": False,
-            "usage_skipped": False,
-            "usage_error": None,
             "source": "mcp_contract",
             "contract_file": str(f),
         }
@@ -634,9 +528,6 @@ async def _handle_mcp_contract(plugin_name: str, action: str, envelop) -> object
             "usage": desc,
             "usage_file": str(f),
             "usage_file_size": len(desc),
-            "usage_loaded": False,
-            "usage_skipped": False,
-            "usage_error": None,
             "source": "mcp_contract",
         }
         return envelop
@@ -654,35 +545,17 @@ async def _handle_mcp_contract(plugin_name: str, action: str, envelop) -> object
 
 
 async def _handle_skill_contract(plugin_name: str, action: str, envelop, agent) -> object:
-    """skill/xxx → 读 data/skills/xxx/SKILL.md"""
-    rel = plugin_name[len("skill/"):] if plugin_name.startswith("skill/") else plugin_name
-    rel = rel.strip("/")
+    """skill/xxx → 读 data/skills/xxx/SKILL.md（不再支持 skill/plugin/...）"""
+    rel = plugin_name[len("skill/"):].strip("/")
 
-    f = None
-    # ★ skill/plugin/<ppath>/<stem> → plugins/<ppath>/<stem>_skill.md（插件用法文档）
-    if rel.startswith("plugin/"):
-        sub = rel[len("plugin/"):].strip("/")
-        if sub:
-            cand = Path("plugins") / sub
-            if not cand.name.endswith("_skill.md"):
-                cand = cand.with_name(cand.name + "_skill.md")
-            if cand.exists():
-                f = cand
-
-    if f is None:
-        if rel.endswith("SKILL.md"):
-            f = Path("data/skills") / rel
-        else:
-            f = Path("data/skills") / rel / "SKILL.md"
-
-        if not f.exists():
-            if rel.endswith("SKILL.md"):
-                alt = Path("data/skills/aicp") / rel
-            else:
-                alt = Path("data/skills/aicp") / rel / "SKILL.md"
-            if alt.exists():
-                f = alt
-
+    if rel.endswith("SKILL.md"):
+        f = Path("data/skills") / rel
+    else:
+        f = Path("data/skills") / rel / "SKILL.md"
+    if not f.exists():
+        alt = Path("data/skills/aicp") / (rel if rel.endswith("SKILL.md") else rel + "/SKILL.md")
+        if alt.exists():
+            f = alt
     if not f.exists():
         envelop.payload = {"ok": False, "error": f"skill 文件不存在: {f}"}
         return envelop
@@ -707,27 +580,6 @@ async def _handle_skill_contract(plugin_name: str, action: str, envelop, agent) 
     desc = meta.get("description") or meta.get("title") or meta.get("name") or ""
 
     if action == "get":
-        pinned = False
-        pin_error = None
-        auto_load = _auto_load_enabled(envelop)
-        if auto_load:
-            try:
-                pin_res = await agent.system.call(core.Envelop(
-                    sender="builtins/agents/contract_agent",
-                    receiver="builtins/tools/skill_loader",
-                    payload={"action": "loadfromfile", "path": str(f)},
-                    meta={
-                        "user_id": (envelop.meta or {}).get("user_id", "local"),
-                        "session_id": (envelop.meta or {}).get("session_id", ""),
-                    },
-                ))
-                if pin_res and pin_res.payload and pin_res.payload.get("ok"):
-                    pinned = True
-                else:
-                    pin_error = (pin_res.payload or {}).get("error") if pin_res else "no response"
-            except Exception as e:
-                pin_error = str(e)
-
         envelop.payload = {
             "ok": True,
             "plugin": plugin_name,
@@ -738,21 +590,9 @@ async def _handle_skill_contract(plugin_name: str, action: str, envelop, agent) 
                 },
                 "source_hash": calc_source_hash(text),
             },
-            "usage": (
-                f"已加入当前技能：{plugin_name}（{len(body)} 字）"
-                if pinned
-                else (
-                    f"未自动加载（auto_load=false，{len(body)} 字）：{f.name}"
-                    if not auto_load
-                    else f"加入失败：{pin_error}（{len(body)} 字）"
-                )
-            ),
-            "auto_load": auto_load,
+            "usage": body,
             "usage_file": str(f),
             "usage_file_size": len(body),
-            "usage_loaded": pinned,
-            "usage_skipped": False,
-            "usage_error": pin_error,
             "source": "local_skill",
             "contract_file": str(f),
         }
@@ -770,12 +610,9 @@ async def _handle_skill_contract(plugin_name: str, action: str, envelop, agent) 
                     "parameters": {"type": "object", "properties": {}, "required": []},
                 }
             }],
-            "usage": f"已加入当前技能：{plugin_name}（{len(body)} 字）",
+            "usage": body,
             "usage_file": str(f),
             "usage_file_size": len(body),
-            "usage_loaded": False,
-            "usage_skipped": False,
-            "usage_error": None,
             "source": "local_skill",
         }
         return envelop
@@ -805,20 +642,13 @@ async def execute(envelop, agent):
         envelop.payload = {"ok": False, "error": "缺少 plugin 参数"}
         return envelop
 
-    # ★ auto_load 开关：默认 true（旧行为：查契约即钉住用法全文）；false = 只查契约不钉住
-    if "auto_load" in (envelop.payload or {}):
-        av = envelop.payload.get("auto_load")
-        if isinstance(av, str):
-            av = av.strip().lower() not in ("false", "0", "no", "off", "none")
-        envelop.payload["auto_load"] = True if av is None else bool(av)
-
-    # ★ 分流：外部来源走专用分支
+    # 外部来源分流
     if plugin_name.startswith("mcp/"):
         return await _handle_mcp_contract(plugin_name, action, envelop)
     if plugin_name.startswith("skill/"):
-        return await _handle_skill_contract(plugin_name, action, envelop,agent)
+        return await _handle_skill_contract(plugin_name, action, envelop, agent)
 
-    # ---- 以下为内部插件原逻辑 ----
+    # ---- 内部插件 ----
 
     if "/" not in plugin_name:
         matches = list(Path("plugins").rglob(f"{plugin_name}.py"))
@@ -859,18 +689,10 @@ async def execute(envelop, agent):
             try:
                 contract = json.loads(contract_file.read_text(encoding="utf-8"))
                 if contract.get("source_hash") == current_hash:
-                    usage = await _load_usage_into_skill(agent, plugin_file, plugin_name, envelop)
                     envelop.payload = {
                         "ok": True,
                         "plugin": plugin_name,
                         "contract": contract,
-                        "usage": usage["hint"],
-                        "usage_file": usage["file"],
-                        "usage_file_size": usage["file_size"],
-                        "usage_loaded": usage["loaded"],
-                        "usage_skipped": usage["skipped"],
-                        "usage_error": usage["error"],
-                        "auto_load": usage.get("auto_load", True),
                         "source": "existing_contract",
                         "contract_file": str(contract_file),
                     }
@@ -897,14 +719,7 @@ async def execute(envelop, agent):
             result["source"] = "extraction_failed"
             result["fallback"] = build_fallback_contract(plugin_name, source_code)
 
-        usage = await _load_usage_into_skill(agent, plugin_file, plugin_name, envelop)
         result["plugin"] = plugin_name
-        result["usage"] = usage["hint"]
-        result["usage_file"] = usage["file"]
-        result["usage_file_size"] = usage["file_size"]
-        result["usage_loaded"] = usage["loaded"]
-        result["usage_skipped"] = usage["skipped"]
-        result["usage_error"] = usage["error"]
         envelop.payload = result
         return envelop
 
@@ -938,18 +753,10 @@ async def execute(envelop, agent):
 
             if not result.get("ok"):
                 fallback = build_fallback_contract(plugin_name, source_code)
-                usage = await _load_usage_into_skill(agent, plugin_file, plugin_name, envelop)
                 envelop.payload = {
                     "ok": True,
                     "plugin": plugin_name,
                     "tools": contract_to_tools(plugin_name, fallback),
-                    "usage": usage["hint"],
-                    "usage_file": usage["file"],
-                    "usage_file_size": usage["file_size"],
-                    "usage_loaded": usage["loaded"],
-                    "usage_skipped": usage["skipped"],
-                    "usage_error": usage["error"],
-                    "auto_load": usage.get("auto_load", True),
                     "source": "fallback",
                     "extraction_error": result.get("error"),
                 }
@@ -968,19 +775,11 @@ async def execute(envelop, agent):
                 pass
 
         tools = contract_to_tools(plugin_name, contract)
-        usage = await _load_usage_into_skill(agent, plugin_file, plugin_name, envelop)
 
         envelop.payload = {
             "ok": True,
             "plugin": plugin_name,
             "tools": tools,
-            "usage": usage["hint"],
-            "usage_file": usage["file"],
-            "usage_file_size": usage["file_size"],
-            "usage_loaded": usage["loaded"],
-            "usage_skipped": usage["skipped"],
-            "usage_error": usage["error"],
-            "auto_load": usage.get("auto_load", True),
             "source": source,
             "contract_file": str(contract_file),
         }
@@ -1047,14 +846,7 @@ async def execute(envelop, agent):
             result["source"] = "extraction_failed"
             result["fallback"] = build_fallback_contract(plugin_name, source_code)
 
-        usage = await _load_usage_into_skill(agent, plugin_file, plugin_name, envelop)
         result["plugin"] = plugin_name
-        result["usage"] = usage["hint"]
-        result["usage_file"] = usage["file"]
-        result["usage_file_size"] = usage["file_size"]
-        result["usage_loaded"] = usage["loaded"]
-        result["usage_skipped"] = usage["skipped"]
-        result["usage_error"] = usage["error"]
         envelop.payload = result
         return envelop
 
@@ -1066,21 +858,17 @@ async def execute(envelop, agent):
 def help() -> dict:
     return {
         "route": "builtins/agents/contract_agent",
-        "description": "契约智能体 — 内部插件走源码提取；mcp/server/tool 读 MCP 契约；skill/xxx 读本地 skill 文档。",
+        "description": "契约智能体 — 内部插件走源码提取；mcp/server/tool 读 MCP 契约；skill/xxx 读 data/skills 文档。",
         "input": {
             "action": "get | get_tools | get_execute_only | refresh",
             "plugin": "内部插件路由（builtins/tools/xxx）、mcp/server/tool、或 skill/xxx",
-            "auto_load": "布尔，默认 true。false = 查契约但不把用法全文钉进 active_skills（省上下文）；true = 旧行为，查完即钉住。",
         },
         "output": {
             "ok": "是否成功",
             "contract": "标准契约 JSON",
-            "usage": "加载提示（内部）或全文（mcp/skill）",
-            "usage_file": "skill md / 契约文件绝对路径",
+            "usage": "skill 全文（skill/... 时）或空（内部插件时）",
+            "usage_file": "契约 / skill 文件路径",
             "usage_file_size": "本次读取到的字符数",
-            "usage_loaded": "是否真的写进了 active_skills",
-            "usage_skipped": "skill_loader 是否按路径去重跳过",
-            "usage_error": "加载失败原因，成功为 null",
             "tools": "Function Calling tools schema",
             "source": "existing_contract | llm_extraction | refreshed | extraction_failed | fallback | mcp_contract | local_skill",
             "contract_file": "契约文件路径",

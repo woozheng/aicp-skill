@@ -23,14 +23,37 @@ import contextvars
 import copy
 import json
 import logging
+import os
 import random
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, TypedDict
 
 import httpx
 from openai import AsyncOpenAI
+
+# ---------------------------------------------------------------------------
+# Usage JSONL logger — 直接写磁盘，读写分离，不经过插件
+# ---------------------------------------------------------------------------
+
+_USAGE_DIR = Path("data/llm_usage")
+_USAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _write_usage_jsonl(record: dict) -> None:
+    """追加一条 JSONL 记录到按日期分片的文件。
+    单进程内线程安全（GIL + append mode），不加锁。
+    """
+    try:
+        date_str = time.strftime("%Y-%m-%d")
+        filepath = _USAGE_DIR / f"{date_str}.jsonl"
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass  # 日志写入失败不能影响主流程
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -52,7 +75,7 @@ def _warn(msg: str) -> None:
 
 
 # ★ 只脱敏真正的 sk-xxx 密钥，不误伤 task- 之类的词
-_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9]{20,}")
+_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{20,}")
 
 
 def _sanitize_for_log(s: str, max_len: int = 120) -> str:
@@ -91,11 +114,39 @@ def get_current_session() -> str:
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_REQUEST_TIMEOUT: float = 60.0
-DEFAULT_STREAM_TIMEOUT: float = 300.0
-DEFAULT_CONNECT_TIMEOUT: float = 30.0
-DEFAULT_MAX_RETRIES: int = 3
-DEFAULT_MAX_CONCURRENT: int = 10
+# ============================================================
+# 超时与重试配置（聚合 key / 多上游场景）
+# 设计原则：
+# 1. 连接、响应头、首 token、流内间隔、关闭 分阶段独立超时
+# 2. 聚合 key 上游质量不一，响应头预算不宜过长，早失败早重试
+# 3. 总请求超时必须覆盖「响应头 + 首 token + 生成」的最坏情况
+# 4. HTTP 底层读超时必须 >= 上层最大等待，否则底层先断、上层看不到超时日志
+# 5. 流内 token 间隔收紧，真卡死时快速重试而不是占并发
+# ============================================================
+
+# ---- 连接阶段 ----
+DEFAULT_CONNECT_TIMEOUT: float = 15.0      # TCP/TLS 建连。聚合上游通常网络可达，15s 足够；原 30s 偏长
+
+# ---- 响应阶段（分阶段，关键改动）----
+DEFAULT_RESPONSE_HEADER_TIMEOUT: float = 45.0   # 新增：等 HTTP 响应头。聚合网关排队/路由异常时 45s 内无 header 早失败
+DEFAULT_FIRST_TOKEN_TIMEOUT: float = 120.0      # 等首个 SSE data 帧。Claude 带 tools + 大上下文静默期可达 60-90s，留余量
+DEFAULT_INTER_TOKEN_TIMEOUT: float = 45.0       # 流内 token 间隔。原 90s 过宽，45s 无数据基本可判定卡死
+
+# ---- 总预算 ----
+DEFAULT_REQUEST_TIMEOUT: float = 180.0     # 单次请求总超时。需覆盖 header(45)+首token(120)+生成，原 90s 对 42k+递归偏紧
+DEFAULT_STREAM_TIMEOUT: float = 300.0      # 保留兼容；流式整体上限，建议 >= REQUEST_TIMEOUT
+DEFAULT_STREAM_CLOSE_TIMEOUT: float = 10.0 # 流关闭握手，保持
+
+# ---- HTTP 底层 ----
+DEFAULT_HTTP_READ_TIMEOUT: float = 150.0   # 必须 >= FIRST_TOKEN_TIMEOUT(120) 且留余量，否则底层先断。原 120 与 90 首token 勉强，调大后需同步提到 150
+
+# ---- 重试与并发 ----
+DEFAULT_MAX_RETRIES: int = 3               # 保持
+DEFAULT_RETRY_BACKOFF_MAX: int = 10        # 保持；聚合 key 场景建议退避带 jitter（见下方说明）
+DEFAULT_MAX_CONCURRENT: int = 10           # 保持；但递归串行场景下实际占用远小于此
+DEFAULT_HEALTH_CHECK_TIMEOUT: float = 5.0  # 健康检查，保持
+
+# ---- 其他 ----
 THINK_DECIDER_LEN: int = 10
 
 THINK_OPEN = "<think>"
@@ -103,8 +154,8 @@ THINK_CLOSE = "</think>"
 
 HTTP_TIMEOUT_CONFIG = {
     "connect": DEFAULT_CONNECT_TIMEOUT,
-    "read":600.0,
-    "write": 60.0,
+    "read": DEFAULT_HTTP_READ_TIMEOUT,
+    "write": DEFAULT_HTTP_READ_TIMEOUT,
     "pool": DEFAULT_CONNECT_TIMEOUT,
 }
 
@@ -186,7 +237,8 @@ def _strip_leading_think(text: str) -> str:
     close_idx = stripped.find(THINK_CLOSE)
     if close_idx == -1:
         return ""
-    return stripped[close_idx + len(THINK_CLOSE):].lstrip()
+    # 只去掉 think 标签后的换行，保留正文/代码块的首行缩进。
+    return stripped[close_idx + len(THINK_CLOSE):].lstrip("\r\n")
 
 
 def _bare_model_id(ref: str) -> str:
@@ -233,6 +285,7 @@ class ProviderConfig:
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
     models: List[Dict[str, Any]] = field(default_factory=list)
+    default_model: str = ""
 
 
 class LLMError(Exception):
@@ -263,8 +316,9 @@ class UsageDict(TypedDict):
 class LLM:
     def __init__(self, config: Dict[str, Any]) -> None:
         models_cfg = config.get("models", {})
-        logging.basicConfig(level=logging.DEBUG)
-        logging.getLogger("aicp.llm").setLevel(logging.DEBUG)
+        # 日志级别统一由 runtime/__main__.py 的 setup_logging() 控制。
+        # 此处不调 basicConfig，避免劫持宿主进程的 root logger；
+        # 也不单独 setLevel("aicp.llm")，让它继承 aicp 父 logger 的级别。
         self._roles: Dict[str, Dict[str, Any]] = {
             k: dict(v) for k, v in models_cfg.get("roles", {}).items()
         }
@@ -281,7 +335,24 @@ class LLM:
 
         self.max_retries: int = models_cfg.get("max_retries", DEFAULT_MAX_RETRIES)
         self.request_timeout: float = models_cfg.get("request_timeout", DEFAULT_REQUEST_TIMEOUT)
+        # stream_timeout：单次 attempt 的总预算（首包+包间+收尾）
         self.stream_timeout: float = models_cfg.get("stream_timeout", DEFAULT_STREAM_TIMEOUT)
+        # 首包超时：等第一个 chunk（含响应头等待）
+        self.first_token_timeout: float = models_cfg.get(
+            "first_token_timeout", DEFAULT_FIRST_TOKEN_TIMEOUT
+        )
+        # 包间超时：两个 chunk 之间的最大间隔
+        self.inter_token_timeout: float = models_cfg.get(
+            "inter_token_timeout", DEFAULT_INTER_TOKEN_TIMEOUT
+        )
+        # 关流超时
+        self.stream_close_timeout: float = models_cfg.get(
+            "stream_close_timeout", DEFAULT_STREAM_CLOSE_TIMEOUT
+        )
+        # 重试退避上限（秒）
+        self.retry_backoff_max: float = models_cfg.get(
+            "retry_backoff_max", DEFAULT_RETRY_BACKOFF_MAX
+        )
         self.connect_timeout: float = models_cfg.get("connect_timeout", DEFAULT_CONNECT_TIMEOUT)
         self.skip_health_model_list: bool = models_cfg.get("skip_health_model_list", False)
 
@@ -294,7 +365,15 @@ class LLM:
         self.high_quality_model: Optional[str] = None
 
         _log(f"📋 Config models keys: {list(models_cfg.keys())}")
-        _log(f"⏱️ request_timeout: {self.request_timeout}s")
+        _log(
+            f"⏱️ 超时预算: request={self.request_timeout}s "
+            f"first_token={self.first_token_timeout}s "
+            f"inter_token={self.inter_token_timeout}s "
+            f"stream_total={self.stream_timeout}s "
+            f"close={self.stream_close_timeout}s "
+            f"backoff_max={self.retry_backoff_max}s "
+            f"retries={self.max_retries}"
+        )
 
         self._init_clients()
 
@@ -325,11 +404,21 @@ class LLM:
             total = getattr(u, "total_tokens", 0) or (prompt + completion)
             if total <= 0:
                 return None
-            return UsageDict(
+            result = UsageDict(
                 prompt_tokens=int(prompt),
                 completion_tokens=int(completion),
                 total_tokens=int(total),
             )
+            # Extract cache tokens (Anthropic / OpenAI style)
+            cache_creation = getattr(u, "cache_creation_input_tokens", 0) or 0
+            cache_read = getattr(u, "cache_read_input_tokens", 0) or 0
+            # OpenAI prompt_tokens_details style
+            ptd = getattr(u, "prompt_tokens_details", None)
+            if ptd and not cache_read:
+                cache_read = getattr(ptd, "cached_tokens", 0) or 0
+            result["cache_creation_tokens"] = int(cache_creation)
+            result["cache_read_tokens"] = int(cache_read)
+            return result
         except Exception:
             return None
 
@@ -340,6 +429,7 @@ class LLM:
             self._session_stats[sid]["round_calls"] = 0
             self._session_stats[sid]["last_prompt_tokens"] = 0
             self._session_stats[sid]["last_total_tokens"] = 0
+            self._session_stats[sid]["last_cache_read_tokens"] = 0
 
     async def _report_usage(
         self,
@@ -362,6 +452,9 @@ class LLM:
                     "completion_tokens": 0,
                     "total_tokens": 0,
                     "calls": 0,
+                    "cache_read_tokens": 0,          # ★ 累计命中
+                    "cache_creation_tokens": 0,      # ★ 累计创建
+                    "last_cache_read_tokens": 0,
                 }
             s = self._session_stats[sid]
             p = usage.get("prompt_tokens", 0)
@@ -376,6 +469,9 @@ class LLM:
             s["completion_tokens"] += c
             s["total_tokens"] += t
             s["calls"] += 1
+            s["cache_read_tokens"] += usage.get("cache_read_tokens", 0)
+            s["cache_creation_tokens"] += usage.get("cache_creation_tokens", 0)
+            s["last_cache_read_tokens"] = usage.get("cache_read_tokens", 0)
 
             extra = extra or {}
             tool = extra.get("tool", "")
@@ -392,6 +488,45 @@ class LLM:
             _info(
                 f"[LLM] {method} sid={sid} model={model} usage_missing=True"
             )
+
+        # ── 直接写 JSONL 日志（读写分离，不经过插件） ──
+        try:
+            now = time.time()
+            provider = ""
+            model_name = model
+            if isinstance(model, str) and "/" in model:
+                parts = model.split("/", 1)
+                provider = parts[0]
+                model_name = parts[1]
+            _extra = extra or {}
+            prompt_tokens = usage.get("prompt_tokens", 0) if usage else 0
+            completion_tokens = usage.get("completion_tokens", 0) if usage else 0
+            total_tokens = usage.get("total_tokens", 0) if usage else 0
+            error_msg = ""
+            if not usage or total_tokens == 0:
+                error_msg = "No token usage reported (possible error or empty response)"
+            cache_creation = usage.get("cache_creation_tokens", 0) if usage else 0
+            cache_read = usage.get("cache_read_tokens", 0) if usage else 0
+            _write_usage_jsonl({
+                "ts": now,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
+                "date": time.strftime("%Y-%m-%d", time.localtime(now)),
+                "session_id": sid,
+                "method": method,
+                "provider": provider,
+                "model": model_name,
+                "model_full": model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "cache_creation_tokens": cache_creation,
+                "cache_read_tokens": cache_read,
+                "text_len": _extra.get("text_len", 0),
+                "tool": _extra.get("tool", ""),
+                "note": error_msg,
+            })
+        except Exception:
+            pass  # 日志写入失败不影响主流程
 
         if self._usage_callback:
             try:
@@ -420,6 +555,9 @@ class LLM:
                 "round_calls": 0,
                 "last_prompt_tokens": 0,
                 "last_total_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "last_cache_read_tokens": 0,
             },
         )
         return copy.deepcopy(raw)
@@ -439,6 +577,7 @@ class LLM:
                 api_key=cfg.get("api_key", ""),
                 base_url=cfg.get("base_url", "https://api.openai.com/v1"),
                 models=cfg.get("models", []),
+                default_model=cfg.get("default_model", "") or "",
             )
             self._init_openai_provider(provider)
 
@@ -476,7 +615,13 @@ class LLM:
             )
             self._clients[provider.name] = client
 
-            for model_cfg in provider.models:
+            # 模型清单不再落盘：provider 只存自己的 default_model。
+            # 若旧配置里还残留 models[] 列表，优先用它（兼容），否则用 default_model。
+            model_cfgs = provider.models or []
+            if not model_cfgs and provider.default_model:
+                model_cfgs = [{"id": provider.default_model}]
+
+            for model_cfg in model_cfgs:
                 model_id = model_cfg.get("id")
                 if not model_id:
                     continue
@@ -565,9 +710,11 @@ class LLM:
             return self._clients[name], ref, _bare_model_id(ref)
         return None, ref, _bare_model_id(ref)
 
-    @staticmethod
-    def _calculate_backoff(attempt: int, max_wait: int = 10) -> float:
-        wait = min(2 ** attempt, max_wait)
+    def _calculate_backoff(
+        self, attempt: int, max_wait: Optional[float] = None
+    ) -> float:
+        limit = self.retry_backoff_max if max_wait is None else max_wait
+        wait = min(2 ** attempt, limit)
         jitter = random.uniform(0, wait * 0.5)
         return wait + jitter
 
@@ -721,7 +868,7 @@ class LLM:
             result = await self._chat_impl(
                 messages, model, role=role, session_id=session_id, **kwargs
             )
-            if result and not result.startswith("["):
+            if result and not is_llm_error_string(result):
                 yield result
             else:
                 yield FALLBACK_MESSAGES["empty"]
@@ -733,6 +880,8 @@ class LLM:
             stream = None
             think_unclosed = False
             yielded_any = False
+            stage = "响应头"
+            deadline = time.monotonic() + self.stream_timeout
             try:
                 _log(f"📡 stream {attempt + 1}/{self.max_retries} → {actual_model}")
 
@@ -753,10 +902,12 @@ class LLM:
                 in_think: Optional[bool] = None
                 usage_acc: Optional[UsageDict] = None
 
+                stage = "首包/包间"
                 async for chunk in self._iter_stream_with_timeout(
                     stream,
-                    first_token_timeout=self.request_timeout,
-                    inter_token_timeout=60.0,
+                    first_token_timeout=self.first_token_timeout,
+                    inter_token_timeout=self.inter_token_timeout,
+                    total_deadline=deadline,
                 ):
                     u = self._extract_usage(chunk)
                     if u:
@@ -786,7 +937,8 @@ class LLM:
                     if in_think is True:
                         close_idx = buffer.find(THINK_CLOSE)
                         if close_idx != -1:
-                            rest = buffer[close_idx + len(THINK_CLOSE):].lstrip()
+                            # 保留 think 结束后正文/代码块的缩进，只移除换行。
+                            rest = buffer[close_idx + len(THINK_CLOSE):].lstrip("\r\n")
                             buffer = rest
                             in_think = False
                             if buffer:
@@ -801,19 +953,13 @@ class LLM:
                             yield buffer
                             yielded_any = True
                 elif in_think is True:
-                    # ★ FIX: 未闭合不再判失败，宽容吐出最后一个 <think> 之后的尾部
-                    last_open = buffer.rfind(THINK_OPEN)
-                    tail = (
-                        buffer[last_open + len(THINK_OPEN):]
-                        if last_open != -1
-                        else buffer
+                    # ★ 未闭合的 <think>：整段 buffer 都是推理内容
+                    #   直接丢弃，不外泄给调用方（避免泄露模型内部推理）
+                    _info(
+                        f"流式：<think> 未闭合，丢弃 {len(buffer)} chars 推理内容"
                     )
-                    if tail:
-                        yield tail
-                        yielded_any = True
-                        _info(f"流式：<think> 未闭合，宽容吐出尾部 {len(tail)} chars")
                     buffer = ""
-                    think_unclosed = False  # 不再触发失败重试
+                    think_unclosed = True
                 elif in_think is False and buffer:
                     yield buffer
                     yielded_any = True
@@ -836,7 +982,7 @@ class LLM:
                     return
 
             except asyncio.TimeoutError:
-                _info(f"⏱️ stream 超时 attempt={attempt + 1}")
+                _info(f"⏱️ stream 超时 stage={stage} attempt={attempt + 1}")
                 if yielded_any:
                     return
                 if attempt == self.max_retries - 1:
@@ -846,7 +992,7 @@ class LLM:
                 kind = _classify_stream_error(exc)
                 msg = _sanitize_for_log(str(exc))
                 _info(
-                    f"❌ stream 错误 attempt={attempt+1} kind={kind} "
+                    f"❌ stream 错误 stage={stage} attempt={attempt+1} kind={kind} "
                     f"type={type(exc).__name__} msg={msg[:150]}"
                 )
                 if yielded_any:
@@ -857,14 +1003,16 @@ class LLM:
             finally:
                 if stream is not None:
                     try:
-                        await asyncio.wait_for(stream.close(), timeout=10.0)
+                        await asyncio.wait_for(
+                            stream.close(), timeout=self.stream_close_timeout
+                        )
                     except asyncio.TimeoutError:
-                        _log("stream.close() 超时 10s，放弃")
+                        _log(f"stream.close() 超时 {self.stream_close_timeout}s，放弃")
                     except Exception as exc:
                         _log(f"stream.close 失败: {type(exc).__name__}: {exc}")
 
             if attempt < self.max_retries - 1:
-                await asyncio.sleep(self._calculate_backoff(attempt, max_wait=10))
+                await asyncio.sleep(self._calculate_backoff(attempt))
 
         yield FALLBACK_MESSAGES["max_retries"]
 
@@ -920,7 +1068,7 @@ class LLM:
                 **kwargs,
             )
 
-            if raw.startswith("[") and raw.endswith("]"):
+            if is_llm_error_string(raw):
                 if attempt == max_json_attempts - 1:
                     return {"error": raw}
                 continue
@@ -1182,9 +1330,15 @@ class LLM:
             tool_calls_acc: Dict[int, Dict[str, str]] = {}
             yielded_text = False
             yielded_any = False
+            stage = "响应头"
+            attempt_start = time.monotonic()
+            deadline = attempt_start + self.stream_timeout
 
             try:
-                _log(f"📡 chat_tool_stream {attempt + 1}/{self.max_retries} → {actual_model}")
+                _info(
+                    f"📡 chat_tool_stream attempt={attempt + 1}/{self.max_retries} "
+                    f"model={actual_model} msgs={len(messages)}"
+                )
 
                 # ★ FIX 1: create 加 wait_for
                 stream = await asyncio.wait_for(
@@ -1206,10 +1360,12 @@ class LLM:
                 in_think: Optional[bool] = None
 
                 # ★ FIX 2: async for 用 _iter_stream_with_timeout 包
+                stage = "首包/包间"
                 async for chunk in self._iter_stream_with_timeout(
                     stream,
-                    first_token_timeout=self.request_timeout,
-                    inter_token_timeout=60.0,
+                    first_token_timeout=self.first_token_timeout,
+                    inter_token_timeout=self.inter_token_timeout,
+                    total_deadline=deadline,
                 ):
                     u = self._extract_usage(chunk)
                     if u:
@@ -1253,10 +1409,14 @@ class LLM:
                             yielded_text = True
                             yielded_any = True
                             think_buf = ""
-                        elif in_think is True:
+                        # ★ 用 if 而非 elif：判定块里刚置 in_think=True 时，
+                        #   同一 chunk 内可能已含 </think>，需要继续做闭合检测，
+                        #   否则最后一个 chunk 里的正文会被当成“未闭合 think”丢弃。
+                        if in_think is True:
                             close_idx = think_buf.find(THINK_CLOSE)
                             if close_idx != -1:
-                                rest = think_buf[close_idx + len(THINK_CLOSE):].lstrip()
+                                # 保留 think 结束后正文/代码块的缩进，只移除换行。
+                                rest = think_buf[close_idx + len(THINK_CLOSE):].lstrip("\r\n")
                                 think_buf = rest
                                 in_think = False
                                 if think_buf:
@@ -1298,6 +1458,15 @@ class LLM:
                                 f"name={slot['name']!r} args_len={len(slot['args'])}"
                             )
 
+                            # ★ 新增：每个 delta 都下发进度事件，供前端在“等待完整 tool_call”期间显示“参数在涨”
+                            yield {
+                                "type": "tool_call_delta",
+                                "index": idx,
+                                "name": slot["name"] or "",
+                                "args_delta": fn_args if isinstance(fn_args, str) else "",
+                                "args_len": len(slot["args"]),
+                            }
+
                 if in_think is None and think_buf:
                     cleaned = _strip_leading_think(think_buf)
                     if cleaned:
@@ -1307,18 +1476,11 @@ class LLM:
                         yielded_any = True
                     think_buf = ""
                 elif in_think is True:
-                    last_open = think_buf.rfind(THINK_OPEN)
-                    tail = (
-                        think_buf[last_open + len(THINK_OPEN):]
-                        if last_open != -1
-                        else think_buf
+                    # ★ 未闭合的 <think>：整段 think_buf 都是推理内容
+                    #   直接丢弃，不外泄给调用方（避免泄露模型内部推理）
+                    _info(
+                        f"流式：<think> 未闭合，丢弃 {len(think_buf)} chars 推理内容"
                     )
-                    if tail:
-                        text_buf += tail
-                        yield {"type": ET_TEXT, "content": tail}
-                        yielded_text = True
-                        yielded_any = True
-                        _info(f"流式：<think> 未闭合，宽容吐出尾部 {len(tail)} chars")
                     think_buf = ""
                 elif in_think is False and think_buf:
                     text_buf += think_buf
@@ -1432,8 +1594,14 @@ class LLM:
                 return
 
             except asyncio.TimeoutError:
-                _info(f"⏱️ chat_tool_stream 超时 attempt={attempt + 1}")
-                if yielded_text:
+                _info(
+                    f"⏱️ chat_tool_stream 超时 stage={stage} attempt={attempt + 1} "
+                    f"elapsed={time.monotonic() - attempt_start:.1f}s "
+                    f"yielded_text={yielded_text} yielded_any={yielded_any}"
+                )
+                # ★ 已输出任何内容（thinking / text / tool_call）就不能整轮重放，
+                #   否则前端会收到重复的 thinking。只用 yielded_text 判断会漏掉 thinking。
+                if yielded_any:
                     yield {"type": ET_ERROR, "error": FALLBACK_MESSAGES["timeout"]}
                     yield {"type": ET_DONE, "finish_reason": "error"}
                     await self._report_usage(
@@ -1452,11 +1620,12 @@ class LLM:
                     )
                     return
                 yield {
-                        "type": "retry",
-                        "attempt": attempt + 1,
-                        "max_attempts": self.max_retries,
-                        "reason": "timeout",
-                    }
+                    "type": "retry",
+                    "attempt": attempt + 1,
+                    "max_attempts": self.max_retries,
+                    "reason": "timeout",
+                    "stage": stage,
+                }
             except Exception as exc:
                 kind = _classify_stream_error(exc)
                 msg = _sanitize_for_log(str(exc))
@@ -1494,19 +1663,22 @@ class LLM:
                     "attempt": attempt + 1,
                     "max_attempts": self.max_retries,
                     "reason": kind,
+                    "stage": stage,
                 }
             finally:
                 # ★ FIX 3: stream.close() 加超时
                 if stream is not None:
                     try:
-                        await asyncio.wait_for(stream.close(), timeout=10.0)
+                        await asyncio.wait_for(
+                            stream.close(), timeout=self.stream_close_timeout
+                        )
                     except asyncio.TimeoutError:
-                        _log("stream.close() 超时 10s，放弃")
+                        _log(f"stream.close() 超时 {self.stream_close_timeout}s，放弃")
                     except Exception as exc:
                         _log(f"stream.close 失败: {type(exc).__name__}: {exc}")
 
             if attempt < self.max_retries - 1:
-                await asyncio.sleep(self._calculate_backoff(attempt, max_wait=10))
+                await asyncio.sleep(self._calculate_backoff(attempt))
 
         yield {"type": ET_ERROR, "error": FALLBACK_MESSAGES["max_retries"]}
         yield {"type": ET_DONE, "finish_reason": "error"}
@@ -1514,17 +1686,20 @@ class LLM:
     async def _iter_stream_with_timeout(
         self,
         stream: Any,
-        first_token_timeout: float = 90.0,
-        inter_token_timeout: float = 60.0,
+        first_token_timeout: float,
+        inter_token_timeout: float,
+        total_deadline: Optional[float] = None,
     ) -> AsyncIterator[Any]:
-        """流式迭代 + 首包超时 + 包间超时。
-
-        - first_token_timeout：等第一个 chunk 的超时（等响应头 + 首 token）
-        - inter_token_timeout：两个 chunk 之间的超时
-        """
+        """流式迭代 + 首包超时 + 包间超时 + 单次流总预算。"""
         first = True
         while True:
             timeout = first_token_timeout if first else inter_token_timeout
+            if total_deadline is not None:
+                remaining = total_deadline - time.monotonic()
+                if remaining <= 0:
+                    _info("⏱️ stream 总预算耗尽")
+                    raise asyncio.TimeoutError("stream total timeout")
+                timeout = min(timeout, remaining)
             try:
                 chunk = await asyncio.wait_for(
                     stream.__anext__(), timeout=timeout
@@ -1532,9 +1707,8 @@ class LLM:
             except StopAsyncIteration:
                 return
             except asyncio.TimeoutError:
-                _info(
-                    f"⏱️ stream {'首包' if first else '包间'}超时 {timeout}s"
-                )
+                stage = "首包" if first else "包间"
+                _info(f"⏱️ stream {stage}超时 budget={timeout:.1f}s")
                 raise
             first = False
             yield chunk
@@ -1551,7 +1725,9 @@ class LLM:
             return False
         for name, client in self._clients.items():
             try:
-                await asyncio.wait_for(client.models.list(), timeout=5.0)
+                await asyncio.wait_for(
+                    client.models.list(), timeout=DEFAULT_HEALTH_CHECK_TIMEOUT
+                )
                 _log(f"✅ health check: {name} OK")
                 return True
             except Exception as exc:

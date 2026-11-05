@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Usage</title>
+<meta name="page-title" content="Token 用量分析">
+<meta name="page-title-en" content="Token Usage Analytics">
+<meta name="page-icon" content="📊">
+<meta name="page-desc" content="查看 LLM 调用的 token 用量明细与汇总">
+<meta name="page-desc-en" content="View LLM token usage details and summaries">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html, body {
+  background: #0a0a0f;
+  color: #e5e7eb;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100%;
+}
+
+/* ===== Header ===== */
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: rgba(15,15,22,0.8);
+  backdrop-filter: blur(12px);
+}
+.panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: -0.01em;
+}
+.panel-title-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: white;
+}
+.lang-toggle {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #9ca3af;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.lang-toggle:hover {
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.2);
+}
+
+/* ===== Summary Cards ===== */
+.summary-row {
+  display: flex;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  flex-wrap: wrap;
+}
+.summary-card {
+  flex: 1;
+  min-width: 160px;
+  background: rgba(20,20,28,0.6);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.summary-card .label {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.summary-card .value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #f3f4f6;
+  font-family: 'JetBrains Mono', monospace;
+}
+.summary-card .sub {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+/* ===== Filter Bar ===== */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  flex-wrap: wrap;
+}
+.filter-bar label {
+  font-size: 11px;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', monospace;
+}
+.filter-bar input, .filter-bar select {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #e5e7eb;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.filter-bar input:focus, .filter-bar select:focus {
+  border-color: rgba(139,92,246,0.5);
+}
+.filter-bar input[type="date"] {
+  width: 130px;
+  color-scheme: dark;
+}
+.btn {
+  background: linear-gradient(135deg,#8b5cf6,#6366f1);
+  color: white;
+  border: none;
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.btn:hover { opacity: 0.85; }
+.btn-outline {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #9ca3af;
+}
+.btn-outline:hover {
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.2);
+}
+.spacer { flex: 1; }
+
+/* ===== Table ===== */
+.table-wrap {
+  padding: 0 18px 10px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: auto;
+}
+thead th {
+  position: sticky;
+  top: 0;
+  background: #0a0a0f;
+  text-align: left;
+  padding: 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  font-family: 'JetBrains Mono', monospace;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap;
+  z-index: 1;
+}
+tbody td {
+  padding: 7px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  color: #d1d5db;
+  vertical-align: top;
+}
+tbody tr:hover {
+  background: rgba(139,92,246,0.05);
+}
+.tok-num {
+  color: #a78bfa;
+  font-weight: 500;
+}
+.tok-cache {
+  display: block;
+  font-size: 9px;
+  color: #6b7280;
+  font-weight: 400;
+  line-height: 1.2;
+  margin-top: 1px;
+}
+.tok-total {
+  color: #f59e0b;
+  font-weight: 600;
+}
+.note-cell {
+  color: #ef4444;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-cell {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #9ca3af;
+}
+.pm-cell .pm-provider {
+  color: #6b7280;
+}
+.pm-cell .pm-model {
+  color: #d1d5db;
+}
+.hit-rate {
+  font-size: 9.5px;
+  color: #6b7280;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* ===== Pagination ===== */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 18px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  font-size: 12px;
+  color: #9ca3af;
+}
+.pagination button {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #9ca3af;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.pagination button:hover:not(:disabled) {
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.2);
+}
+.pagination button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.pagination .page-info {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* ===== Loading ===== */
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #6b7280;
+  font-size: 13px;
+}
+.loading::after {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(139,92,246,0.3);
+  border-top-color: #8b5cf6;
+  border-radius: 50%;
+  margin-left: 8px;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-msg {
+  text-align: center;
+  padding: 40px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* 滚动条（与 console.html 一致） */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,0.08);border-radius:8px;
+}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.15)}
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="panel-header">
+  <div class="panel-title">
+    <div class="panel-title-icon">📊</div>
+    <span data-i18n="title">Token Usage Analytics</span>
+  </div>
+  <button class="lang-toggle" onclick="toggleLang()" id="langBtn">中</button>
+</div>
+
+<!-- Summary -->
+<div class="summary-row" id="summaryRow">
+  <div class="summary-card">
+    <div class="label" data-i18n="summary.todayCalls">Today Calls</div>
+    <div class="value" id="todayCalls">-</div>
+    <div class="sub" id="todayTokens"></div>
+  </div>
+  <div class="summary-card">
+    <div class="label" data-i18n="summary.todayTokens">Today Tokens</div>
+    <div class="value" id="todayTotal">-</div>
+    <div class="sub" id="todayDetail"></div>
+  </div>
+  <div class="summary-card">
+    <div class="label" data-i18n="summary.allTime">All Time</div>
+    <div class="value" id="histTotal">-</div>
+    <div class="sub" id="histDetail"></div>
+  </div>
+  <div class="summary-card">
+    <div class="label" data-i18n="summary.queryRange">Query Range</div>
+    <div class="value" id="queryTotal">-</div>
+    <div class="sub" id="queryDetail"></div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="filter-bar">
+  <label data-i18n="filter.from">From</label>
+  <input type="date" id="dateFrom" lang="en-US">
+  <label data-i18n="filter.to">To</label>
+  <input type="date" id="dateTo" lang="en-US">
+  <label>Provider</label>
+  <select id="filterProvider"><option value="">All</option></select>
+  <label>Model</label>
+  <select id="filterModel"><option value="">All</option></select>
+  <button class="btn" onclick="doQuery(1)" data-i18n="filter.search">Search</button>
+  <button class="btn btn-outline" onclick="doReset()" data-i18n="filter.reset">Reset</button>
+  <span class="spacer"></span>
+  <button class="btn btn-outline" onclick="doExport()" data-i18n="filter.export">Export CSV</button>
+</div>
+
+<!-- Table -->
+<div class="table-wrap" id="tableWrap">
+  <table>
+    <thead>
+      <tr>
+        <th data-i18n="col.time">Time</th>
+        <th>Session</th>
+        <th data-i18n="col.method">Method</th>
+        <th data-i18n="col.providerModel">Provider / Model</th>
+        <th data-i18n="col.prompt">Prompt</th>
+        <th data-i18n="col.completion">Completion</th>
+        <th data-i18n="col.total">Total</th>
+        <th data-i18n="col.note">Note</th>
+      </tr>
+    </thead>
+      </tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="9" class="loading" data-i18n="msg.loading">Loading</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+<div class="pagination" id="pagination">
+  <button onclick="goPage(1)" data-i18n="page.first">First</button>
+  <button onclick="goPage(currentPage-1)" data-i18n="page.prev">Prev</button>
+  <span class="page-info" id="pageInfo">1 / 1</span>
+  <button onclick="goPage(currentPage+1)" data-i18n="page.next">Next</button>
+  <button onclick="goPage(totalPages)" data-i18n="page.last">Last</button>
+  <span style="margin-left:8px;color:#6b7280" id="totalInfo"></span>
+</div>
+
+<script>
+/* ============ i18n ============ */
+var _lang = localStorage.getItem('aicp_lang') || 'en';
+
+var I18N = {
+  zh: {
+    'title': 'Token 用量分析',
+    'summary.todayCalls': '今日调用',
+    'summary.todayTokens': '今日 Tokens',
+    'summary.allTime': '历史总计',
+    'summary.queryRange': '查询范围',
+    'filter.from': '从',
+    'filter.to': '至',
+    'filter.search': '查询',
+    'filter.reset': '重置',
+    'filter.export': '导出 CSV',
+    'col.time': '时间',
+    'col.method': '方法',
+    'col.prompt': '输入',
+    'col.providerModel': 'Provider / Model',
+    'col.note': '备注',
+    'page.first': '首页',
+    'page.prev': '上一页',
+    'page.next': '下一页',
+    'page.last': '末页',
+    'msg.loading': '加载中',
+    'msg.noData': '暂无数据',
+    'msg.errors': '错误: ',
+    'msg.calls': ' 次调用 | ↑',
+    'msg.days': '天',
+    'msg.total': '共 ',
+    'msg.records': ' 条',
+    'msg.groupTotal': '▲ 组合计',
+    'msg.groupItems': ' 条',
+    'msg.cacheWrite': '缓存写入 ',
+    'msg.cacheHit': '缓存命中 ',
+    'msg.cacheHitRate': '缓存命中率',
+    'col.providerModel': 'Provider / Model'
+  },
+  en: {
+    'title': 'Token Usage Analytics',
+    'summary.todayCalls': 'Today Calls',
+    'summary.todayTokens': 'Today Tokens',
+    'summary.allTime': 'All Time',
+    'summary.queryRange': 'Query Range',
+    'filter.from': 'From',
+    'filter.to': 'To',
+    'filter.search': 'Search',
+    'filter.reset': 'Reset',
+    'filter.export': 'Export CSV',
+    'col.time': 'Time',
+    'col.method': 'Method',
+    'col.prompt': 'Prompt',
+    'col.providerModel': 'Provider / Model',
+    'col.completion': 'Completion',
+    'page.first': 'First',
+    'page.prev': 'Prev',
+    'page.next': 'Next',
+    'page.last': 'Last',
+    'msg.loading': 'Loading',
+    'msg.noData': 'No data',
+    'msg.errors': 'Errors: ',
+    'msg.calls': ' calls | ↑',
+    'msg.days': 'd',
+    'msg.total': 'Total ',
+    'msg.records': ' records',
+    'msg.groupTotal': '▲ Group Total',
+    'msg.groupItems': '',
+    'msg.cacheWrite': 'cache write ',
+    'msg.cacheHit': 'cache hit ',
+    'msg.cacheHitRate': 'Cache Hit Rate'
+  }
+};
+
+function t(key) { return (I18N[_lang] || I18N.en)[key] || key; }
+
+function applyLang(lang) {
+  _lang = lang;
+  localStorage.setItem('aicp_lang', lang);
+  document.getElementById('langBtn').textContent = lang === 'zh' ? 'EN' : '中文';
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    var key = el.getAttribute('data-i18n');
+    if (I18N[lang][key] !== undefined) el.textContent = I18N[lang][key];
+  });
+  // Re-render dynamic content
+  loadSummaries();
+  doQuery(currentPage);
+  // Notify parent (if in iframe)
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'aicp_lang', lang: lang}, '*');
+    }
+  } catch(e) {}
+}
+
+function toggleLang() {
+  applyLang(_lang === 'zh' ? 'en' : 'zh');
+}
+
+/* Listen for language sync from parent (console.html) via postMessage */
+window.addEventListener('message', function(e) {
+  if (!e.data || e.data.type !== 'aicp_lang') return;
+  var lang = e.data.lang;
+  if ((lang === 'zh' || lang === 'en') && lang !== _lang) applyLang(lang);
+});
+/* Also listen for storage events (other tabs) */
+window.addEventListener('storage', function(e) {
+  if (e.key === 'aicp_lang' && e.newValue && e.newValue !== _lang) applyLang(e.newValue);
+});
+
+/* ============ Core ============ */
+var currentPage = 1;
+var totalPages = 1;
+var PAGE_SIZE = 60;
+
+function fmt(n) {
+  if (n === undefined || n === null) return '0';
+  return Number(n).toLocaleString();
+}
+
+async function api(action, params) {
+  var body = Object.assign({ action: action }, params || {});
+  var resp = await fetch('/api/os/_llm_usage_query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return await resp.json();
+}
+
+async function loadFilters() {
+  var res = await api('filters');
+  if (!res.ok) return;
+  var d = res.data;
+  var pSel = document.getElementById('filterProvider');
+  var mSel = document.getElementById('filterModel');
+  (d.providers || []).forEach(function(p) {
+    var o = document.createElement('option');
+    o.value = p; o.textContent = p;
+    pSel.appendChild(o);
+  });
+  (d.models || []).forEach(function(m) {
+    var o = document.createElement('option');
+    o.value = m; o.textContent = m;
+    mSel.appendChild(o);
+  });
+}
+
+async function loadSummaries() {
+  var todayRes = await api('today_summary');
+  if (todayRes.ok) {
+    var s = todayRes.data.summary;
+    document.getElementById('todayCalls').textContent = fmt(s.total_calls);
+    document.getElementById('todayTokens').textContent = t('msg.errors') + fmt(s.error_calls);
+    document.getElementById('todayTotal').textContent = fmt(s.total_tokens);
+    document.getElementById('todayDetail').textContent = '↑' + fmt(s.prompt_tokens) + ' ↓' + fmt(s.completion_tokens);
+  }
+  var histRes = await api('history_summary');
+  if (histRes.ok) {
+    var h = histRes.data;
+    document.getElementById('histTotal').textContent = fmt(h.total_tokens);
+    var range = h.date_range || {};
+    document.getElementById('histDetail').textContent = (range.from || '?') + ' ~ ' + (range.to || '?') + ' (' + (h.days || 0) + t('msg.days') + ')';
+  }
+}
+
+function getFilters() {
+  return {
+    date_from: document.getElementById('dateFrom').value,
+    date_to: document.getElementById('dateTo').value,
+    provider: document.getElementById('filterProvider').value,
+    model: document.getElementById('filterModel').value
+  };
+}
+
+async function doQuery(page) {
+  currentPage = page || 1;
+  var tbody = document.getElementById('tbody');
+  tbody.innerHTML = '<tr><td colspan="9" class="loading">' + t('msg.loading') + '</td></tr>';
+
+  var f = getFilters();
+  f.page = currentPage;
+  f.page_size = PAGE_SIZE;
+  var res = await api('query', f);
+  if (!res.ok) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">' + (res.error || 'Error') + '</td></tr>';
+    return;
+  }
+  var d = res.data;
+  var records = d.records || [];
+  var pg = d.pagination || {};
+  var summary = d.summary || {};
+  totalPages = pg.total_pages || 1;
+  currentPage = pg.page || 1;
+
+  // Update query summary card
+  document.getElementById('queryTotal').textContent = fmt(summary.total_tokens);
+  document.getElementById('queryDetail').textContent = fmt(summary.total_calls) + t('msg.calls') + fmt(summary.prompt_tokens) + ' ↓' + fmt(summary.completion_tokens);
+
+  if (records.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-msg">' + t('msg.noData') + '</td></tr>';
+  } else {
+    // Group adjacent records within 120s
+    var groups = [];
+    var curGroup = [];
+    records.forEach(function(r) {
+      var ts = r.time ? new Date(r.time.replace(' ', 'T')).getTime() : 0;
+      r._ts = ts;
+      if (curGroup.length === 0) {
+        curGroup.push(r);
+      } else {
+        var last = curGroup[curGroup.length - 1];
+        var gap = Math.abs(last._ts - ts);
+        if (gap <= 120000) {
+          curGroup.push(r);
+        } else {
+          groups.push(curGroup);
+          curGroup = [r];
+        }
+      }
+    });
+    if (curGroup.length > 0) groups.push(curGroup);
+
+    var html = '';
+    groups.forEach(function(g) {
+      g.forEach(function(r) {
+        var cacheHtml = '';
+        if (r.cache_creation_tokens) cacheHtml += '<span class="tok-cache">' + t('msg.cacheWrite') + fmt(r.cache_creation_tokens) + '</span>';
+        if (r.cache_read_tokens) cacheHtml += '<span class="tok-cache">' + t('msg.cacheHit') + fmt(r.cache_read_tokens) + '</span>';
+        html += '<tr>'
+          + '<td style="white-space:nowrap">' + esc(r.time || '') + '</td>'
+          + '<td title="' + esc(r.session_id || '') + '">' + esc((r.session_id || '').slice(-8)) + '</td>'
+          + '<td>' + esc(r.method || '') + '</td>'
+          + '<td class="pm-cell" title="' + esc((r.provider || '') + ' / ' + (r.model || '')) + '">'
+          + '<div class="pm-provider">' + esc(r.provider || '') + '</div>'
+          + '<div class="pm-model">' + esc(r.model || '') + '</div></td>'
+          + '<td class="tok-num">' + fmt(r.prompt_tokens) + cacheHtml + '</td>'
+          + '<td class="tok-num">' + fmt(r.completion_tokens) + '</td>'
+          + '<td class="tok-total">' + fmt(r.total_tokens) + '</td>'
+          + '<td class="note-cell" title="' + esc(r.note || '') + '">' + esc(r.note || '-') + '</td>'
+          + '</tr>';
+      });
+      // Summary row for groups with 2+ records
+      if (g.length > 1) {
+        var gPrompt = 0, gComp = 0, gTotal = 0, gCacheRead = 0, gCacheWrite = 0;
+        g.forEach(function(r) {
+          gPrompt += (r.prompt_tokens || 0);
+          gComp += (r.completion_tokens || 0);
+          gTotal += (r.total_tokens || 0);
+          gCacheRead += (r.cache_read_tokens || 0);
+          gCacheWrite += (r.cache_creation_tokens || 0);
+        });
+        var gCacheBase = gPrompt;
+        var gHitRate = gCacheBase > 0 ? (gCacheRead / gCacheBase * 100) : 0;
+        // 命中口径：缓存命中 tokens / 输入 tokens
+        var gHitHtml = '<span class="hit-rate" title="' + (gCacheBase > 0 ? t('msg.cacheHit') + fmt(gCacheRead) + ' / ' + t('col.prompt') + ' ' + fmt(gPrompt) : '-') + '">'
+          + '(' + gHitRate.toFixed(2) + '%)</span>';
+        html += '<tr style="background:rgba(139,92,246,0.08);border-top:1px solid rgba(139,92,246,0.15)">'
+          + '<td colspan="4" style="text-align:right;font-size:11px;color:#8b5cf6;font-weight:600;padding-right:8px">'
+          + t('msg.groupTotal') + ' (' + g.length + (_lang === 'zh' ? t('msg.groupItems') : '') + ')' + '</td>'
+          + '<td class="tok-num" style="color:#8b5cf6">' + fmt(gPrompt) + gHitHtml + '</td>'
+          + '<td class="tok-num" style="color:#8b5cf6">' + fmt(gComp) + '</td>'
+          + '<td class="tok-total" style="color:#c084fc">' + fmt(gTotal) + '</td>'
+          + '<td></td></tr>';
+      }
+    });
+    tbody.innerHTML = html;
+  }
+
+  // Pagination
+  document.getElementById('pageInfo').textContent = currentPage + ' / ' + totalPages;
+  document.getElementById('totalInfo').textContent = t('msg.total') + fmt(pg.total) + t('msg.records');
+  var btns = document.getElementById('pagination').querySelectorAll('button');
+  btns[0].disabled = currentPage <= 1;
+  btns[1].disabled = currentPage <= 1;
+  btns[2].disabled = currentPage >= totalPages;
+  btns[3].disabled = currentPage >= totalPages;
+}
+
+function goPage(p) {
+  if (p < 1) p = 1;
+  if (p > totalPages) p = totalPages;
+  doQuery(p);
+}
+
+function doReset() {
+  document.getElementById('dateFrom').value = '';
+  document.getElementById('dateTo').value = '';
+  document.getElementById('filterProvider').value = '';
+  document.getElementById('filterModel').value = '';
+  doQuery(1);
+}
+
+async function doExport() {
+  var f = getFilters();
+  var res = await api('export', f);
+  if (!res.ok) { alert(res.error || 'Export failed'); return; }
+  var blob = new Blob([res.data.csv], { type: 'text/csv;charset=utf-8;' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'token_usage_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+/* ============ Init ============ */
+(async function() {
+  // Apply initial language (from localStorage, synced with console.html)
+  applyLang(_lang);
+  await loadFilters();
+  await loadSummaries();
+  await doQuery(1);
+})();
+</script>
+</body>
+</html>

@@ -1,29 +1,26 @@
 """
-skill_loader — 技能加载器（搜索 + 加载 + 管理）
+skill_loader — 技能加载器（前端专用：list / index / pin / unpin）
 
-与 Java 版 os/skill_loader.java 对齐。
+与前端 `www/skills` 页面（或 console 内嵌的 skills 面板）对齐。
+仅保留前端使用的 4 个 action：
 
-action：
-- scan：扫 data/skills/，建索引
-- list：列技能（自动 scan）
-- search：搜技能（自动 scan + 粗筛 + LLM 精排）
-- detail：查详情
-- categories：列分类
-- stats：统计
-- load：加载技能到 active_skills（支持模糊匹配）
-- clear：清空当前技能
-- get_active：查看当前技能
-- save_active：保存当前技能
-- loadfromfile：从文件加载到当前技能
+- list  ：列技能（只扫 data/skills/**/SKILL.md）
+- index ：列当前 session 的钉住状态（pinned / indexed）
+- pin   ：钉住（写 pinned.json，status = "pinned"，带总长度 ≤ 60KB 检查）
+- unpin ：卸载（status = "indexed"）
 
-路径：data/memories/main_agent/users/{user_id}/skill.txt
+路径：data/memories/main_agent/users/{user_id}/sessions/{session_id}/pinned.json
 user_id 从 envelop.meta["user_id"] 取，缺省 "local"
+session_id 从 envelop.payload["session_id"] 优先、meta["session_id"] 兜底
+
+主控 main_agent 直接读 pinned.json（_load_pinned_skills），不调本插件。
 """
 
 import json
 import re
 import hashlib
-import asyncio
+import os
+import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
@@ -38,10 +35,12 @@ import core
 DATA_DIR = Path("data/skill_loader")
 SKILLS_DIR = Path("data/skills")
 INDEX_FILE = DATA_DIR / "index.json"
-PLUGINS_ROOT = Path("plugins")
 
 # 身份级：与 main_agent 的 users/{user_id}/skill.txt 对齐
 USER_ROOT = Path("data/memories/main_agent/users")
+
+# ★ 总钉住上限：60KB（含所有 status == "pinned" 的 full_text 长度之和）
+MAX_PINNED_TOTAL_BYTES = 60 * 1024
 
 
 # ============================================================
@@ -272,18 +271,13 @@ def _parse_skill_md(file_path: Path) -> Optional[Dict[str, Any]]:
                 description = line[:200]
                 break
 
+    # 只扫 data/skills/，relative_to(SKILLS_DIR) 必然成功
     try:
         rel = file_path.relative_to(SKILLS_DIR)
         rel_path = str(rel).replace("\\", "/")
     except ValueError:
-        try:
-            rel = file_path.relative_to(PLUGINS_ROOT)
-            rel_path = ("plugins/" + str(rel)).replace("\\", "/")
-        except ValueError:
-            rel_path = str(file_path).replace("\\", "/")
+        rel_path = str(file_path).replace("\\", "/")
 
-    # ★ skill_id 统一交给 _skill_id_from_path（与 main_agent 同规则）：
-    #   同一文件只产生一个 id，SKILL_INDEX 不再出现重复行。
     skill_id = _skill_id_from_path(str(file_path))
     if not skill_id:
         skill_id = file_path.stem.lower() or "unknown"
@@ -304,7 +298,7 @@ def _parse_skill_md(file_path: Path) -> Optional[Dict[str, Any]]:
 
 
 # ============================================================
-# 扫描技能
+# 扫描技能（只扫 data/skills/**/SKILL.md）
 # ============================================================
 
 def _walk_skills(dir_path: Path, out: List[Path]) -> None:
@@ -320,38 +314,25 @@ def _walk_skills(dir_path: Path, out: List[Path]) -> None:
         pass
 
 
-def _walk_plugin_skills(dir_path: Path, out: List[Path]) -> None:
-    """扫描 plugins/**/*_skill.md —— 插件用法文档，与经验技能同源索引。"""
-    if not dir_path.exists():
-        return
-    try:
-        for entry in dir_path.iterdir():
-            if entry.is_dir():
-                if entry.name == "__pycache__":
-                    continue
-                _walk_plugin_skills(entry, out)
-            elif entry.name.endswith("_skill.md"):
-                out.append(entry)
-    except Exception:
-        pass
-
-
 def _scan_skills() -> Dict[str, Any]:
+    """扫描经验技能：只扫 data/skills/**/SKILL.md。
+
+    与 cogitor._scan_skills / contract_agent._handle_skill_contract /
+    main_agent._scan_skills_for_baseline 规则一致——只认 data/skills/，
+    不扫 plugins/**/*_skill.md（插件用法文档走 contract_agent 或
+    use_tool(target="skill/plugin/...") 取，不进 pinned.json）。
+    """
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
     md_files: List[Path] = []
     _walk_skills(SKILLS_DIR, md_files)
-
-    # ★ 双源：经验技能 data/skills/**/SKILL.md  +  插件用法文档 plugins/**/*_skill.md
-    plugin_files: List[Path] = []
-    _walk_plugin_skills(PLUGINS_ROOT, plugin_files)
 
     skills: List[Dict[str, Any]] = []
     categories_set = set()
     blocked_titles: List[str] = []
     seen_ids = set()
 
-    for f in md_files + plugin_files:
+    for f in md_files:
         skill = _parse_skill_md(f)
         if skill is None:
             continue
@@ -371,7 +352,7 @@ def _scan_skills() -> Dict[str, Any]:
     data = {
         "skills": skills,
         "categories": categories,
-        "last_scan": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_scan": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "skipped": blocked_titles,
     }
     _save_index(data)
@@ -379,198 +360,14 @@ def _scan_skills() -> Dict[str, Any]:
 
 
 # ============================================================
-# 模糊匹配 + 搜索
+# 钉住状态读写（users/{user_id}/sessions/{session_id}/pinned.json）
 # ============================================================
-
-def _fuzzy_match(query: str, text: str, threshold: float = 0.3) -> float:
-    q = query.lower()
-    t = text.lower()
-    if not q or not t:
-        return 0.0
-    if q in t:
-        return 1.0
-
-    max_len = 0
-    for i in range(len(q)):
-        for j in range(i + 1, len(q) + 1):
-            sub = q[i:j]
-            if sub in t:
-                max_len = max(max_len, len(sub))
-    ratio = (2.0 * max_len) / (len(q) + len(t))
-    return ratio if ratio >= threshold else 0.0
-
-
-def _search_skills(
-    index: Dict[str, Any],
-    keywords: List[str],
-    category: Optional[str] = None,
-    limit: int = 50,
-) -> List[Dict[str, Any]]:
-    if not keywords:
-        return []
-
-    query = " ".join(keywords).strip()
-    if not query:
-        return []
-
-    results: List[Dict[str, Any]] = []
-    for skill in index.get("skills", []):
-        if category and skill.get("category") != category:
-            continue
-
-        title_score = _fuzzy_match(query, skill.get("title", ""))
-        desc_score = _fuzzy_match(query, skill.get("description", "")) * 0.8
-        tag_scores = [
-            _fuzzy_match(query, t) * 0.7
-            for t in skill.get("tags", [])
-        ]
-        tag_max = max(tag_scores) if tag_scores else 0.0
-        content_score = _fuzzy_match(query, skill.get("content", "")[:2000]) * 0.5
-
-        score = max(title_score, desc_score, tag_max, content_score)
-        if score <= 0:
-            continue
-
-        results.append({
-            "skill_id": skill.get("skill_id"),
-            "title": skill.get("title"),
-            "description": skill.get("description"),
-            "category": skill.get("category"),
-            "tags": skill.get("tags"),
-            "file_path": skill.get("file_path"),
-            "skill_dir": skill.get("skill_dir", ""),
-            "score": round(score, 3),
-        })
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:limit]
-
-
-# ============================================================
-# LLM 精排
-# ============================================================
-
-def _extract_json_object(raw: str) -> Optional[Dict[str, Any]]:
-    if not raw:
-        return None
-    start = raw.find("{")
-    if start == -1:
-        return None
-
-    depth = 0
-    in_string = False
-    escape = False
-    end = -1
-
-    for i in range(start, len(raw)):
-        ch = raw[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-
-    if end == -1:
-        return None
-
-    try:
-        return json.loads(raw[start:end + 1])
-    except Exception:
-        return None
-
-
-async def _llm_rank(
-    agent,
-    query: str,
-    keywords: List[str],
-    candidates: List[Dict[str, Any]],
-    top_k: int = 10,
-) -> Dict[str, Any]:
-    briefs = []
-    for s in candidates:
-        desc = str(s.get("description", ""))[:200]
-        briefs.append({
-            "skill_id": s.get("skill_id"),
-            "title": s.get("title"),
-            "description": desc,
-            "tags": list(s.get("tags", []))[:5],
-        })
-
-    system_prompt = (
-        "你是一个技能推荐专家。用户提出问题并给出关键词，你需要从候选技能中选出最匹配的。\n"
-        "候选技能已经经过初步关键词筛选，你只需要做语义精排。\n"
-        '返回JSON格式：{"skills": [{"skill_id": "xxx", "reason": "推荐理由"}]}\n'
-        "只返回最相关的 top_k 个，按相关度从高到低排序。"
-    )
-
-    user_prompt = (
-        f"用户问题：{query}\n"
-        f"关键词：{', '.join(keywords)}\n"
-        f"返回数量：{top_k}\n"
-        f"候选技能（共{len(briefs)}个）：\n"
-        + json.dumps(briefs, ensure_ascii=False)
-    )
-
-    try:
-        if not agent.llm:
-            raise RuntimeError("LLM 未配置")
-
-        raw = await agent.llm.chat([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ])
-
-        parsed = _extract_json_object(raw)
-        ranked = parsed.get("skills", []) if isinstance(parsed, dict) else []
-
-        out: List[Dict[str, Any]] = []
-        for item in ranked[:top_k]:
-            sid = item.get("skill_id")
-            for c in candidates:
-                if c.get("skill_id") == sid:
-                    enriched = dict(c)
-                    enriched["reason"] = item.get("reason")
-                    out.append(enriched)
-                    break
-
-        return {"skills": out, "total": len(out)}
-    except Exception as e:
-        fallback = candidates[:top_k]
-        out = [
-            {"skill_id": s.get("skill_id"), "reason": "关键词匹配（LLM降级）"}
-            for s in fallback
-        ]
-        return {"skills": out, "total": len(out), "error": str(e)}
-
-
-# ============================================================
-# 活跃技能读写（身份级，走 users/{user_id}/skill.txt）
-# ============================================================
-
-def _user_dir(user_id: str) -> Path:
-    p = USER_ROOT / user_id
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
 
 def _pinned_file(user_id: str, session_id: str) -> Path:
-    """本会话钉住的技能全文（唯一真相源）。"""
     p = USER_ROOT / user_id / "sessions" / session_id
     p.mkdir(parents=True, exist_ok=True)
     return p / "pinned.json"
+
 
 def _resolve_session_id(envelop) -> str:
     """从 payload 优先、meta 兜底取 session_id。"""
@@ -580,6 +377,15 @@ def _resolve_session_id(envelop) -> str:
     return str(sid).strip()
 
 
+def _resolve_user_id(envelop) -> str:
+    """从 meta 取 user_id，缺省 local（与 main_agent.resolve_ids 一致）。"""
+    meta = envelop.meta or {}
+    uid = (
+        meta.get("user_id")
+        or meta.get("auth_result", {}).get("user_id")
+        or "local"
+    )
+    return str(uid).strip() or "local"
 
 
 def _load_state(user_id: str, session_id: str) -> Dict[str, Any]:
@@ -600,7 +406,6 @@ def _load_state(user_id: str, session_id: str) -> Dict[str, Any]:
         data["last_user_stamp"] = ""
     return data
 
-import os, uuid
 
 def _save_state(user_id: str, session_id: str, state: Dict[str, Any]) -> None:
     f = _pinned_file(user_id, session_id)
@@ -612,18 +417,9 @@ def _save_state(user_id: str, session_id: str, state: Dict[str, Any]) -> None:
 def _skill_id_from_path(file_path: str) -> str:
     """从文件路径推导 skill_id。
 
-    ★ 与 main_agent._skill_sid_for_file 规则一致，同一文件不再产生两个 id：
-      plugins/<ppath>/<stem>_skill.md → plugin_<ppath>_<stem>
-      data/skills/<rel>/SKILL.md      → <rel>
+    只认 data/skills/<rel>/SKILL.md → <rel>。
     """
     norm = str(file_path).replace("\\", "/")
-    for marker in ("/plugins/", "plugins/"):
-        i = norm.find(marker)
-        if i != -1:
-            rel = norm[i + len(marker):]
-            if rel.endswith("_skill.md"):
-                rel = rel[: -len("_skill.md")]
-            return ("plugin_" + re.sub(r"[^a-z0-9]+", "_", rel.lower())).strip("_") or "plugin"
     for marker in ("/data/skills/", "data/skills/"):
         i = norm.find(marker)
         if i != -1:
@@ -642,16 +438,15 @@ def _skill_id_from_path(file_path: str) -> str:
 def _abs_skill_path(file_path: str) -> Path:
     """把索引 / state 里的 file_path 解析成可读路径。
 
-    - 绝对路径            → 原样
-    - plugins/...         → 仓库相对路径（插件用法文档）
-    - data/...            → 仓库相对路径
+    - 绝对路径        → 原样
+    - data/...        → 仓库相对路径
     - 其它（SKILLS_DIR 下的相对路径）→ SKILLS_DIR 下
     """
     p = Path(str(file_path))
     if p.is_absolute():
         return p
     norm = str(file_path).replace("\\", "/")
-    if norm.startswith("plugins/") or norm.startswith("data/"):
+    if norm.startswith("data/"):
         return Path(norm)
     return Path(SKILLS_DIR) / norm
 
@@ -667,55 +462,6 @@ def _strip_frontmatter(text: str) -> str:
     if not any(":" in ln for ln in block.splitlines() if ln.strip()):
         return text
     return text[end + 4:].lstrip("\n")
-
-
-def _extract_title_and_desc(content: str, file_path: str) -> Tuple[str, str]:
-    """从技能内容提取标题和描述。★ 支持 YAML frontmatter：title/description 优先。"""
-    lines = content.split("\n")
-
-    fm = {}
-    if lines and lines[0].strip() == "---":
-        end = 0
-        for i in range(1, len(lines)):
-            if lines[i].strip() == "---":
-                end = i
-                break
-            ln = lines[i].strip()
-            if ":" in ln and not ln.startswith("#"):
-                k, v = ln.split(":", 1)
-                fm[k.strip().lower()] = _strip_quotes(v.strip())
-        lines = lines[end + 1:]
-
-    title = Path(file_path).stem
-    desc = ""
-    title_found = False
-    if fm.get("title"):
-        title = fm["title"]
-        title_found = True
-    if fm.get("description"):
-        return title, fm["description"][:140]
-
-    for line in lines:
-        s = line.strip()
-        if not s:
-            if title_found and desc:
-                break
-            continue
-        if s.startswith("# ") and not title_found:
-            title = s[2:].strip()
-            title_found = True
-            continue
-        # 跳过注释行
-        if s.startswith("<!--"):
-            continue
-        # 第一行正文作为描述
-        if not desc:
-            desc = s[:140]
-            if title_found:
-                break
-    if not desc:
-        desc = title
-    return title, desc
 
 
 def _index_to_text(state: Dict[str, Any]) -> str:
@@ -735,134 +481,37 @@ def _index_to_text(state: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _compose_active_content(user_id: str, session_id: str, state: Dict[str, Any]) -> str:
-    pinned = state.get("pinned", {}) or {}
-    parts: List[str] = []
-    index_text = _index_to_text(state)
-    if index_text:
-        parts.append(index_text)
-    blocks: List[str] = []
-    for _sid, info in sorted(pinned.items()):
+def _pinned_total_len(pinned: Dict[str, Any], exclude_sid: str = "") -> int:
+    """已钉住（status == "pinned"）的 full_text 长度之和；可排除某个 sid（重新 pin 时用）。"""
+    total = 0
+    for sid, info in pinned.items():
+        if sid == exclude_sid:
+            continue
         if not isinstance(info, dict):
             continue
         if info.get("status") != "pinned":
             continue
-        full = str(info.get("full_text", "") or "")
-        if full.strip():
-            blocks.append(full.strip())
-    if blocks:
-        parts.append("\n\n".join(blocks))
-    return "\n\n".join(parts)
-
-
-
-
-
-
+        total += len(str(info.get("full_text", "") or ""))
+    return total
 
 
 # ============================================================
-# 身份解析
-# ============================================================
-
-def _resolve_user_id(envelop) -> str:
-    """从 meta 取 user_id，缺省 local（与 main_agent.resolve_ids 一致）。"""
-    meta = envelop.meta or {}
-    uid = (
-        meta.get("user_id")
-        or meta.get("auth_result", {}).get("user_id")
-        or "local"
-    )
-    return str(uid).strip() or "local"
-
-
-# ============================================================
-# 主入口
+# 主入口（只保留 list / index / pin / unpin）
 # ============================================================
 
 async def execute(envelop, agent) -> Any:
     payload = envelop.payload or {}
-
     params = payload.get("params") if isinstance(payload.get("params"), dict) else None
     if not params:
         params = payload
 
     action = str(payload.get("action", "list"))
-
     user_id = _resolve_user_id(envelop)
     session_id = _resolve_session_id(envelop)
 
-    # ============ 加载类 action ============
-    if action == "loadfromfile":
-        file_path = str(params.get("path", "")).strip()
-        if not file_path:
-            envelop.payload = {"ok": False, "error": "缺少 path 参数"}
-            return envelop
-        if not session_id:
-            envelop.payload = {"ok": False, "error": "缺少 session_id"}
-            return envelop
-        f = Path(file_path)
-        if not f.exists():
-            envelop.payload = {"ok": False, "error": f"文件不存在: {file_path}"}
-            return envelop
-        try:
-            content = _strip_frontmatter(f.read_text(encoding="utf-8")).strip()
-        except Exception as e:
-            envelop.payload = {"ok": False, "error": f"读取失败: {e}"}
-            return envelop
-        if not content:
-            envelop.payload = {"ok": False, "error": f"文件为空: {file_path}"}
-            return envelop
-
-        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
-        state = _load_state(user_id, session_id)
-        pinned = state["pinned"]
-        sid = _skill_id_from_path(file_path)
-        old = pinned.get(sid)
-        first_time = old is None
-        changed = first_time or (old.get("hash") != content_hash)
-        title, desc = _extract_title_and_desc(content, file_path)
-        pinned[sid] = {
-            "source": "skill",
-            "path": str(file_path),
-            "title": title,
-            "desc": desc,
-            "status": "pinned",
-            "full_text": content,
-            "hash": content_hash,
-            "pinned_at": datetime.now().isoformat(),
-        }
-        _save_state(user_id, session_id, state)
-
-        envelop.payload = {
-            "ok": True,
-            "message": (f"✅ 已加载: {file_path}，{len(content)} 字（已钉住）" if first_time
-                        else (f"✅ 已更新: {file_path}，{len(content)} 字（内容已变更）" if changed
-                              else f"✅ 已加载过: {file_path}（内容未变）")),
-            "path": file_path,
-            "user_id": user_id,
-            "session_id": session_id,
-            "size": len(content),
-            "hash": content_hash,
-            "skipped": (not changed),
-            "reloaded": (not first_time and changed),
-            "skill_id": sid,
-            "status": "pinned",
-        }
-        return envelop
-
-    # ============ 搜索类 action ============
-    if action == "scan":
-        data = _scan_skills()
-        out = {
-            "total": len(data.get("skills", [])),
-            "categories": data.get("categories"),
-            "last_scan": data.get("last_scan"),
-            "skipped": data.get("skipped", []),
-        }
-        envelop.payload = {"ok": True, "data": out}
-        return envelop
-
+    # ============================================================
+    # list：列技能（前端「技能管理」用，带 include_status）
+    # ============================================================
     if action == "list":
         _scan_skills()
         fresh_index = _load_index()
@@ -878,7 +527,7 @@ async def execute(envelop, agent) -> Any:
                 continue
             sid = s.get("skill_id", "")
             fp = str(s.get("file_path", "") or "").replace("\\", "/")
-            if not (fp.startswith("data/") or fp.startswith("plugins/")):
+            if not fp.startswith("data/"):
                 fp = "data/skills/" + fp if fp else ""
             item = {
                 "skill_id": sid,
@@ -897,7 +546,7 @@ async def execute(envelop, agent) -> Any:
             if len(skills) >= limit:
                 break
 
-        # 补漏：pinned 但不在 index 里的（如文件已删）
+        # 补漏：pinned 但不在 index 里的（如文件已删，或历史遗留）
         if include_status:
             known = {s["skill_id"] for s in skills}
             for sid, p in pinned_map.items():
@@ -922,100 +571,39 @@ async def execute(envelop, agent) -> Any:
         }
         return envelop
 
-    if action == "search":
-        _scan_skills()
-        fresh_index = _load_index()
-
-        query = str(params.get("query", "")).strip()
-        keywords_raw = params.get("keywords", [])
-        keywords: List[str] = []
-        if isinstance(keywords_raw, list):
-            keywords = [str(k) for k in keywords_raw]
-        elif isinstance(keywords_raw, str) and keywords_raw.strip():
-            keywords = [keywords_raw.strip()]
-
-        if not query:
-            envelop.payload = {"ok": False, "error": "query 不能为空"}
-            return envelop
-
-        if not keywords and query:
-            keywords = [w for w in query.split() if w] or [query]
-
-        if not keywords:
-            envelop.payload = {"ok": False, "error": "keywords 不能为空"}
-            return envelop
-
-        category = params.get("category")
-        limit = int(params.get("limit", 10) or 10)
-
-        candidates = _search_skills(fresh_index, keywords, category, 30)
-
-        if not candidates:
-            envelop.payload = {
-                "ok": True,
-                "data": {
-                    "skills": [],
-                    "total": 0,
-                    "query": query,
-                    "keywords": keywords,
-                },
-            }
-            return envelop
-
-        rank_result = await _llm_rank(agent, query, keywords, candidates, limit)
-        final_skills = rank_result.get("skills", [])
-
-        data = {
-            "skills": final_skills,
-            "total": len(final_skills),
-            "query": query,
-            "keywords": keywords,
-        }
-        if "error" in rank_result:
-            data["fallback"] = True
-            data["error"] = rank_result["error"]
-
-        envelop.payload = {"ok": True, "data": data}
-        return envelop
-
-    # ============ 其余 action 读全局 index ============
-    index = _load_index()
-
-    if action == "detail":
-        skill_id = str(params.get("skill_id", ""))
-        for s in index.get("skills", []):
-            if s.get("skill_id") == skill_id:
-                envelop.payload = {"ok": True, "data": s}
-                return envelop
-        envelop.payload = {"ok": False, "error": "技能不存在"}
-        return envelop
-
-    if action == "categories":
-        cats = index.get("categories", [])
+    # ============================================================
+    # index：列当前 session 的钉住状态（前端「已加载」用）
+    # ============================================================
+    if action == "index":
+        state = _load_state(user_id, session_id)
+        index_text = _index_to_text(state)
+        pinned = state.get("pinned", {})
+        pinned_count = sum(1 for s in pinned.values() if s.get("status") == "pinned")
+        indexed_count = sum(1 for s in pinned.values() if s.get("status") != "pinned")
         envelop.payload = {
             "ok": True,
-            "data": {"categories": cats, "total": len(cats)},
+            "user_id": user_id,
+            "session_id": session_id,
+            "index_text": index_text,
+            "total": len(pinned),
+            "pinned_count": pinned_count,
+            "indexed_count": indexed_count,
+            "skills": [
+                {
+                    "skill_id": sid,
+                    "title": info.get("title"),
+                    "desc": info.get("desc"),
+                    "status": info.get("status", "indexed"),
+                    "path": info.get("path"),
+                }
+                for sid, info in sorted(pinned.items())
+            ],
         }
         return envelop
 
-    if action == "stats":
-        category_count: Dict[str, int] = {}
-        for s in index.get("skills", []):
-            cat = s.get("category", "")
-            category_count[cat] = category_count.get(cat, 0) + 1
-        envelop.payload = {
-            "ok": True,
-            "data": {
-                "total_skills": len(index.get("skills", [])),
-                "total_categories": len(index.get("categories", [])),
-                "last_scan": index.get("last_scan"),
-                "skipped": index.get("skipped", []),
-                "category_count": category_count,
-            },
-        }
-        return envelop
-
-    # ============ pin / unpin / index / get_active / clear ============
+    # ============================================================
+    # pin：钉住（带 60KB 总长度检查）
+    # ============================================================
     if action == "pin":
         skill_id = str(params.get("skill_id", "")).strip()
         if not skill_id:
@@ -1046,6 +634,7 @@ async def execute(envelop, agent) -> Any:
                 }
                 return envelop
 
+        # ---- 分支 1：不在 pinned 里，从索引读文件 ----
         if info is None:
             idx = _load_index()
             target = None
@@ -1079,6 +668,21 @@ async def execute(envelop, agent) -> Any:
                 envelop.payload = {"ok": False, "error": f"文件为空: {f}"}
                 return envelop
 
+            # ★ 总长度检查（写入前）
+            pinned_total = _pinned_total_len(pinned)
+            if pinned_total + len(content) > MAX_PINNED_TOTAL_BYTES:
+                envelop.payload = {
+                    "ok": False,
+                    "error": (
+                        f"钉住总长度超限：已钉 {pinned_total} 字 + 本次 {len(content)} 字 "
+                        f"> {MAX_PINNED_TOTAL_BYTES} 字（60KB）。请先 unpin 其他技能再钉。"
+                    ),
+                    "pinned_total": pinned_total,
+                    "new_size": len(content),
+                    "limit": MAX_PINNED_TOTAL_BYTES,
+                }
+                return envelop
+
             content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
             sid = target.get("skill_id") or _skill_id_from_path(fp)
             pinned[sid] = {
@@ -1101,19 +705,36 @@ async def execute(envelop, agent) -> Any:
                 "title": pinned[sid].get("title"),
                 "status": "pinned",
                 "size": len(content),
+                "pinned_total": pinned_total + len(content),
+                "limit": MAX_PINNED_TOTAL_BYTES,
             }
             return envelop
 
+        # ---- 分支 2：已在 pinned 里，重新读文件 ----
         file_path = info.get("path", "")
         f = Path(file_path)
         if not f.exists():
             envelop.payload = {"ok": False, "error": f"文件不存在: {file_path}"}
             return envelop
-
         try:
             content = _strip_frontmatter(f.read_text(encoding="utf-8")).strip()
         except Exception as e:
             envelop.payload = {"ok": False, "error": f"读取失败: {e}"}
+            return envelop
+
+        # ★ 总长度检查（写入前，先排除旧的自己）
+        pinned_total = _pinned_total_len(pinned, exclude_sid=skill_id)
+        if pinned_total + len(content) > MAX_PINNED_TOTAL_BYTES:
+            envelop.payload = {
+                "ok": False,
+                "error": (
+                    f"钉住总长度超限：已钉 {pinned_total} 字 + 本次 {len(content)} 字 "
+                    f"> {MAX_PINNED_TOTAL_BYTES} 字（60KB）。请先 unpin 其他技能再钉。"
+                ),
+                "pinned_total": pinned_total,
+                "new_size": len(content),
+                "limit": MAX_PINNED_TOTAL_BYTES,
+            }
             return envelop
 
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
@@ -1132,9 +753,14 @@ async def execute(envelop, agent) -> Any:
             "title": info.get("title"),
             "status": "pinned",
             "size": len(content),
+            "pinned_total": pinned_total + len(content),
+            "limit": MAX_PINNED_TOTAL_BYTES,
         }
         return envelop
 
+    # ============================================================
+    # unpin：卸载（status = indexed）
+    # ============================================================
     if action == "unpin":
         skill_id = str(params.get("skill_id", "")).strip()
         if not skill_id:
@@ -1166,91 +792,22 @@ async def execute(envelop, agent) -> Any:
         state["pinned"] = pinned
         _save_state(user_id, session_id, state)
 
+        remaining_total = _pinned_total_len(pinned)
         envelop.payload = {
             "ok": True,
             "message": f"📋 已降级: {info.get('title', skill_id)}（仅保留目录索引）",
             "skill_id": skill_id,
             "title": info.get("title"),
             "status": "indexed",
+            "pinned_total": remaining_total,
+            "limit": MAX_PINNED_TOTAL_BYTES,
         }
         return envelop
 
-    if action == "index":
-        state = _load_state(user_id, session_id)
-        index_text = _index_to_text(state)
-        pinned = state.get("pinned", {})
-        pinned_count = sum(1 for s in pinned.values() if s.get("status") == "pinned")
-        indexed_count = sum(1 for s in pinned.values() if s.get("status") != "pinned")
-
-        envelop.payload = {
-            "ok": True,
-            "user_id": user_id,
-            "session_id": session_id,
-            "index_text": index_text,
-            "total": len(pinned),
-            "pinned_count": pinned_count,
-            "indexed_count": indexed_count,
-            "skills": [
-                {
-                    "skill_id": sid,
-                    "title": info.get("title"),
-                    "desc": info.get("desc"),
-                    "status": info.get("status", "indexed"),
-                    "path": info.get("path"),
-                }
-                for sid, info in sorted(pinned.items())
-            ],
-        }
-        return envelop
-
-    if action == "get_active":
-        state = _load_state(user_id, session_id)
-        content = _compose_active_content(user_id, session_id, state)
-        index_text = _index_to_text(state)
-        pinned = state.get("pinned", {})
-        pinned_count = sum(1 for s in pinned.values() if s.get("status") == "pinned")
-        envelop.payload = {
-            "ok": True, "user_id": user_id, "session_id": session_id,
-            "content": content, "size": len(content), "has_skill": bool(content),
-            "index_text": index_text, "total_skills": len(pinned),
-            "pinned_count": pinned_count,
-        }
-        return envelop
-
-    if action == "clear":
-        state = _load_state(user_id, session_id)
-        pinned = state.get("pinned", {})
-        for sid in pinned:
-            pinned[sid]["status"] = "indexed"
-            pinned[sid].pop("pinned_at", None)
-        state["pinned"] = pinned
-        _save_state(user_id, session_id, state)
-        envelop.payload = {
-            "ok": True,
-            "user_id": user_id,
-            "session_id": session_id,
-            "message": "✅ 技能已卸载（所有钉住降级为索引）",
-            "mode": "clear",
-            "indexed_count": len(pinned),
-        }
-        return envelop
-
-    # save_active / load：skill.txt 已废弃，改为报错提示（避免前端旧调用 NameError）
-    if action == "save_active":
-        envelop.payload = {
-            "ok": False,
-            "error": "save_active 已废弃：Step 3 后技能由 pinned.json 管理，请用 pin / unpin 操作",
-        }
-        return envelop
-
-    if action == "load":
-        envelop.payload = {
-            "ok": False,
-            "error": "load 已废弃：请用 action=pin + skill_id",
-        }
-        return envelop
-
-    envelop.payload = {"ok": False, "error": f"未知 action: {action}"}
+    envelop.payload = {
+        "ok": False,
+        "error": f"未知 action: {action}（skill_loader 只支持 list / index / pin / unpin）",
+    }
     return envelop
 
 
@@ -1258,30 +815,29 @@ async def execute(envelop, agent) -> Any:
 # help
 # ============================================================
 
-def help():
+def help() -> dict:
     return {
         "route": "builtins/tools/skill_loader",
-        "description": "技能加载器 — 搜索 / 加载 / 管理技能（users/{user_id}/sessions/{session_id}/pinned.json）",
+        "description": "技能加载器（前端专用）— list / index / pin / unpin，钉住总长度 ≤ 60KB",
         "input": {
-            "action": "scan | list | search | detail | categories | stats | pin | unpin | clear | get_active | loadfromfile | index",
-            "query": "搜索问题（search 时）",
-            "keywords": "关键词列表（search 时，可选，为空时用 query 兜底）",
-            "category": "分类筛选（list / search 时，可选）",
-            "limit": "返回数量（默认 10）",
-            "skill_id": "技能 ID（detail / pin / unpin 时）",
-            "session_id": "会话 ID（pin / unpin / index / get_active / clear / loadfromfile / list(include_status) 必填）",
+            "action": "list | index | pin | unpin",
+            "session_id": "会话 ID（index / pin / unpin 必填）",
+            "skill_id": "技能 ID（pin / unpin 必填）",
+            "category": "分类筛选（list 时，可选）",
+            "limit": "返回数量（list 时，默认 100）",
             "include_status": "布尔，list 时传 true 则返回 status / deletable",
-            "path": "文件路径（loadfromfile 时）",
         },
         "output": {
             "ok": "是否成功",
             "data": "结果数据",
-            "message": "结果消息",
-            "user_id": "身份标识",
-            "session_id": "会话标识",
-            "size": "loadfromfile 时本次读到的字符数",
-            "hash": "loadfromfile 时本次内容 md5",
-            "skipped": "loadfromfile 时内容未变、跳过",
-            "reloaded": "loadfromfile 时内容变更、已替换",
+            "message": "结果消息（pin / unpin）",
+            "skill_id": "技能 ID",
+            "status": "pinned | indexed",
+            "pinned_total": "当前已钉住总字符数（pin / unpin）",
+            "limit": "钉住总长度上限（60KB = 61440 字符）",
+            "error": "错误信息（超限 / 不存在 / 参数缺失）",
+        },
+        "limits": {
+            "max_pinned_total_bytes": MAX_PINNED_TOTAL_BYTES,
         },
     }

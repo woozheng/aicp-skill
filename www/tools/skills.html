@@ -59,7 +59,6 @@ body { display:flex; flex-direction:column; height:100vh; }
   -webkit-overflow-scrolling:touch;
 }
 .pane.active { display:block; }
-/* ===== scrollbar ===== */
 * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.16) transparent; }
 *::-webkit-scrollbar { width:6px; height:6px; }
 *::-webkit-scrollbar-track { background:transparent; }
@@ -109,21 +108,23 @@ body { display:flex; flex-direction:column; height:100vh; }
 }
 .loaded-item:hover { border-color:rgba(99,102,241,0.25); }
 .loaded-item .name {
-  flex:1; min-width:0;
+  flex:1; min-width:0; cursor:pointer;
   font-size:13px; font-weight:600; color:#f3f4f6;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-.icon-btn {
-  background:transparent; border:none; color:#6b7280;
-  cursor:pointer; padding:4px; border-radius:4px;
-  display:inline-flex; flex-shrink:0; transition:all 0.2s;
+.loaded-item .name:hover { color:#c4b5fd; }
+
+/* 圆型 - 按钮（卸载） */
+.minus-btn {
+  width:22px; height:22px; border-radius:50%;
+  border:1px solid rgba(248,113,113,0.35);
+  background:rgba(248,113,113,0.08);
+  color:#f87171; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:15px; line-height:1; font-weight:600;
+  flex-shrink:0; transition:all 0.2s;
 }
-.icon-btn:hover { color:#e5e7eb; background:rgba(255,255,255,0.07); }
-.icon-btn.danger:hover { color:#f87171; background:rgba(248,113,113,0.12); }
-.icon-btn svg {
-  width:14px; height:14px; fill:none; stroke:currentColor;
-  stroke-width:2; stroke-linecap:round; stroke-linejoin:round;
-}
+.minus-btn:hover { background:rgba(248,113,113,0.22); color:#fca5a5; }
 
 /* ===== 工具栏 ===== */
 .toolbar { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
@@ -135,6 +136,16 @@ body { display:flex; flex-direction:column; height:100vh; }
   outline:none; transition:border-color 0.2s;
 }
 .search:focus { border-color:rgba(99,102,241,0.55); }
+/* 圆形图标按钮（刷新） */
+.icon-btn {
+  width:30px; height:30px; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:1px solid rgba(255,255,255,0.1); border-radius:7px;
+  color:#9ca3af; cursor:pointer; padding:0;
+  transition:all 0.2s;
+}
+.icon-btn svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.icon-btn:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.22); }
 .btn-primary {
   background:linear-gradient(135deg,#8b5cf6,#6366f1);
   color:#fff; border:none; border-radius:7px;
@@ -164,51 +175,85 @@ body { display:flex; flex-direction:column; height:100vh; }
 /* ===== 技能卡片 ===== */
 .card-grid {
   display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(138px,1fr));
+  grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
   gap:7px;
 }
 .skill-card {
+  position:relative;
   background:rgba(20,20,28,0.6);
   border:1px solid rgba(255,255,255,0.06);
-  border-radius:9px; padding:8px 9px;
-  display:flex; flex-direction:column; gap:7px;
-  transition:border-color 0.2s;
+  border-radius:9px;
+  padding:8px 9px 8px;
+  display:flex; flex-direction:column; gap:6px;
+  transition:border-color 0.2s, background 0.2s;
+  cursor:pointer;
 }
-.skill-card:hover { border-color:rgba(99,102,241,0.25); }
+.skill-card:hover {
+  border-color:rgba(99,102,241,0.35);
+  background:rgba(24,24,34,0.7);
+}
 .skill-card .cname {
-  font-size:12.5px; font-weight:600; color:#f3f4f6;
-  line-height:1.35; word-break:break-word;
+  font-size:11.5px;
+  font-weight:400;
+  color:#e5e7eb;
+  line-height:1.35;
+  word-break:break-word;
+  padding-right:22px; /* 给右上角删除按钮留位 */
 }
-.skill-card .cacts { display:flex; gap:4px; }
-.mini {
-  flex:1; padding:4px 0;
-  font-family:inherit; font-size:11px; font-weight:600;
-  border-radius:6px; border:1px solid rgba(255,255,255,0.1);
-  background:transparent; color:#9ca3af;
-  cursor:pointer; transition:all 0.2s;
-}
-.mini:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.22); }
-.mini.p { background:#6366f1; border-color:#6366f1; color:#fff; }
-.mini.p:hover { background:#7c88e8; }
-.mini.d { color:#f87171; border-color:rgba(248,113,113,0.22); }
-.mini.d:hover { background:rgba(248,113,113,0.1); }
-.mini:disabled { opacity:0.5; cursor:not-allowed; }
 
-/* ===== card icon actions ===== */
-.act-btn {
-  flex:1; height:24px; padding:0;
+/* 卡片右上角：悬停出现的删除 */
+.card-del {
+  position:absolute; top:6px; right:6px;
+  width:20px; height:20px; border-radius:5px;
+  border:1px solid rgba(248,113,113,0.25);
+  background:rgba(248,113,113,0.08);
+  color:#f87171; cursor:pointer;
   display:inline-flex; align-items:center; justify-content:center;
-  border-radius:6px; border:1px solid rgba(255,255,255,0.1);
-  background:rgba(255,255,255,0.02); color:#9ca3af;
-  cursor:pointer; transition:all 0.2s;
+  opacity:0; pointer-events:none;
+  transition:opacity 0.15s, background 0.15s;
+  z-index:2;
 }
-.act-btn:hover { color:#e5e7eb; border-color:rgba(255,255,255,0.24); background:rgba(255,255,255,0.07); }
-.act-btn.p { color:#a5b4fc; border-color:rgba(99,102,241,0.35); background:rgba(99,102,241,0.12); }
-.act-btn.p:hover { color:#c4b5fd; background:rgba(99,102,241,0.22); }
-.act-btn.d { color:#f87171; border-color:rgba(248,113,113,0.24); background:rgba(248,113,113,0.08); }
-.act-btn.d:hover { background:rgba(248,113,113,0.18); }
-.act-btn:disabled { opacity:0.45; cursor:not-allowed; }
-.act-btn svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.skill-card:hover .card-del { opacity:1; pointer-events:auto; }
+.card-del:hover { background:rgba(248,113,113,0.24); color:#fca5a5; }
+.card-del svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+
+/* 底部 meta 行：sid 小字 + 右侧 + 号 */
+.cmeta {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+  margin-top:auto;
+}
+.csid {
+  flex:1; min-width:0;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;
+  color:#6b7280;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.card-add {
+  flex-shrink:0;
+  width:20px; height:20px; padding:0;
+  display:inline-flex; align-items:center; justify-content:center;
+  border-radius:50%;
+  border:1px solid rgba(99,102,241,0.35);
+  background:rgba(99,102,241,0.10);
+  color:#a5b4fc;
+  cursor:pointer;
+  transition:all 0.2s;
+  font-size:14px; font-weight:600; line-height:1;
+}
+.card-add:hover { background:rgba(99,102,241,0.22); color:#c4b5fd; }
+.card-add.pinned {
+  background:rgba(34,197,94,0.12);
+  border-color:rgba(34,197,94,0.35);
+  color:#4ade80;
+  cursor:default;
+}
+.card-add.pinned:hover { background:rgba(34,197,94,0.12); color:#4ade80; }
 
 /* ===== dir tip ===== */
 .tip {
@@ -262,11 +307,33 @@ body { display:flex; flex-direction:column; height:100vh; }
 .form-textarea { min-height:180px; resize:vertical; line-height:1.5; }
 .form-hint { font-size:11px; color:#6b7280; }
 .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
-.viewer {
-  margin:0; padding:14px; background:#0a0a0f; border-radius:8px;
+
+/* ===== Viewer（可编辑） ===== */
+.viewer-wrap {
+  display:flex; flex-direction:column; gap:8px;
+}
+.viewer-title-row {
+  display:flex; align-items:center; gap:8px;
+}
+.viewer-title { font-size:14px; font-weight:700; color:#f3f4f6; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.viewer-badge {
+  font-size:10px; font-family:'JetBrains Mono',monospace;
+  padding:2px 7px; border-radius:999px;
+  background:rgba(34,197,94,0.12); color:#4ade80;
+  border:1px solid rgba(34,197,94,0.3);
+  flex-shrink:0;
+}
+.viewer-editor {
+  width:100%; min-height:46vh; max-height:58vh;
+  padding:14px; background:#0a0a0f; border-radius:8px;
+  border:1px solid rgba(255,255,255,0.08);
   font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.55;
-  white-space:pre-wrap; word-break:break-word; color:#e5e7eb;
-  max-height:58vh; overflow:auto;
+  color:#e5e7eb; resize:vertical; outline:none;
+  white-space:pre; overflow:auto;
+}
+.viewer-editor:focus { border-color:rgba(99,102,241,0.55); }
+.viewer-edit-hint {
+  font-size:11px; color:#6b7280; font-family:'JetBrains Mono',monospace;
 }
 
 .toast {
@@ -282,7 +349,7 @@ body { display:flex; flex-direction:column; height:100vh; }
 .toast.err { border-color:rgba(248,113,113,0.45); }
 
 @media (max-width:420px) {
-  .card-grid { grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); }
+  .card-grid { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }
   .toolbar { flex-wrap:wrap; }
 }
 </style>
@@ -305,7 +372,7 @@ body { display:flex; flex-direction:column; height:100vh; }
   <section class="pane" id="paneManage">
     <div class="tip">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
-      <span><span data-i18n="sk.dirTip">多文件技能请把整个目录拷贝到</span> <code id="skillsDir">E:\aicp-skills\data\skills\</code><br><span data-i18n="sk.dirTip2">上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝</span></span>
+      <span><span data-i18n="sk.dirTip">多文件技能请把整个目录拷贝到</span> <code id="skillsDir">E:\aicp-skills\data\skills\</code><br><span data-i18n="sk.dirTip2">上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝。钉住总长度 ≤ 60KB</span></span>
       <button class="tip-copy" id="copyDirBtn" data-i18n-title="sk.copyPath" title="复制路径">
         <svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
       </button>
@@ -379,14 +446,21 @@ body { display:flex; flex-direction:column; height:100vh; }
   </div>
 </div>
 
-<!-- 查看内容 -->
+<!-- 查看 / 编辑内容 -->
 <div class="modal" id="viewerModal">
   <div class="modal-card wide">
-    <div class="modal-title" id="viewerTitle"></div>
-    <pre class="viewer" id="viewerBody"></pre>
+    <div class="viewer-wrap">
+      <div class="viewer-title-row">
+        <div class="viewer-title" id="viewerTitle"></div>
+        <span class="viewer-badge" id="viewerBadge" style="display:none" data-i18n="sk.pinnedBadge">已钉住</span>
+      </div>
+      <div class="viewer-edit-hint" id="viewerHint"></div>
+      <textarea class="viewer-editor" id="viewerBody" spellcheck="false"></textarea>
+    </div>
     <div class="modal-actions">
       <button class="btn-ghost" id="viewerCopy" data-i18n="sk.copy">复制</button>
-      <button class="btn-primary" data-close="viewerModal" data-i18n="sk.close">关闭</button>
+      <button class="btn-primary" id="viewerSave" data-i18n="sk.save">保存</button>
+      <button class="btn-ghost" data-close="viewerModal" data-i18n="sk.close">关闭</button>
     </div>
   </div>
 </div>
@@ -394,20 +468,22 @@ body { display:flex; flex-direction:column; height:100vh; }
 <div class="toast" id="toast"></div>
 
 <script>
-const PAGE = window.location.pathname.split('/')[2] || 'skills';
-const SESSION_ID = new URLSearchParams(location.search).get('session_id') || '';
-
 const API = {
   file: '/api/builtins/tools/file_utils_api',
   skillLoader: '/api/builtins/tools/skill_loader',
 };
+
+const SESSION_ID = new URLSearchParams(location.search).get('session_id') || '';
+
+/* 后端钉住总长度上限（与 skill_loader.MAX_PINNED_TOTAL_BYTES 对齐） */
+const MAX_PINNED_TOTAL = 60 * 1024;
 
 const I18N = {
   zh: {
     'sk.title':'Skill 管理',
     'sk.loaded':'已加载',
     'sk.manage':'技能管理',
-    'sk.search':'搜索技能…',
+    'sk.search':'搜索技能…（可搜名字、描述、路径、sid）',
     'sk.upload':'上传 Skill',
     'sk.uploadTitle':'上传 Skill',
     'sk.uploadDesc':'写入 data/skills/<目录名>/SKILL.md，支持 frontmatter（name / description / tags）。',
@@ -420,35 +496,42 @@ const I18N = {
     'sk.delTitle':'删除 Skill',
     'sk.delOk':'删除',
     'sk.copy':'复制',
+    'sk.save':'保存',
     'sk.close':'关闭',
-    'sk.load':'加载',
-    'sk.view':'查看',
-    'sk.delete':'删除',
+    'sk.pin':'钉住',
     'sk.unpin':'卸载',
-    'sk.loadedTag':'已加载',
+    'sk.pinnedBadge':'已钉住',
+    'sk.delete':'删除',
     'sk.emptyLoaded':'还没有加载任何技能',
     'sk.emptyManage':'没有匹配的技能',
     'sk.needName':'请填目录名',
     'sk.badName':'目录名只能英文 / 数字 / 下划线 / 中划线',
     'sk.needContent':'请填 SKILL.md 内容',
-    'sk.okLoad':'已加载',
+    'sk.okLoad':'已钉住',
     'sk.okUnload':'已卸载',
     'sk.okDel':'已删除',
     'sk.okUpload':'已上传',
+    'sk.okSave':'已保存',
+    'sk.okSync':'已同步到钉住记录',
     'sk.fail':'操作失败',
     'sk.loading':'加载中…',
     'sk.dirTip':'多文件技能请把整个目录拷贝到',
-    'sk.dirTip2':'上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝',
+    'sk.dirTip2':'上传仅支持单个 SKILL.md；多文件技能必须整目录拷贝。钉住总长度 ≤ 60KB',
     'sk.copyPath':'复制路径',
     'sk.chooseFile':'选择文件',
     'sk.noFile':'未选择文件',
-    'sk.refresh':'刷新'
+    'sk.refresh':'刷新',
+    'sk.limitTitle':'钉住超限',
+    'sk.limitBody':'已钉 {used} 字 + 本次 {add} 字 &gt; {limit} 字（60KB）。请先卸载其他技能再钉。',
+    'sk.editHint':'可直接编辑 SKILL.md 内容；保存后会写回文件。已钉住的技能会同步更新全文。',
+    'sk.readonlyHint':'查看内容；可直接编辑后保存。',
+    'sk.noPath':'该技能没有可编辑的文件路径'
   },
   en: {
     'sk.title':'Skill Manager',
     'sk.loaded':'Loaded',
     'sk.manage':'Manage',
-    'sk.search':'Search skills…',
+    'sk.search':'Search skills… (name / desc / path / sid)',
     'sk.upload':'Upload Skill',
     'sk.uploadTitle':'Upload Skill',
     'sk.uploadDesc':'Writes data/skills/<dir>/SKILL.md, frontmatter (name / description / tags) supported.',
@@ -461,135 +544,167 @@ const I18N = {
     'sk.delTitle':'Delete Skill',
     'sk.delOk':'Delete',
     'sk.copy':'Copy',
+    'sk.save':'Save',
     'sk.close':'Close',
-    'sk.load':'Load',
-    'sk.view':'View',
-    'sk.delete':'Delete',
+    'sk.pin':'Pin',
     'sk.unpin':'Unload',
-    'sk.loadedTag':'Loaded',
+    'sk.pinnedBadge':'Pinned',
+    'sk.delete':'Delete',
     'sk.emptyLoaded':'No skill loaded yet',
     'sk.emptyManage':'No matching skill',
     'sk.needName':'Directory name required',
     'sk.badName':'Name accepts a-z, 0-9, _ and - only',
     'sk.needContent':'SKILL.md content required',
-    'sk.okLoad':'Loaded',
+    'sk.okLoad':'Pinned',
     'sk.okUnload':'Unloaded',
     'sk.okDel':'Deleted',
     'sk.okUpload':'Uploaded',
+    'sk.okSave':'Saved',
+    'sk.okSync':'Pinned record synced',
     'sk.fail':'Action failed',
     'sk.loading':'Loading…',
     'sk.dirTip':'For multi-file skills, copy the whole folder into',
-    'sk.dirTip2':'Upload only supports a single SKILL.md; multi-file skills must be copied as a folder',
+    'sk.dirTip2':'Upload only supports a single SKILL.md; multi-file skills must be copied as a folder. Total pinned size ≤ 60KB',
     'sk.copyPath':'Copy path',
     'sk.chooseFile':'Choose file',
     'sk.noFile':'No file chosen',
-    'sk.refresh':'Refresh'
+    'sk.refresh':'Refresh',
+    'sk.limitTitle':'Pinned limit exceeded',
+    'sk.limitBody':'Pinned {used} chars + new {add} chars &gt; {limit} chars (60KB). Please unpin other skills first.',
+    'sk.editHint':'You can edit SKILL.md here; saving writes back to the file. Pinned skills will be synced automatically.',
+    'sk.readonlyHint':'View content; edit and save inline.',
+    'sk.noPath':'This skill has no editable file path'
   }
 };
 
 const ICON = {
-  view: '<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
-  unload: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg>',
-  load: '<svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m7 10 5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>',
   del: '<svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'
 };
 
 let LANG = 'zh';
-// 与 console / 其它页面共用 aicp_lang，保证在 console iframe 内跟随外层语种切换
 try { LANG = localStorage.getItem('aicp_lang') || localStorage.getItem('aicp_skills_lang') || 'zh'; } catch (e) { LANG = 'zh'; }
 
-const STATE = { skills:[], pinned:{}, query:'', pane:'loaded', loading:true };
+const STATE = {
+  skills: [],
+  pinned: {},
+  query: '',
+  pane: 'loaded',
+  loading: true,
+  viewerSkill: null,
+  viewerOriginal: '',
+};
 
-function t(k){ return (I18N[LANG] && I18N[LANG][k]) || k; }
-function esc(s){
+function t(k) { return (I18N[LANG] && I18N[LANG][k]) || k; }
+
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
 }
-function toast(msg, kind){
+
+function toast(msg, kind) {
   kind = kind || 'ok';
   const el = document.getElementById('toast');
-  el.textContent = msg;
+  el.innerHTML = msg;
   el.className = 'toast show ' + kind;
   clearTimeout(el._t);
-  el._t = setTimeout(function(){ el.className = 'toast'; }, 2200);
+  el._t = setTimeout(function(){ el.className = 'toast'; }, 2600);
 }
-async function postJSON(url, body){
+
+async function postJSON(url, body) {
   const res = await fetch(url, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body || {}),
   });
   let data;
-  try { data = await res.json(); } catch(e){ data = {ok:false, error:'invalid json'}; }
+  try { data = await res.json(); } catch (e) { data = { ok: false, error: 'invalid json' }; }
   return data;
 }
-function openModal(id){ document.getElementById(id).classList.add('show'); }
-function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 
 /* ---------- 渲染 ---------- */
-function renderLoaded(){
+function renderLoaded() {
   const box = document.getElementById('loadedList');
   const cnt = document.getElementById('loadedCount');
   const items = STATE.skills.filter(function(s){ return s._p; });
   if (cnt) cnt.textContent = items.length;
-  if (STATE.loading){
+  if (STATE.loading) {
     box.innerHTML = '<div class="empty">' + esc(t('sk.loading')) + '</div>';
     return;
   }
-  if (!items.length){
+  if (!items.length) {
     box.innerHTML = '<div class="empty">' + esc(t('sk.emptyLoaded')) + '</div>';
     return;
   }
   box.innerHTML = items.map(function(s){
     const name = s.title || s.skill_id;
     return '<div class="loaded-item" data-sid="' + esc(s.skill_id) + '">'
-      + '<span class="name" title="' + esc(name) + '">' + esc(name) + '</span>'
-      + '<button class="icon-btn" data-act="view" title="' + esc(t('sk.view')) + '">' + ICON.view + '</button>'
-      + '<button class="icon-btn danger" data-act="unpin" title="' + esc(t('sk.unpin')) + '">' + ICON.unload + '</button>'
+      + '<span class="name" data-act="view" title="' + esc(name) + '">' + esc(name) + '</span>'
+      + '<button class="minus-btn" data-act="unpin" title="' + esc(t('sk.unpin')) + '">−</button>'
       + '</div>';
   }).join('');
 }
-function renderManage(){
+
+function renderManage() {
   const box = document.getElementById('skillGrid');
   const q = STATE.query.trim().toLowerCase();
   const items = STATE.skills.filter(function(s){
     if (!q) return true;
-    const hay = (s.skill_id + ' ' + s.title + ' ' + s.description).toLowerCase();
+    const hay = (
+      (s.skill_id || '') + ' ' +
+      (s.title || '') + ' ' +
+      (s.description || '') + ' ' +
+      (s.file_path || '') + ' ' +
+      (s.skill_dir || '')
+    ).toLowerCase();
     return hay.indexOf(q) >= 0;
   });
-  if (STATE.loading){
+  if (STATE.loading) {
     box.innerHTML = '<div class="empty">' + esc(t('sk.loading')) + '</div>';
     return;
   }
-  if (!items.length){
+  if (!items.length) {
     box.innerHTML = '<div class="empty">' + esc(t('sk.emptyManage')) + '</div>';
     return;
   }
   box.innerHTML = items.map(function(s){
     const name = s.title || s.skill_id;
-    const act = s._p
-      ? '<button class="act-btn p" disabled title="' + esc(t('sk.loadedTag')) + '">' + ICON.load + '</button>'
-      : '<button class="act-btn p" data-act="pin" title="' + esc(t('sk.load')) + '">' + ICON.load + '</button>';
-    return '<div class="skill-card" data-sid="' + esc(s.skill_id) + '">'
+    const pinned = !!s._p;
+    const addCls = pinned ? 'card-add pinned' : 'card-add';
+    const addTitle = pinned ? t('sk.pinnedBadge') : t('sk.pin');
+    const addChar = pinned ? '✓' : '+';
+    return '<div class="skill-card" data-sid="' + esc(s.skill_id) + '" data-act="view">'
+      + '<button class="card-del" data-act="delete" title="' + esc(t('sk.delete')) + '">' + ICON.del + '</button>'
       + '<div class="cname" title="' + esc(name) + '">' + esc(name) + '</div>'
-      + '<div class="cacts">' + act
-      + '<button class="act-btn" data-act="view" title="' + esc(t('sk.view')) + '">' + ICON.view + '</button>'
-      + (isDeletable(s) ? '<button class="act-btn d" data-act="delete" title="' + esc(t('sk.delete')) + '">' + ICON.del + '</button>' : '')
-      + '</div></div>';
+      + '<div class="cmeta">'
+      +   '<span class="csid" title="' + esc(s.skill_id) + '">' + esc(s.skill_id) + '</span>'
+      +   '<button class="' + addCls + '" data-act="' + (pinned ? 'noop' : 'pin') + '" title="' + esc(addTitle) + '">' + addChar + '</button>'
+      + '</div>'
+      + '</div>';
   }).join('');
 }
-function render(){ renderLoaded(); renderManage(); }
+
+function render() { renderLoaded(); renderManage(); }
 
 /* ---------- 数据 ---------- */
-async function loadSkills(){
+async function loadSkills() {
   STATE.loading = true;
   render();
   try {
-    const listRes = await postJSON(API.skillLoader, {action:'list', limit:500, session_id:SESSION_ID});
+    const listRes = await postJSON(API.skillLoader, { action: 'list', limit: 500, session_id: SESSION_ID });
     const all = (listRes && listRes.data && listRes.data.skills) || [];
 
-    const idxRes = await postJSON(API.skillLoader, {action:'index', session_id:SESSION_ID});
+    const idxRes = await postJSON(API.skillLoader, { action: 'index', session_id: SESSION_ID });
     const raw = (idxRes && idxRes.skills) || (idxRes && idxRes.data && idxRes.data.skills) || [];
 
     const pinnedMap = {};
@@ -598,10 +713,10 @@ async function loadSkills(){
       const sid = (typeof p === 'string') ? p : (p.skill_id || '');
       if (!sid) return;
       const st = (typeof p === 'string') ? 'pinned' : (p.status || 'indexed');
-      if (st !== 'pinned') return;   // 只有 pinned 算「已加载」
+      if (st !== 'pinned') return;
       const title = (typeof p === 'string') ? p : (p.title || p.skill_id || sid);
       const fp = (typeof p === 'string') ? '' : (p.path || p.file_path || '');
-      pinnedMap[sid] = {skill_id:sid, title:title, file_path:fp};
+      pinnedMap[sid] = { skill_id: sid, title: title, file_path: fp };
       pinnedList.push(sid);
     });
     STATE.pinned = pinnedMap;
@@ -615,7 +730,7 @@ async function loadSkills(){
         description: s.description || '',
         file_path: s.file_path || '',
         status: p ? 'pinned' : 'indexed',
-        _p: !!p
+        _p: !!p,
       };
     });
     const known = {};
@@ -623,12 +738,16 @@ async function loadSkills(){
     pinnedList.forEach(function(sid){
       if (known[sid]) return;
       merged.push({
-        skill_id: sid, title: pinnedMap[sid].title || sid,
-        description: '', file_path: pinnedMap[sid].file_path || '', status: 'pinned', _p: true
+        skill_id: sid,
+        title: pinnedMap[sid].title || sid,
+        description: '',
+        file_path: pinnedMap[sid].file_path || '',
+        status: 'pinned',
+        _p: true,
       });
     });
     STATE.skills = merged;
-  } catch(e){
+  } catch (e) {
     console.error(e);
     STATE.skills = [];
     toast(t('sk.fail') + ': ' + e.message, 'err');
@@ -638,57 +757,70 @@ async function loadSkills(){
   }
 }
 
-/* ---------- 操作 ---------- */
-function skillFilePath(s){
+/* ---------- 路径规范化 ---------- */
+function skillFilePath(s) {
   let fp = (s && s.file_path) ? String(s.file_path) : '';
   if (!fp) return '';
   fp = fp.replace(/\\/g, '/');
   if (fp.indexOf('data/') === 0) return fp;
-  if (fp.indexOf('plugins/') === 0) return fp;
   return 'data/skills/' + fp;
 }
-function isDeletable(s){
-  const fp = skillFilePath(s);
-  return !!fp && fp.indexOf('data/skills/') === 0;
-}
-async function doPin(sid){
-const res = await postJSON(API.skillLoader, {action:'pin', skill_id:sid, session_id:SESSION_ID});
-  if (res && res.ok){
+
+/* ---------- 操作 ---------- */
+async function doPin(sid) {
+  const res = await postJSON(API.skillLoader, { action: 'pin', skill_id: sid, session_id: SESSION_ID });
+  if (res && res.ok) {
     toast(t('sk.okLoad') + ': ' + (res.title || sid));
     await loadSkills();
   } else {
-    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+    if (res && res.pinned_total !== undefined && res.new_size !== undefined) {
+      const used = fmtBytes(res.pinned_total);
+      const add = fmtBytes(res.new_size);
+      const limit = fmtBytes(res.limit || MAX_PINNED_TOTAL);
+      const msg = t('sk.limitTitle') + ' — ' + t('sk.limitBody')
+        .replace('{used}', used).replace('{add}', add).replace('{limit}', limit);
+      toast(msg, 'err');
+    } else {
+      toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+    }
   }
 }
-async function doUnpin(sid){
- const res = await postJSON(API.skillLoader, {action:'unpin', skill_id:sid, session_id:SESSION_ID});
-  if (res && res.ok){
+
+async function doUnpin(sid) {
+  const res = await postJSON(API.skillLoader, { action: 'unpin', skill_id: sid, session_id: SESSION_ID });
+  if (res && res.ok) {
     toast(t('sk.okUnload') + ': ' + (res.title || sid));
     await loadSkills();
+    if (STATE.viewerSkill && STATE.viewerSkill.skill_id === sid) {
+      STATE.viewerSkill._p = false;
+      updateViewerBadge();
+    }
   } else {
     toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
   }
 }
-async function doView(sid){
+
+async function doView(sid) {
   const s = STATE.skills.find(function(x){ return x.skill_id === sid; });
+  if (!s) return;
   const path = skillFilePath(s);
-  if (!path){
-    toast(t('sk.fail') + ': no file', 'err');
+  if (!path) {
+    toast(t('sk.fail') + ': ' + t('sk.noPath'), 'err');
     return;
   }
-  const res = await postJSON(API.file, {action:'read_file', path:path});
-  if (!res || !res.ok){
+  const res = await postJSON(API.file, { action: 'read_file', path: path });
+  if (!res || !res.ok) {
     toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
     return;
   }
   const data = res.data || {};
   let text = '';
-  if (data.truncated){
+  if (data.truncated) {
     const total = data.total_lines || 0;
     const linesRes = await postJSON(API.file, {
-      action:'read_file_lines', path:path, start_line:1, end_line: total || 100000
+      action: 'read_file_lines', path: path, start_line: 1, end_line: total || 100000
     });
-    if (linesRes && linesRes.ok){
+    if (linesRes && linesRes.ok) {
       const lines = (linesRes.data && linesRes.data.lines) || [];
       text = lines.map(function(l){ return typeof l === 'string' ? l : (l.content || ''); }).join('\n');
     } else {
@@ -697,27 +829,88 @@ async function doView(sid){
   } else {
     text = data.full_content || '';
   }
-  document.getElementById('viewerTitle').textContent = (s && (s.title || sid)) || sid;
-  document.getElementById('viewerBody').textContent = text;
+
+  STATE.viewerSkill = s;
+  STATE.viewerOriginal = text;
+  document.getElementById('viewerTitle').textContent = s.title || sid;
+  document.getElementById('viewerBody').value = text;
+  document.getElementById('viewerHint').textContent = t('sk.editHint');
+  updateViewerBadge();
   openModal('viewerModal');
 }
-async function doDelete(sid){
-  await postJSON(API.skillLoader, {action:'unpin', skill_id:sid, session_id:SESSION_ID});
+
+function updateViewerBadge() {
+  const badge = document.getElementById('viewerBadge');
+  const pinned = STATE.viewerSkill && STATE.viewerSkill._p;
+  badge.style.display = pinned ? '' : 'none';
+}
+
+async function doSaveViewer() {
+  const s = STATE.viewerSkill;
+  if (!s) return;
+  const path = skillFilePath(s);
+  if (!path) {
+    toast(t('sk.fail') + ': ' + t('sk.noPath'), 'err');
+    return;
+  }
+  const content = document.getElementById('viewerBody').value;
+  if (content === STATE.viewerOriginal) {
+    closeModal('viewerModal');
+    return;
+  }
+
+  const res = await postJSON(API.file, { action: 'write_file', path: path, content: content });
+  if (!res || !res.ok) {
+    toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
+    return;
+  }
+  STATE.viewerOriginal = content;
+
+  if (s._p) {
+    const pinRes = await postJSON(API.skillLoader, {
+      action: 'pin', skill_id: s.skill_id, session_id: SESSION_ID
+    });
+    if (pinRes && pinRes.ok) {
+      toast(t('sk.okSave') + ' · ' + t('sk.okSync'), 'ok');
+    } else if (pinRes && pinRes.pinned_total !== undefined && pinRes.new_size !== undefined) {
+      const used = fmtBytes(pinRes.pinned_total);
+      const add = fmtBytes(pinRes.new_size);
+      const limit = fmtBytes(pinRes.limit || MAX_PINNED_TOTAL);
+      const msg = t('sk.limitTitle') + ' — ' + t('sk.limitBody')
+        .replace('{used}', used).replace('{add}', add).replace('{limit}', limit)
+        + ' ' + t('sk.okSave');
+      toast(msg, 'err');
+    } else {
+      toast(t('sk.okSave') + ' · ' + t('sk.fail') + ': ' + ((pinRes && pinRes.error) || ''), 'err');
+    }
+  } else {
+    toast(t('sk.okSave'), 'ok');
+  }
+
+  closeModal('viewerModal');
+  await loadSkills();
+}
+
+async function doDelete(sid) {
+  const s = STATE.skills.find(function(x){ return x.skill_id === sid; });
+  if (s && s._p) {
+    await postJSON(API.skillLoader, { action: 'unpin', skill_id: sid, session_id: SESSION_ID });
+  }
   document.getElementById('delName').textContent = (s && (s.title || sid)) || sid;
   openModal('delModal');
   document.getElementById('delOk').onclick = async function(){
     closeModal('delModal');
-    await postJSON(API.skillLoader, {action:'unpin', skill_id:sid});
+    await postJSON(API.skillLoader, { action: 'unpin', skill_id: sid, session_id: SESSION_ID });
     const cands = [];
-    const fp = skillFilePath(s);
+    const fp = skillFilePath(s || {});
     if (fp) cands.push(fp);
     cands.push('data/skills/' + sid + '/SKILL.md');
     let done = false;
-    for (const p of cands){
-      const r = await postJSON(API.file, {action:'delete_file', path:p});
-      if (r && r.ok){ done = true; break; }
+    for (const p of cands) {
+      const r = await postJSON(API.file, { action: 'delete_file', path: p });
+      if (r && r.ok) { done = true; break; }
     }
-    if (done){
+    if (done) {
       toast(t('sk.okDel') + ': ' + sid);
       await loadSkills();
     } else {
@@ -725,15 +918,16 @@ async function doDelete(sid){
     }
   };
 }
-async function doUpload(){
+
+async function doUpload() {
   const name = document.getElementById('uploadName').value.trim();
   const content = document.getElementById('uploadContent').value.trim();
-  if (!name){ toast(t('sk.needName'), 'err'); return; }
-  if (!/^[a-zA-Z0-9_\-]+$/.test(name)){ toast(t('sk.badName'), 'err'); return; }
-  if (!content){ toast(t('sk.needContent'), 'err'); return; }
+  if (!name) { toast(t('sk.needName'), 'err'); return; }
+  if (!/^[a-zA-Z0-9_\-]+$/.test(name)) { toast(t('sk.badName'), 'err'); return; }
+  if (!content) { toast(t('sk.needContent'), 'err'); return; }
   const path = 'data/skills/' + name + '/SKILL.md';
-  const res = await postJSON(API.file, {action:'write_file', path:path, content:content});
-  if (!res || !res.ok){
+  const res = await postJSON(API.file, { action: 'write_file', path: path, content: content });
+  if (!res || !res.ok) {
     toast(t('sk.fail') + ': ' + ((res && res.error) || ''), 'err');
     return;
   }
@@ -742,15 +936,15 @@ async function doUpload(){
   document.getElementById('uploadContent').value = '';
   document.getElementById('uploadFile').value = '';
   const fn = document.getElementById('fileName');
-  if (fn){ fn.textContent = t('sk.noFile'); delete fn.dataset.picked; }
+  if (fn) { fn.textContent = t('sk.noFile'); delete fn.dataset.picked; }
   toast(t('sk.okUpload') + ': ' + name);
   await loadSkills();
 }
 
 /* ---------- 标签切换 ---------- */
-function switchPane(name){
+function switchPane(name) {
   STATE.pane = name;
-  const map = {loaded:'paneLoaded', manage:'paneManage'};
+  const map = { loaded: 'paneLoaded', manage: 'paneManage' };
   document.querySelectorAll('.pane').forEach(function(p){
     p.classList.toggle('active', p.id === map[name]);
   });
@@ -760,7 +954,7 @@ function switchPane(name){
 }
 
 /* ---------- i18n ---------- */
-function applyI18n(){
+function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach(function(el){
     const key = el.getAttribute('data-i18n');
     const v = t(key);
@@ -769,44 +963,45 @@ function applyI18n(){
   document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
     el.placeholder = t(el.getAttribute('data-i18n-ph'));
   });
-  document.getElementById('uploadDesc').textContent = t('sk.uploadDesc');
+  const ud = document.getElementById('uploadDesc');
+  if (ud) ud.textContent = t('sk.uploadDesc');
   document.querySelectorAll('[data-i18n-title]').forEach(function(el){
     el.title = t(el.getAttribute('data-i18n-title'));
   });
   const fn = document.getElementById('fileName');
   if (fn && !fn.dataset.picked) fn.textContent = t('sk.noFile');
   document.getElementById('langToggle').textContent = LANG === 'zh' ? 'EN' : '中';
+  const hint = document.getElementById('viewerHint');
+  if (hint) hint.textContent = t('sk.editHint');
   render();
 }
-function toggleLang(){
+
+function toggleLang() {
   LANG = LANG === 'zh' ? 'en' : 'zh';
-  try { localStorage.setItem('aicp_skills_lang', LANG); } catch(e){}
-  try { localStorage.setItem('aicp_lang', LANG); } catch(e){}
+  try { localStorage.setItem('aicp_skills_lang', LANG); } catch (e) {}
+  try { localStorage.setItem('aicp_lang', LANG); } catch (e) {}
   applyI18n();
   notifyParentLang(LANG);
 }
 
-/* 通知父页（console iframe）本页语种，实现与外层双向同步 */
-function notifyParentLang(lang){
+function notifyParentLang(lang) {
   try {
     if (window.parent && window.parent !== window) {
-      window.parent.postMessage({type:'aicp_lang', lang:lang}, '*');
+      window.parent.postMessage({ type: 'aicp_lang', lang: lang }, '*');
     }
-  } catch(e) {}
+  } catch (e) {}
 }
 
-/* 接收外层（console）推送的语种 */
 window.addEventListener('message', function(e){
   if (!e.data || e.data.type !== 'aicp_lang') return;
   var lang = e.data.lang;
   if (lang !== 'zh' && lang !== 'en') return;
   if (lang === LANG) return;
   LANG = lang;
-  try { localStorage.setItem('aicp_lang', lang); } catch(e){}
+  try { localStorage.setItem('aicp_lang', lang); } catch (e) {}
   applyI18n();
 });
 
-/* 其它标签页切换语种的兜底 */
 window.addEventListener('storage', function(e){
   if (!e.key || e.key !== 'aicp_lang') return;
   var lang = e.newValue;
@@ -840,7 +1035,7 @@ document.getElementById('uploadFile').addEventListener('change', function(e){
   const reader = new FileReader();
   reader.onload = function(ev){
     document.getElementById('uploadContent').value = ev.target.result;
-    if (!document.getElementById('uploadName').value){
+    if (!document.getElementById('uploadName').value) {
       document.getElementById('uploadName').value = f.name
         .replace(/\.(md|markdown|txt)$/i, '')
         .replace(/[^a-zA-Z0-9_\-]/g, '-')
@@ -851,33 +1046,56 @@ document.getElementById('uploadFile').addEventListener('change', function(e){
 });
 document.getElementById('copyDirBtn').addEventListener('click', function(){
   const txt = document.getElementById('skillsDir').textContent;
-  if (navigator.clipboard && navigator.clipboard.writeText){
+  if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(txt);
   }
   toast(t('sk.copyPath'));
 });
 document.getElementById('viewerCopy').addEventListener('click', function(){
-  const text = document.getElementById('viewerBody').textContent;
-  if (navigator.clipboard && navigator.clipboard.writeText){
+  const text = document.getElementById('viewerBody').value;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text);
   }
   toast(t('sk.copy'));
 });
+document.getElementById('viewerSave').addEventListener('click', doSaveViewer);
+
 document.addEventListener('click', function(e){
   const btn = e.target.closest ? e.target.closest('[data-act]') : null;
-  if (btn){
+  if (btn) {
     const holder = btn.closest('[data-sid]');
     const sid = holder ? holder.getAttribute('data-sid') : '';
     const act = btn.getAttribute('data-act');
-    if (act === 'pin') doPin(sid);
-    else if (act === 'unpin') doUnpin(sid);
-    else if (act === 'view') doView(sid);
-    else if (act === 'delete') doDelete(sid);
+
+    if (act === 'noop') {
+      e.stopPropagation();
+      return;
+    }
+    if (act === 'delete') {
+      e.stopPropagation();
+      doDelete(sid);
+      return;
+    }
+    if (act === 'pin') {
+      e.stopPropagation();
+      doPin(sid);
+      return;
+    }
+    if (act === 'unpin') {
+      e.stopPropagation();
+      doUnpin(sid);
+      return;
+    }
+    if (act === 'view') {
+      doView(sid);
+      return;
+    }
     return;
   }
   const close = e.target.closest ? e.target.closest('[data-close]') : null;
   if (close) closeModal(close.getAttribute('data-close'));
 });
+
 document.querySelectorAll('.modal').forEach(function(m){
   m.addEventListener('click', function(e){ if (e.target === m) m.classList.remove('show'); });
 });

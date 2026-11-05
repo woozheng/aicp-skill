@@ -8,10 +8,128 @@ from pathlib import Path
 import core
 import json
 import asyncio
+import sys
+
+import importlib
+import sys
+
+# ★ 延迟导入 _service_restart：加载器按文件名字母序遍历 plugins/**/*.py，
+#   os/_service_restart.py 排在 os/_gateway.py / os/_mcp_server.py /
+#   os/_file_receiver.py / os/_websocket.py 之后（s > m > f > g），
+#   模块级 import 会因「还没加载到」抛 ModuleNotFoundError → 引擎起不来。
+#   所以这里只在真正要用的时候 import（见 _sr()）。
+
+# ★ 热重载友好：网关的 aiohttp 路由闭包在 START 时创建，持有启动那一刻的模块 globals。
+#   热重载会 exec 出新模块对象并重绑 core.plugins，但已在跑的 handler 仍指向旧模块，
+#   结果 = 改了 PUBLIC_PAGES / 路由逻辑却不生效，必须重启引擎。
+#   下面凡「随代码变化的值」都改成运行时从 live 模块取。
+_LIVE_MODULE_NAME = "plugin_os__gateway"
+
+
+def _sr():
+    """延迟取得 _service_restart 模块（见上方注释：不能模块级 import）。"""
+    import importlib
+    return importlib.import_module("plugin_os__service_restart")
+
+
+def _live(name, default=None):
+    """从当前活着的模块取一个值；取不到就回退到本模块的同名值。"""
+    mod = sys.modules.get(_LIVE_MODULE_NAME)
+    if mod is not None and hasattr(mod, name):
+        return getattr(mod, name)
+    return globals().get(name, default)
 
 
 # 免登录即可访问的静态页面（其余 .html 需 token 鉴权）
 PUBLIC_PAGES = {'index.html', '404.html'}
+
+# 应用私有静态资源前缀（相对 www/）。
+# apps/<project>/** 下的 .js/.css/.json/图片等一律与应用页面同口径鉴权，
+# 避免"页面要登录、但它引用的脚本可匿名下载"。
+# vendor/、system/、tools/ 等共享资源不在此列，保持公开。
+APP_ASSET_PREFIXES = ('apps/',)
+
+# ★ 对外隐藏的应用（模板/内置 demo），API 层与静态页都拦截。
+#   原先定义在 START 闭包里 → 属于 handler 的局部变量，热重载永远改不动。
+#   提到模块级，再由使用点走 _live() 读取，才能热生效。
+HIDDEN_APP_PREFIXES = ("applications/_demo/",)
+
+# ============================================================
+# 请求体大小上限
+# 原本三处各自为政（网关 50MB / JSON API 10MB / 接收器 50MB），现统一到一处定义。
+#   MAX_JSON_BODY_SIZE     : 网关 JSON API（/api/*）的请求体上限，固定 10MB。
+#                            JSON 体积比原始文件大（base64 还要再涨 33%），
+#                            所以刻意比文件上传更小。
+#   DEFAULT_MAX_UPLOAD_SIZE : multipart 直传的单文件默认上限，50MB。
+#   client_max_size        : aiohttp 兜底，取上面两者的较大值，
+#                            否则会在业务逻辑前就被 413 掉。
+# 应用宣称的文件大小上限必须和上传上限对齐，
+# 否则大文件能过前端校验却在上传时被服务端拒。
+#
+# 上传上限从 aicp.yaml 的 upload.max_size 读取（缺省 50MB），
+# 上传接收器 os/_file_receiver.py 读的是同一份配置，两边不会再漂移。
+#
+# JSON 体上限从 aicp.yaml 的 max_body_size 读取（缺省 10MB），
+# 网关 JSON API 与 MCP JSON-RPC 消息共用这一个值。
+# ============================================================
+DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024    # 10MB，JSON 请求体（网关 + MCP 共用）
+DEFAULT_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB，multipart 直传单文件
+
+
+def _resolve_max_body_size(agent) -> int:
+    """读取 JSON 请求体上限：aicp.yaml max_body_size，缺省 10MB。
+    网关 os/_gateway.py 与 MCP 入口 os/_mcp_server.py 共用这一个值。"""
+    val = agent.config.get("max_body_size", DEFAULT_MAX_BODY_SIZE) if agent else DEFAULT_MAX_BODY_SIZE
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        val = DEFAULT_MAX_BODY_SIZE
+    return val if val > 0 else DEFAULT_MAX_BODY_SIZE
+
+
+def _resolve_max_upload_size(agent) -> int:
+    """读取上传大小上限：aicp.yaml upload.max_size，缺省 50MB。
+    与 os/_file_receiver.py 的同名函数读同一份配置。"""
+    cfg = agent.config.get("upload", {}) if agent else {}
+    val = cfg.get("max_size", DEFAULT_MAX_UPLOAD_SIZE)
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        val = DEFAULT_MAX_UPLOAD_SIZE
+    return val if val > 0 else DEFAULT_MAX_UPLOAD_SIZE
+
+
+async def _stop_gateway(agent, keep_watcher: bool = False):
+    """真正停掉 HTTP 网关（释放端口）。
+
+    keep_watcher=True 时不取消自重启监听 —— 重启流程自己会调它，
+    取消了就没人重建了。
+    """
+    if not keep_watcher:
+        rtask = getattr(agent, "_gateway_reload_task", None)
+        if rtask:
+            # ★ 只 cancel 不 await：若这次 STOP 是 watcher 自己触发的会死锁
+            try:
+                rtask.cancel()
+            except Exception:
+                pass
+            agent._gateway_reload_task = None
+
+        swatch = getattr(agent, "_service_watch_os__gateway", None)
+        if swatch:
+            try:
+                swatch.cancel()
+            except Exception:
+                pass
+            agent._service_watch_os__gateway = None
+
+    runner = getattr(agent, "_gateway_runner", None)
+    if runner:
+        try:
+            await runner.cleanup()
+        except Exception:
+            pass
+        agent._gateway_runner = None
 
 
 async def execute(envelop, agent):
@@ -21,23 +139,38 @@ async def execute(envelop, agent):
         port = envelop.payload.get("port", 9000)
         host = envelop.payload.get("host", "127.0.0.1")
 
-        app = web.Application(client_max_size=50 * 1024 * 1024)
+        max_upload_size = _resolve_max_upload_size(agent)
+        max_body_size = _resolve_max_body_size(agent)
+        # client_max_size 必须 >= JSON 上限和上传上限，否则会在业务逻辑前就被 413 掉
+        app = web.Application(client_max_size=max(max_body_size, max_upload_size))
 
         @web.middleware
         async def cors(request, handler):
+            # ★ 回显真实 Origin，而不是 "*"：
+            #   1) 鉴权判定（_is_same_origin）依赖 Origin 头，
+            #      回显 "*" 会让浏览器拿不到可用的同源信号；
+            #   2) 带 cookie 的跨端口请求不接受 "*"，
+            #      回显 Origin 才能让 cookie / Authorization 正常随请求发出。
+            #   与上传接收器 (_file_receiver.py) 的 CORS 策略保持一致。
+            origin = request.headers.get("Origin", "")
+            allow_origin = origin if origin else "*"
             if request.method == "OPTIONS":
                 return web.Response(status=200, headers={
-                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Origin": allow_origin,
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type, X-AICP-Token, Authorization",
+                    "Access-Control-Allow-Credentials": "true",
                     "Access-Control-Allow-Private-Network": "true",
                     "Access-Control-Allow-Local-Network": "true",
                     "Access-Control-Max-Age": "600",
+                    "Vary": "Origin",
                 })
             resp = await handler(request)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Origin"] = allow_origin
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
             resp.headers["Access-Control-Allow-Private-Network"] = "true"
             resp.headers["Access-Control-Allow-Local-Network"] = "true"
+            resp.headers["Vary"] = "Origin"
             return resp
 
         app.middlewares.append(cors)
@@ -136,9 +269,16 @@ async def execute(envelop, agent):
 
             return web.json_response(result.payload)
 
+        # ★ 对外隐藏的应用（模板/内置 demo），API 层直接拦截
+        #   用 _live() 读模块级常量：热重载后立即生效（旧代码用闭包局部变量，改了没用）
+
         async def handle_api(request):
             path = request.match_info["path"]
             raw_body = b""
+
+            # ★ 拦截隐藏应用的 API 请求
+            if any(path.startswith(pfx) for pfx in _live("HIDDEN_APP_PREFIXES", HIDDEN_APP_PREFIXES)):
+                return web.json_response({"error": "Not found"}, status=404)
 
             if path == "ws_config":
                 ws_config = agent.config.get("websocket", {})
@@ -173,14 +313,24 @@ async def execute(envelop, agent):
                 else:
                     return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
 
-            MAX_BODY_SIZE = 10 * 1024 * 1024
+            # JSON API 请求体上限（见文件头 _resolve_max_body_size）。
+            # 注意：文件请走 multipart 直传（/api/upload_config 拿地址），
+            # 不要 base64 塞进 JSON —— 既超这个上限，体积还额外涨 33%。
+            max_body_size = _resolve_max_body_size(agent)
             body = {}
 
             try:
                 raw_body = await request.read()
 
-                if len(raw_body) > MAX_BODY_SIZE:
-                    return web.json_response({"error": f"Request body too large: {len(raw_body)} > {MAX_BODY_SIZE}"}, status=413)
+                if len(raw_body) > max_body_size:
+                    return web.json_response({
+                        "error": f"Request body too large: {len(raw_body)} > {max_body_size} (JSON API limit; for file upload use /api/upload_config multipart endpoint)",
+                        "reason": "body_too_large",
+                        "limit_bytes": max_body_size,
+                        "actual_bytes": len(raw_body),
+                        "configurable_via": "aicp.yaml max_body_size",
+                        "hint": "shrink the payload, or upload files via multipart (GET /api/upload_config for the url); base64 in JSON also inflates size by ~33%",
+                    }, status=413)
 
                 if raw_body:
                     try:
@@ -386,15 +536,30 @@ async def execute(envelop, agent):
                 return await _route_get("os/_static", request,
                                     action="serve_data", file_path=file_path[5:])
 
-            is_public_page = file_path in PUBLIC_PAGES
+            # ★ 拦截隐藏应用的静态页面
+            if any(file_path.startswith(f"apps/{pfx.split('/')[1]}/") for pfx in _live("HIDDEN_APP_PREFIXES", HIDDEN_APP_PREFIXES)):
+                return web.Response(text="Not found", status=404)
 
-            if file_path.endswith('.html') and not is_public_page:
+            is_public_page = file_path in _live("PUBLIC_PAGES", PUBLIC_PAGES)
+
+            # ★ 静态资源鉴权口径（原来只有 .html 走鉴权，.js/.css/.json 落 else 分支直接放行，
+            #   等于"页面被保护、它引用的脚本却被匿名读走"，且缓存头还不一致）。
+            #   现在按"归属"判定，而不是按"扩展名"判定：
+            #     - apps/<project>/**  → 应用私有资源，整体需鉴权
+            #     - vendor/ system/ tools/ 等共享资源 → 公开
+            #   应用私有资源统一加 no-store，和 .html 保持一致。
+            app_prefix = _live("APP_ASSET_PREFIXES", APP_ASSET_PREFIXES)
+            is_app_asset = any(file_path.startswith(p) for p in app_prefix)
+
+            if (file_path.endswith('.html') and not is_public_page) or is_app_asset:
                 ok, _ = await _verify_auth(request, agent, "__static__")
                 if not ok:
-                    return web.Response(
-                        text='<script>location.href="/"</script>',
-                        content_type='text/html',
-                    )
+                    if file_path.endswith('.html'):
+                        return web.Response(
+                            text='<script>location.href="/"</script>',
+                            content_type='text/html',
+                        )
+                    return web.Response(text="Forbidden", status=403)
 
                 return await _route_get(
                         "os/_static", request,
@@ -476,11 +641,41 @@ async def execute(envelop, agent):
         await runner.setup()
         await web.TCPSite(runner, host, port).start()
 
+        # ★ runner 必须挂到 agent 上，否则没法优雅重启
+        #   （旧代码没存 → STOP 只是个空壳，端口永远占着，重启必然 "address in use"）
+        agent._gateway_runner = runner
+        agent._gateway_host = host
+        agent._gateway_port = port
+
+        # ★ 自愈监听（统一走 os/_service_restart）：
+        #   本模块被热重载后，aiohttp app 里注册的 handler 闭包仍持有旧模块的
+        #   globals（路由逻辑 / 常量都不会更新）。watcher 检测到模块被换掉就
+        #   自动重启服务 —— 否则「改网关逻辑必须重启引擎」。
+        _sr().ensure_hot_reload_watch(
+            agent, "os/_gateway", port=port, host=host,
+            start_payload={"action": "START", "host": host, "port": port},
+        )
+
         envelop.payload = {"status": "listening", "port": port, "host": host}
         return envelop
 
     elif action == "STOP":
+        await _stop_gateway(agent)
         envelop.payload = {"status": "stopped"}
+        return envelop
+
+    elif action == "restart":
+        # ★ 优雅重启：释放端口 + 用新代码重新起（不需要重启引擎）
+        ok = await _sr().restart_service_and_watch(
+            agent, "os/_gateway",
+            port=getattr(agent, "_gateway_port", 9000),
+            host=getattr(agent, "_gateway_host", "0.0.0.0"),
+            start_payload={"action": "START",
+                           "host": getattr(agent, "_gateway_host", "0.0.0.0"),
+                           "port": getattr(agent, "_gateway_port", 9000)},
+        )
+        envelop.payload = {"ok": ok, "status": "restarted" if ok else "restart_failed",
+                           "port": getattr(agent, "_gateway_port", 9000)}
         return envelop
 
     envelop.payload = {"error": f"Unknown action: {action}"}

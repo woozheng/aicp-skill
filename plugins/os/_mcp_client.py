@@ -85,6 +85,30 @@ def _base_url(url):
     if u.endswith("/mcp"):
         u = u[:-4]
     return u
+async def _parse_sse(resp):
+    """解析 SSE 响应，取第一个完整 data 块的 JSON-RPC 响应。
+
+    必须整读：aiohttp 的流式迭代对单行超过 128KB 会抛 LineTooLong，
+    而 REA 的 tools/list 是单行 3MB+ 的 JSON。
+    """
+    try:
+        text = await resp.text()
+    except Exception:
+        return {}
+    data_lines = []
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+        elif line == "" and data_lines:
+            break
+    payload_text = "\n".join(data_lines).strip()
+    if not payload_text:
+        return {}
+    try:
+        return json.loads(payload_text)
+    except (json.JSONDecodeError, ValueError):
+        return {"_raw_text": payload_text[:2000]}
 
 
 def _is_local(url):
@@ -94,32 +118,6 @@ def _is_local(url):
         return False
     return host in ("127.0.0.1", "localhost", "0.0.0.0", "::1") or host.startswith("169.254.")
 
-
-# ============================================================
-# JSON-RPC / SSE
-# ============================================================
-
-async def _parse_sse(resp):
-    """逐行解析 SSE，取第一个完整 data 块的 JSON-RPC 响应"""
-    data_lines = []
-    try:
-        async for raw in resp.content:
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            if line.startswith("data:"):
-                data_lines.append(line[5:].lstrip())
-            elif line == "" and data_lines:
-                break
-            elif line.startswith("event:") or line.startswith(":"):
-                continue
-    except Exception:
-        pass
-    text = "\n".join(data_lines).strip()
-    if not text:
-        return {}
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return {"_raw_text": text[:2000]}
 
 
 async def _rpc(base, token, session_id, method, params, timeout):

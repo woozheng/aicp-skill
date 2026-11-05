@@ -30,8 +30,13 @@ def setup_logging():
     log_dir = Path("data")
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # ★ 日志级别统一入口：全系统 DEBUG/INFO 开关只在这里控制。
+    #   改 debug_level 为 "INFO" 即可整体降级，不再散落各处 setLevel。
+    debug_level = os.environ.get("AICP_LOG_LEVEL", "INFO").upper()
+    level = logging.DEBUG if debug_level == "DEBUG" else logging.INFO
+
     logger = logging.getLogger("aicp")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(level)
 
     fh = RotatingFileHandler(
         log_dir / "gateway.log",
@@ -39,7 +44,7 @@ def setup_logging():
         backupCount=3,
         encoding="utf-8",
     )
-    fh.setLevel(logging.DEBUG)
+    fh.setLevel(level)
     fh.setFormatter(logging.Formatter(
         '%(asctime)s [%(levelname)s] %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S',
@@ -261,6 +266,31 @@ async def main():
             except Exception as e:
                 logger.warning(f"App {app_config.get('name', app_dir.name)} failed: {e}")
 
+    # ---------- 打开浏览器（最后一步） ----------
+    browser_plugin = core.plugins.get("os/_local_browser_launcher")
+    if browser_plugin:
+        try:
+            browser_env = Envelop(
+                sender="__main__",
+                receiver="os/_local_browser_launcher",
+                payload={"action": "open_if_needed"},
+            )
+            browser_result = await browser_plugin(browser_env, agent)
+            bpayload = (browser_result.payload or {}) if browser_result else {}
+            if bpayload.get("opened"):
+                logger.info(f"Browser opened: {bpayload.get('url')}")
+            elif bpayload.get("reason"):
+                logger.info(f"Browser skipped: {bpayload.get('reason')}")
+        except Exception as e:
+            logger.warning(f"Browser open failed: {e}")
+    else:
+        logger.warning("os/_browser not found, skipped")
+
+    logger.info("=" * 50)
+    logger.info(f"  index  · http://{host}:{port}/system/settings.html")
+    logger.info(f"  Console   · http://{host}:{port}/console.html")
+    logger.info("=" * 50)
+
     # ---------- 等停止 ----------
     import time
 
@@ -289,7 +319,7 @@ async def main():
 
     try:
         await stop_event.wait()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         shutdown()
 
     # ================================================================

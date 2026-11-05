@@ -20,7 +20,6 @@ token 来源（按顺序尝试）：
 import core
 import hmac
 import hashlib
-import secrets
 import json
 import os
 import time
@@ -70,21 +69,22 @@ def _resolve_mode(agent) -> str:
 # ============================================================
 
 def _secret() -> str:
+    """HMAC 密钥（认证业务自有，不进 core）。"""
     return os.environ.get("BIO_SECRET", "change-me-in-prod")
 
 
 def issue_hmac_token(user_id: str, ttl_seconds: int = 30 * 86400, perms=None) -> str:
-    """签发 HMAC 自包含 token。签发端和验证端共享 BIO_SECRET，无存储。"""
-    body = {"uid": user_id, "exp": int(time.time()) + ttl_seconds}
-    if perms:
+    """签发 HMAC 自包含 token（认证业务实现，core 不参与）。"""
+    if not user_id:
+        return ""
+    exp = int(time.time()) + int(ttl_seconds)
+    body = {"uid": str(user_id), "exp": exp}
+    if isinstance(perms, dict):
         body["perms"] = perms
-    raw = base64.urlsafe_b64encode(
-        json.dumps(body, separators=(",", ":")).encode()
-    ).rstrip(b"=")
-    sig = base64.urlsafe_b64encode(
-        hmac.new(_secret().encode(), raw, hashlib.sha256).digest()
-    ).rstrip(b"=")
-    return f"{raw.decode()}.{sig.decode()}"
+    raw = base64.urlsafe_b64encode(json.dumps(body, sort_keys=True).encode()).decode().rstrip("=")
+    sig = hmac.new(_secret().encode(), raw.encode(), hashlib.sha256).digest()
+    sig_b = base64.urlsafe_b64encode(sig).decode().rstrip("=")
+    return f"{raw}.{sig_b}"
 
 
 def verify_hmac_token(token: str) -> dict | None:
@@ -262,7 +262,29 @@ async def _verify(envelop, agent):
                 envelop.payload = {"ok": True, "user_id": "local", "app": app_name}
                 return envelop
 
-    envelop.payload = {"ok": False, "error": "Unauthorized"}
+    # ★ 带诊断信息的失败返回（agent 友好）。
+    #   保留 ok / error 两个键不变（兼容既有调用方），
+    #   额外给 reason（机器可读，供 agent 程序化分支）、
+    #   detail（人读的一句话）、hint（agent 的下一步动作）。
+    #   agent 拿到 401 后要能判断"是自己没带凭证、凭证过期、还是权限不够"，
+    #   否则只会反复重试同一请求。
+    envelop.payload = {
+        "ok": False,
+        "error": "Unauthorized",
+        "reason": "invalid_token" if token else "missing_token",
+        "detail": (
+            "token was provided but rejected by all 4 sources (static/hmac/dynamic/app)"
+            if token else
+            "no token provided"
+        ),
+        "hint": (
+            "check token expiry and that BIO_SECRET matches the issuing side"
+            if token else
+            "send 'Authorization: Bearer <token>' or 'X-AICP-Token' header; "
+            "obtain one with os/_auth issue_hmac_token"
+        ),
+        "auth_mode": mode,
+    }
     return envelop
 
 
@@ -331,7 +353,7 @@ async def _login(envelop, agent):
     if username in users:
         stored = users[username]
         if stored == password or _verify_password(password, stored):
-            token = _generate_session_token(username, agent.config.get("token_secret", "aicp_session_secret"))
+            token = issue_hmac_token(username)
             envelop.payload = {"ok": True, "token": token, "username": username, "user_id": username}
         else:
             envelop.payload = {"ok": False, "error": "Invalid credentials"}
@@ -365,13 +387,6 @@ async def _generate_app_token(envelop, agent):
 
 def _generate_app_token_value(app_name: str, secret: str) -> str:
     return hmac.new(secret.encode(), app_name.encode(), hashlib.md5).hexdigest()[:16]
-
-
-def _generate_session_token(username: str, secret: str) -> str:
-    nonce = secrets.token_hex(8)
-    data = f"{username}:{nonce}"
-    signature = hmac.new(secret.encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
-    return f"tok_{username}_{signature}"
 
 
 def _verify_password(password: str, stored: str) -> bool:

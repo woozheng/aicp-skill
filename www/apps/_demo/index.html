@@ -49,13 +49,14 @@
 <body>
 <div class="wrap">
   <h1>Notes Demo</h1>
-  <div class="sub">notes.py（CRUD + LLM + SSE + WS + 上传 + call_ping）+ collab.py（四种 system.call）+ ping.py（极简被调用方）</div>
+  <div class="sub">后端项目：notes.py + collab.py + ping.py ｜ 纯前端项目：只写 app.yaml + index.html，不写后端</div>
 
   <div class="card" style="border-left:3px solid var(--primary)">
     <h2>对齐规则（造应用照抄本 demo 时必须遵守）</h2>
     <div style="font-size:13px; line-height:1.85">
-      <p style="margin:6px 0"><b>1. 路由 = 目录结构</b> — 后端 <code>plugins/applications/{project}/{plugin}.py</code> → 路由 <code>applications/{project}/{plugin}</code> → HTTP <code>/api/applications/{project}/{plugin}</code>。<code>app.yaml</code> 不参与路由，只是声明。</p>
-      <p style="margin:6px 0"><b>2. 三处同名</b> — 后端文件名（去 <code>.py</code>）= 前端 <code>const PLUGIN</code> = 路由末段。改一处必须同时改三处，漏一处就 404。</p>
+      <p style="margin:6px 0"><b>0. 交付形态</b> — 纯前端项目<b>不写后端插件</b>。只交付两个文件：<code>plugins/applications/{project}/app.yaml</code>（项目注册）+ <code>www/apps/{project}/index.html</code>（单文件，含 HTML/CSS/JS，不拆文件）。需要数据时直接用浏览器 <code>fetch</code> 调已有系统接口，或 <code>localStorage</code>，不要为此写后端。</p>
+      <p style="margin:6px 0"><b>1. 路由 = 目录结构（仅后端项目）</b> — 需要后端时才写 <code>plugins/applications/{project}/{plugin}.py</code> → 路由 <code>applications/{project}/{plugin}</code> → HTTP <code>/api/applications/{project}/{plugin}</code>。<code>app.yaml</code> 不参与路由，只是声明。</p>
+      <p style="margin:6px 0"><b>2. 三处同名（仅后端项目）</b> — 后端文件名（去 <code>.py</code>）= 前端 <code>const PLUGIN</code> = 路由末段。改一处必须同时改三处，漏一处就 404。纯前端项目无此约束。</p>
       <p style="margin:6px 0"><b>3. 请求体</b> — <code>{action, ...params}</code> 平铺发送；后端读 <code>envelop.payload.action</code> 决定分支（平铺与 <code>{payload:{...}}</code> 两种形状都收）。</p>
       <p style="margin:6px 0"><b>4. 返回体</b> — 统一 <code>{ok:true, data:...}</code> 或 <code>{ok:false, error:"..."}</code>，前端按 <code>ok</code> 分支渲染。</p>
       <p style="margin:6px 0"><b>5. 跨插件</b> — <code>await agent.system.call(core.Envelop(receiver=..., payload={...}))</code>，见 collab.py。</p>

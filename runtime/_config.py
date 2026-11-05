@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 ENV_VAR_PATTERN = re.compile(r'\$\{(\w+)\}')
+SECRET_PREFIX = "secret:"
 
 DEFAULT_CONFIG = {
     "host": "0.0.0.0",
@@ -18,10 +19,6 @@ DEFAULT_CONFIG = {
     "static_dir": None,
     "models": {
         "default": "gpt-3.5-turbo",
-        "max_retries": 3,
-        "request_timeout": 60,
-        "stream_timeout": 300,
-        "max_concurrent": 10,
         "providers": {},
     },
     "robots": [],
@@ -30,7 +27,7 @@ DEFAULT_CONFIG = {
 
 
 def _resolve_env_vars(value: Any) -> Any:
-    """Replace ${VAR} with environment variable value."""
+    """Replace ${VAR} with environment variable value; secret:alias → vault decrypt."""
     if not isinstance(value, str):
         return value
 
@@ -42,7 +39,27 @@ def _resolve_env_vars(value: Any) -> Any:
             return ""
         return env_value
 
-    return ENV_VAR_PATTERN.sub(replacer, value)
+    resolved = ENV_VAR_PATTERN.sub(replacer, value)
+
+    # secret:alias → 本地加密密钥库
+    s = resolved.strip()
+    if s.startswith(SECRET_PREFIX):
+        alias = s[len(SECRET_PREFIX):].strip()
+        if alias:
+            try:
+                from plugins.os import _secrets
+            except Exception:
+                try:
+                    import importlib
+                    _secrets = importlib.import_module("plugins.os._secrets")
+                except Exception:
+                    _secrets = None
+            if _secrets is not None:
+                plain = _secrets.decrypt(alias)
+                if plain:
+                    return plain
+                print(f"  ⚠️  Secret '{alias}' not found in local vault")
+    return resolved
 
 
 def _walk_and_resolve(obj: Any) -> Any:

@@ -82,6 +82,11 @@ MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_RECURSION_DEPTH = 40
 
+# ============================================================
+# 上下文压力阈值 —— 超过则只给 manage_flow，强制去噪
+# ============================================================
+CONTEXT_PRESSURE_THRESHOLD = 300_000   # 字符数
+
 LLM_ERROR_PREFIXES = (
     "[LLM stream error:",
     "[LLM请求失败:",
@@ -448,7 +453,6 @@ class InformationFlow:
         self._current_turn = 0
 
         # ★ 折叠状态（内存态，每轮可变；不写进 entry）
-        self._expanded: Dict[str, int] = {}   # index -> 到期 turn
         self._ignored: Dict[str, int] = {}    # index -> 到期 turn
 
         # 落盘相关（沿用）
@@ -460,6 +464,8 @@ class InformationFlow:
         self._current_baseline = None   # 动态基线：None=降级固定轮，[]=新任务，[3,10,...]=选中轮
         self._msg_cache: Dict[int, List[dict]] = {}   # round_no -> [user_msg, assistant_msg]
         self._dirty_rounds: set = set()               # manage_flow 对历史轮操作时标记
+        self._round_snapshots: Dict[int, dict] = {}
+        # {round_no: {"collapsed": [...], "ignored": [...]} —— 本轮结束时的折叠形态
 
         self._task_summary = ""          # ← 新增
         self._picked_skills = []         # ← 新增
@@ -487,51 +493,39 @@ class InformationFlow:
             return True
         return False
 
-    def _gc_expanded(self):
+    def _gc_ignored(self):
         """清理过期 TTL。"""
         cur = self._current_turn
-        self._expanded = {k: v for k, v in self._expanded.items() if v > cur}
         self._ignored = {k: v for k, v in self._ignored.items() if v > cur}
 
-    async def manage_flow(self, collapse=None, ignore=None, expand=None, ttl: int = 3) -> dict:
+    async def manage_flow(self, collapse=None, ignore=None) -> dict:
+        """本轮减压阀：只做减法（collapse / ignore）。不展开、不增内容。"""
         collapse = collapse or []
         ignore = ignore or []
-        expand = expand or []
-        ttl = max(1, min(int(ttl or 3), 20))
         self._current_turn += 1
 
-        applied = {"collapse": [], "ignore": [], "expand": [], "invalid": []}
+        applied = {"collapse": [], "ignore": [], "invalid": []}
 
         for idx in collapse:
             s = self._norm_index(idx)
             if not s or not self._index_exists(s):
                 applied["invalid"].append(idx); continue
-            # collapse: 加到 _ignored（1 轮 TTL）或 _expanded 移除
-            self._expanded.pop(s, None)
-            self._ignored[s] = self._current_turn + ttl
+            self._ignored[s] = self._current_turn + 999
             applied["collapse"].append(s)
 
         for idx in ignore:
             s = self._norm_index(idx)
             if not s or not self._index_exists(s):
                 applied["invalid"].append(idx); continue
-            self._ignored[s] = self._current_turn + 1   # 1 轮
+            self._ignored[s] = self._current_turn + 999
             applied["ignore"].append(s)
 
-        for idx in expand:
-            s = self._norm_index(idx)
-            if not s or not self._index_exists(s):
-                applied["invalid"].append(idx); continue
-            self._expanded[s] = self._current_turn + ttl
-            self._ignored.pop(s, None)
-            applied["expand"].append(s)
+        self._gc_ignored()
 
-        self._gc_expanded()
-
-        for idx in applied["collapse"] + applied["ignore"] + applied["expand"]:
+        for idx in applied["collapse"] + applied["ignore"]:
             try:
                 r = int(str(idx).split(".")[0])
-                if r != self._round_counter:  # 不是当前轮
+                if r != self._round_counter:
                     self._dirty_rounds.add(r)
             except (ValueError, IndexError):
                 pass
@@ -539,21 +533,10 @@ class InformationFlow:
         parts = []
         if applied["collapse"]: parts.append(f"收起 {len(applied['collapse'])} 条")
         if applied["ignore"]:   parts.append(f"关闭 {len(applied['ignore'])} 条")
-        if applied["expand"]:   parts.append(f"展开 {len(applied['expand'])} 条")
         if applied["invalid"]:  parts.append(f"无效 {len(applied['invalid'])} 个")
         think = "，".join(parts) or "无变更"
 
-        # ★ 把 TTL / 到期轮次一并返回，供写 flow 与下一轮渲染使用
-        return {
-            "ok": True,
-            "think": think,
-            "data": {
-                **applied,
-                "ttl": ttl,
-                "current_turn": self._current_turn,
-                "expires_at_turn": self._current_turn + ttl,
-            },
-        }
+        return {"ok": True, "think": think, "data": applied}
 
     # ============================================================
     # 编号计数器
@@ -610,6 +593,16 @@ class InformationFlow:
                         except json.JSONDecodeError:
                             Logger.warn(f"[flow] 跳过坏行 sid={self.session_id}")
                 self._restore_counters()
+                # ★ 恢复历史轮折叠快照
+                for e in self._flow:
+                    if e.get("action") == "round_snapshot":
+                        r = e.get("round_no")
+                        if r:
+                            d = e.get("detail") or {}
+                            self._round_snapshots[r] = {
+                                "collapsed": d.get("collapsed", []) or [],
+                                "ignored": d.get("ignored", []) or [],
+                            }
             except Exception as e:
                 Logger.error(f"[flow] 读取 jsonl 失败: {e}")
                 self._flow = []
@@ -872,17 +865,6 @@ class InformationFlow:
         """编号归一化：去掉前缀 # 和空白。"""
         return str(idx or "").lstrip("#").strip()
 
-    def _is_expanded(self, idx: str) -> bool:
-        s = self._norm_index(idx)
-        exp = self._expanded.get(s)
-        return bool(exp) and exp > self._current_turn
-
-
-    def _is_expanded(self, idx: str) -> bool:
-        s = self._norm_index(idx)
-        exp = self._expanded.get(s)
-        return bool(exp) and exp > self._current_turn
-
     def _is_ignored(self, idx: str) -> bool:
         s = self._norm_index(idx)
         exp = self._ignored.get(s)
@@ -989,41 +971,6 @@ class InformationFlow:
     # ============================================================
     # 渲染：主入口
     # ============================================================
-    def _render_manage_flow(self, entries: List[dict]) -> List[str]:
-        """渲染本轮轮级 manage_flow 记录（chain_no 不计，按 action 识别）。
-
-        输出示例：
-          > 🧭 manage_flow：收起 2 条: ##3.1, ###3.1.2；TTL 3 轮（#5 生效，到 #8 失效）；原因：...
-        """
-        out: List[str] = []
-        for e in entries:
-            if e.get("action") != "manage_flow":
-                continue
-            d = e.get("detail") or {}
-            applied = d.get("applied") or {}
-            parts: List[str] = []
-            if applied.get("collapse"):
-                parts.append(f"收起 {len(applied['collapse'])} 条: {', '.join(applied['collapse'])}")
-            if applied.get("ignore"):
-                parts.append(f"忽略 {len(applied['ignore'])} 条: {', '.join(applied['ignore'])}")
-            if applied.get("expand"):
-                parts.append(f"展开 {len(applied['expand'])} 条: {', '.join(applied['expand'])}")
-            if applied.get("invalid"):
-                parts.append(f"无效 {len(applied['invalid'])} 个: {', '.join(str(x) for x in applied['invalid'])}")
-
-            ttl = d.get("ttl")
-            cur = d.get("current_turn")
-            exp = d.get("expires_at_turn")
-            ttl_hint = ""
-            if ttl is not None and exp is not None:
-                ttl_hint = f"；TTL {ttl} 轮（#{(cur or 0) + 1} 生效，到 #{exp} 失效）"
-
-            reason = (d.get("reason") or "").strip()
-            reason_hint = f"；原因：{reason}" if reason else ""
-
-            body = "；".join(parts) if parts else "无变更"
-            out.append(f"> 🧭 manage_flow：{body}{ttl_hint}{reason_hint}")
-        return out
 
     def _render_skill_header(self) -> str:
         """本轮任务可能用到的 skill（从 flow._task_summary / flow._picked_skills 读）。
@@ -1189,8 +1136,17 @@ class InformationFlow:
                     if tail:
                         msgs.append({"role": "user", "content": tail})
             else:
-                # ---- 其他选中轮：只 #N 级 ----
-                msgs.extend(block)
+                # ---- 其他选中轮：优先用固化快照，没有则默认 ----
+                snap = self._round_snapshots.get(r_no)
+                if snap is not None:
+                    user_text = self._render_round_user(entries)
+                    reply_text = self._render_round_reply_with_snapshot(entries, snap)
+                    if user_text:
+                        msgs.append({"role": "user", "content": user_text})
+                    if reply_text:
+                        msgs.append({"role": "assistant", "content": reply_text})
+                else:
+                    msgs.extend(block)
 
         return msgs
 
@@ -1225,7 +1181,7 @@ class InformationFlow:
             return (
                 f"【工具结果 ##{r_no}.{c_no}】{label}\n"
                 + (f"目的：{chain_think}\n" if chain_think else "")
-                + f"（已收起；需要时用 manage_flow expand(\"##{r_no}.{c_no}\") 展开）"
+                + f"（已收起，内容已释放；如确需原文，按坐标用 read_file_lines 重新读取）"
             )
 
         lines = [f"【工具结果 ##{r_no}.{c_no}】{label}"]
@@ -1318,14 +1274,7 @@ class InformationFlow:
 
 
     def _render_round_reply(self, entries: List[dict]) -> str:
-        """渲染一轮的 assistant 部分 —— reply 原文 +（可选）think +（展开时）工具链摘要。
-
-        多轮消息下：
-        - 不加「🤖 AI：」前缀（role 已经是 assistant）
-        - 不加 > 引用块（content 独立）
-        - 默认只给 reply 原文；think 有则拼在前面
-        - expand("#N") 后追加 ##N.M 摘要；##N.M 也 expand 时再追加 ###N.M.K 详细 JSON
-        """
+        """渲染一轮的 assistant 部分 —— reply 原文 +（可选）think。"""
         reply = ""
         think = ""
         for e in entries:
@@ -1336,9 +1285,6 @@ class InformationFlow:
         if not reply:
             return ""
 
-        r_no = entries[0].get("round_no") or 0
-
-        # think：换行压空格，超 100 字兜底截断（正常不会触发）
         think_line = ""
         if think:
             t = think.replace("\n", " ").strip()
@@ -1346,64 +1292,13 @@ class InformationFlow:
                 t = t[:100] + "…"
             think_line = f"（think：{t}）"
 
-        # 未展开：think + reply 原文
-        if not self._is_expanded(f"#{r_no}"):
-            if think_line:
-                return think_line + "\n\n" + reply
-            return reply
-
-        # 已展开：think + reply + 该轮的 ## 折叠摘要
-        lines: List[str] = []
         if think_line:
-            lines.append(think_line)
-            lines.append("")
-        lines.append(reply)
-        lines.append("")
-
-        chains = self._group_chains(entries)
-        for c_no in sorted(chains.keys()):
-            chain_entries = chains[c_no]
-            chain_idx = f"##{r_no}.{c_no}"
-            t, a = self._chain_target_action(chain_entries)
-            status = self._chain_status(chain_entries)
-            icon = {"ok": "✅", "failed": "❌", "pending": "⏳"}.get(status, "")
-            hint = self._chain_result_hint(chain_entries)
-            lines.append(f"## {r_no}.{c_no} {icon} {t}.{a}{hint}")
-
-            # ★ ##N.M 被 expand：追加 ### 步骤的完整结果
-            if self._is_expanded(chain_idx):
-                step_no = 0
-                for se in chain_entries:
-                    if se.get("from") == "ai" and se.get("call") == "use_tool":
-                        continue
-                    step_no += 1
-                    act = se.get("action", "") or (se.get("call", "") or "")
-                    if se.get("from") == "system":
-                        payload = se.get("detail") or {}
-                    else:
-                        payload = {
-                            "think": se.get("think", ""),
-                            "call": se.get("call", ""),
-                            "content": se.get("content", ""),
-                            "args": se.get("args", {}),
-                        }
-                    try:
-                        p_str = json.dumps(payload, ensure_ascii=False, default=str)
-                    except Exception:
-                        p_str = str(payload)
-                    if len(p_str) > 8000:
-                        p_str = p_str[:8000] + "…（截断）"
-                    lines.append(f"### {r_no}.{c_no}.{step_no} {act}")
-                    lines.append(p_str)
-
-        return "\n".join(lines)
+            return think_line + "\n\n" + reply
+        return reply
 
     def _render_current_tail(self, entries: List[dict]) -> str:
-       parts = []
-       mf = self._render_manage_flow(entries)
-       if mf:
-           parts.extend([line.lstrip("> ") if line.startswith("> ") else line for line in mf])
-       return "\n".join(parts)
+        # manage_flow 现在走正常 ## 链渲染，不需要额外的轮级 tail。
+        return ""
 
 
     # ============================================================
@@ -1542,6 +1437,23 @@ class InformationFlow:
             if isinstance(stdout, str) and stdout.strip():
                 return " → " + stdout.strip().split("\n")[0][:60]
 
+            # E. manage_flow 专属摘要
+            if action == "manage_flow":
+                cb = data.get("ctx_before")
+                ca = data.get("ctx_after")
+                applied = data.get("applied") or {}
+                n_collapse = len(applied.get("collapse") or [])
+                n_ignore = len(applied.get("ignore") or [])
+                bits = []
+                if n_collapse:
+                    bits.append(f"收起 {n_collapse} 条")
+                if n_ignore:
+                    bits.append(f"忽略 {n_ignore} 条")
+                if cb is not None and ca is not None:
+                    bits.append(f"上下文 {cb:,} → {ca:,}")
+                if bits:
+                    return " → " + " · ".join(bits)
+
             # G. 兜底：抽 1~2 个标量
             scalars = []
             for k, v in data.items():
@@ -1561,6 +1473,66 @@ class InformationFlow:
 
 
 
+
+    def estimate_context_chars(self) -> int:
+        """估算当前 flow 渲染成 messages 后的总字符数。"""
+        try:
+            msgs = self.get_messages()
+        except Exception:
+            return 0
+        return sum(len(m.get("content") or "") for m in msgs)
+
+    async def snapshot_round(self, round_no: int) -> None:
+        """把当前轮的折叠形态固化进 flow（reply 时调用）。"""
+        collapsed = [
+            k.lstrip("#") for k, v in self._ignored.items()
+            if v > self._current_turn and k.count(".") == 1
+        ]
+        ignored = [
+            k.lstrip("#") for k, v in self._ignored.items()
+            if v > self._current_turn and k.count(".") == 2
+        ]
+        self._round_snapshots[round_no] = {"collapsed": collapsed, "ignored": ignored}
+        await self.append_system(
+            action="round_snapshot",
+            result_think=f"📌 固化第 {round_no} 轮折叠形态",
+            detail={"collapsed": collapsed, "ignored": ignored},
+            retain=1,
+            chain_no=0,
+        )
+
+    def _render_round_reply_with_snapshot(self, entries: List[dict], snap: dict) -> str:
+        """按固化快照渲染历史轮的 assistant 部分。"""
+        reply = ""
+        for e in entries:
+            if e.get("from") == "ai" and e.get("call") == "reply" and (e.get("content") or ""):
+                reply = e["content"]
+                break
+        if not reply:
+            return ""
+
+        collapsed = set(snap.get("collapsed", []) or [])
+        r_no = entries[0].get("round_no") or 0
+
+        lines = [reply, ""]
+        chains = self._group_chains(entries)
+        for c_no in sorted(chains.keys()):
+            chain_entries = chains[c_no]
+            chain_key = f"{r_no}.{c_no}"
+            t, a = self._chain_target_action(chain_entries)
+            status = self._chain_status(chain_entries)
+            icon = {"ok": "✅", "failed": "❌", "pending": "⏳"}.get(status, "")
+            hint = self._chain_result_hint(chain_entries)
+
+            if chain_key in collapsed:
+                h = (hint or "").strip(" →").strip()
+                if len(h) > 70:
+                    h = h[:70] + "…"
+                lines.append(f"## {r_no}.{c_no} {icon} {t}.{a}" + (f" → {h}" if h else ""))
+            else:
+                lines.append(f"## {r_no}.{c_no} {icon} {t}.{a}{hint}")
+
+        return "\n".join(lines)
 
     # ============================================================
     # 中断标记（供外部调用；不删 flow）
@@ -1627,12 +1599,16 @@ def _get_or_create_flow(user_id: str, session_id: str) -> InformationFlow:
 # ============================================================
 
 async def _push_progress(agent, user_id, session_id, step, msg, extra=None):
+    # ★ 本 session 已确认无前端：直接短路
+    if _WS_DEAD.get(session_id, False):
+        return 0
     data = {"type": "progress", "session_id": session_id, "step": step, "msg": msg}
     if extra:
         data.update(extra)
     task = asyncio.ensure_future(agent.system.call(core.Envelop(
         sender="builtins/agents/main_agent",
         receiver="os/_websocket",
+        meta={"session_id": session_id},
         payload={
             "action": "push",
             "channel_id": f"pa_{user_id}",
@@ -1648,14 +1624,29 @@ async def _push_progress(agent, user_id, session_id, step, msg, extra=None):
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
         Logger.warn(f"[WS] push_progress 超时 6s，已放弃")
+        return 0
     except Exception as e:
         Logger.warn(f"[WS] push_progress 失败: {type(e).__name__}: {e}")
+        return 0
+    # ★ 拿到 sent：0 说明频道无人，本回合后续不再推
+    try:
+        res = task.result() if task.done() else None
+        payload = getattr(res, "payload", None) or {}
+        sent = int(payload.get("sent") or 0)
+    except Exception:
+        sent = 0
+    if sent == 0:
+        _WS_DEAD[session_id] = True
+    return sent
 
 
 async def _push_chat(agent, user_id, session_id, content):
+    if _WS_DEAD.get(session_id, False):
+        return 0
     task = asyncio.ensure_future(agent.system.call(core.Envelop(
         sender="builtins/agents/main_agent",
         receiver="os/_websocket",
+        meta={"session_id": session_id},
         payload={
             "action": "push",
             "channel_id": f"pa_{user_id}",
@@ -1671,13 +1662,27 @@ async def _push_chat(agent, user_id, session_id, content):
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
         Logger.warn(f"[WS] 推送 chat 超时 6s，已放弃")
+        return 0
     except Exception as e:
         Logger.warn(f"[WS] 推送消息失败: {type(e).__name__}: {e}")
+        return 0
+    try:
+        res = task.result() if task.done() else None
+        payload = getattr(res, "payload", None) or {}
+        sent = int(payload.get("sent") or 0)
+    except Exception:
+        sent = 0
+    if sent == 0:
+        _WS_DEAD[session_id] = True
+    return sent
 
 async def _push_stream(agent, user_id: str, session_id: str, chunk: str):
+    if _WS_DEAD.get(session_id, False):
+        return 0
     task = asyncio.ensure_future(agent.system.call(core.Envelop(
         sender="builtins/agents/main_agent",
         receiver="os/_websocket",
+        meta={"session_id": session_id},
         payload={
             "action": "push",
             "channel_id": f"pa_{user_id}",
@@ -1693,11 +1698,26 @@ async def _push_stream(agent, user_id: str, session_id: str, chunk: str):
         except (asyncio.TimeoutError, asyncio.CancelledError):
             pass
         Logger.warn(f"[WS] 流式推送超时 6s，已放弃")
+        return 0
     except Exception as e:
         Logger.warn(f"[WS] 流式推送失败: {type(e).__name__}: {e}")
+        return 0
+    try:
+        res = task.result() if task.done() else None
+        payload = getattr(res, "payload", None) or {}
+        sent = int(payload.get("sent") or 0)
+    except Exception:
+        sent = 0
+    if sent == 0:
+        _WS_DEAD[session_id] = True
+    return sent
 # ★ 后台推送任务强引用集合：asyncio 只持弱引用，不存引用会被 GC 回收
 _PUSH_BG_TASKS: set = set()
 _PUSH_BG_MAX = 256   # 上限保护：WS 长期异常时不无限堆积
+
+# ★ 无前端短路：session_id -> True 表示本回合已确认无 WS 连接，后续推送直接跳过
+#   初始不存在（视作「有前端」）；第一次 push 返回 sent=0 时置 True；回合结束清理。
+_WS_DEAD: Dict[str, bool] = {}
 
 
 def _push_stream_nowait(agent, user_id: str, session_id: str, chunk: str):
@@ -1706,6 +1726,9 @@ def _push_stream_nowait(agent, user_id: str, session_id: str, chunk: str):
     与 _push_stream 的区别：不 await、不抛异常。
     内部仍有 6s 超时兜底（在 _push_stream 里），所以任务不会永久挂住。
     """
+    # ★ 本 session 已确认无前端：不创建任务
+    if _WS_DEAD.get(session_id, False):
+        return
     try:
         if len(_PUSH_BG_TASKS) >= _PUSH_BG_MAX:
             Logger.warn(f"[WS] 后台推送任务堆积达 {_PUSH_BG_MAX}，丢弃本帧")
@@ -1730,6 +1753,10 @@ _STREAM_BUFFER_MAX = 128                      # buffer 超过 64 个 chunk 强�
 
 
 async def _flush_stream_buffer(agent, user_id: str, session_id: str):
+    if _WS_DEAD.get(session_id, False):
+        # 已确认无前端：清空 buffer，不再推
+        _STREAM_BUFFERS.pop(session_id, None)
+        return
     buf = _STREAM_BUFFERS.get(session_id)
     if not buf:
         return
@@ -1772,6 +1799,9 @@ def _buffer_stream_chunk(agent, user_id:str,session_id: str, chunk: str):
     """把一个 chunk 塞进 buffer。超过阈值时立即 flush。"""
     if not chunk:
         return
+    # ★ 本 session 已确认无前端：不 buffer、不 flush
+    if _WS_DEAD.get(session_id, False):
+        return
     buf = _STREAM_BUFFERS.setdefault(session_id, [])
     buf.append(chunk)
 
@@ -1806,68 +1836,45 @@ MANAGE_FLOW_SCHEMA = {
     "function": {
         "name": "manage_flow",
         "description": (
-            "控制信息流的显示状态（展开/折叠/忽略），只改变下一轮 context 的渲染，不返回内容。\n"
+            "【本轮递归内的减压阀】只在上下文过长、任务还没完成时由系统提供。\n"
+            "它只做减法：把本轮已经用过、暂时不需要的中间结果折叠成一行（保留坐标），"
+            "腾出空间继续跑。不展开、不增加内容。\n"
             "\n"
             "编号：#N 整轮、##N.M 工具链、###N.M.K 单步。\n"
             "\n"
             "## 语义\n"
-            "  collapse([...])：折叠成一行。对 ##N.M 折叠成锚点行（结果摘要仍在），对 #N 折叠整轮。\n"
-            "  ignore([...])：本轮完全不渲染。**只对 ###N.M.K 用**，不要对 ##N.M 或 #N 用。\n"
-            "  expand([...])：展开历史轮 / 折叠的 ##。\n"
+            "  collapse([...])：把 ##N.M 折叠成一行（保留结果摘要 + 坐标）。\n"
+            "  ignore([...])：把 ###N.M.K 完全不渲染（超长 stdout 的中间段等）。\n"
             "\n"
-            "## 硬规则（违反会丢上下文）\n"
-            "  1. **绝对不要 ignore / collapse 整轮 #N**。\n"
-            "     #N 的 reply 是结论 / 排查结果 / 方法论，是后续轮的上下文。\n"
-            "     #N 默认已经折叠成「user + reply + 一行链计数」，本身就很短，不需要再折叠。\n"
-            "  2. **只 collapse 重复读取的 ##N.M**。\n"
-            "     同一 target+action+params 被读过多次，保留最新一次，旧的 collapse。\n"
-            "  3. **ignore 只用于 ###N.M.K**。\n"
-            "     某一步的具体输入输出确认无用（例如超长 stdout 的中间部分），才 ignore。\n"
-            "  4. **只有 context_len > 200000 时才需要主动折叠**。\n"
-            "     context 末尾会打「⚠️ 当前信息流已达 X 字符」，X > 200000 才动手。\n"
-            "     没看到这个警告，不要折叠。\n"
-            "\n"
-            "## 默认状态（不需要调用 manage_flow 的情况）\n"
-            "  - 历史轮 #N 已折叠成「user + reply + 一行链计数」\n"
-            "  - 上一轮的 ## 展开最近 1 条\n"
-            "  - 当前轮的 ## 和 ### 全量展开\n"
-            "  这个默认状态已经足够，绝大多数轮不需要调 manage_flow。\n"
+            "## 规则\n"
+            "  1. 只折叠「本轮」重复读取 / 已用完的 ##N.M，不要折叠当前正在依赖的结果。\n"
+            "  2. ignore 只用于 ###N.M.K，不要用于 #N 或 ##N.M。\n"
+            "  3. 折叠后你会看到「上下文从 X 缩到 Y」，自己判断够不够；够就继续干活。\n"
+            "  4. 本工具只在超阈值时出现；折叠完下一轮恢复正常工具集。\n"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "reason": {
                     "type": "string",
-                    "description": "为什么展开/折叠（可选）。会写进信息流，下一轮你能看到自己当时的理由。"
+                    "description": "为什么折叠（可选）。会写进信息流，下一轮你能看到自己当时的理由。"
                 },
                 "collapse": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "折叠的编号。推荐只放 ##N.M（重复读取的链）。不要放 #N。"
+                    "description": "折叠的 ##N.M 编号列表。"
                 },
                 "ignore": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "完全不渲染的编号。只放 ###N.M.K。不要放 #N 或 ##N.M。"
-                },
-                "expand": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "展开的编号。可以放 #N（整轮展开）、##N.M（展开单条链的 ###）。"
-                },
-                "ttl": {
-                    "type": "integer",
-                    "default": 3,
-                    "minimum": 1,
-                    "maximum": 20,
-                    "description": "collapse / expand 持续几轮，默认 3。ignore 固定 1 轮。"
+                    "description": "完全不渲染的 ###N.M.K 编号列表。"
                 }
             },
             "required": []
         }
     }
 }
-TOOL_SCHEMAS = [
+TOOL_SCHEMAS_BASE = [
     {
         "type": "function",
         "function": {
@@ -1959,8 +1966,12 @@ TOOL_SCHEMAS = [
                 }
             }
         },
-    MANAGE_FLOW_SCHEMA
 ]
+
+TOOL_SCHEMAS_PRESSURE = [MANAGE_FLOW_SCHEMA]
+
+# 兼容旧引用
+TOOL_SCHEMAS = TOOL_SCHEMAS_BASE
 
 
 
@@ -1980,7 +1991,7 @@ SYSTEM_PROMPT = """你是 BIO-bk-1，自举式 AI 助手。Session: {{session_id
 # 你只有两个 tool
 1. reply —— 回复用户：任务完成、需要确认、无法继续时用。
 2. use_tool —— 调用插件：执行动作、读写文件、跑代码、造应用、查系统。
-3. manage_flow —— 控制信息流：collapse（收起）/ ignore（关闭）/ expand（展开）。
+3. manage_flow —— 本轮减压阀（仅上下文超阈值时出现）：collapse（收起）/ ignore（关闭），只减不增。
 
 一次只调一个。拿到结果再决定下一步。
 
@@ -2287,6 +2298,25 @@ def _infer_fix(params: dict, error_text: str, error_category: str = "") -> str:
 
     return "；".join(fixes)
 
+def _param_fingerprint(action: str, params: dict) -> str:
+    """对"实质参数"做指纹，用于区分"同一 target/action 但参数已改"的调用。
+
+    只对 code_runner 这类"内容型"参数做 hash；其余参数走 sanitize 后的 JSON。
+    目的：改了 code 就应该算"新调用"，不该被 target+action 的旧失败记录拦死。
+    """
+    p = params or {}
+    # 内容型字段优先：code / content / html / script
+    for key in ("code", "content", "html", "script", "source"):
+        v = p.get(key)
+        if isinstance(v, str) and v.strip():
+            return hashlib.md5(v.encode("utf-8")).hexdigest()[:16]
+    # 其余：sanitize 后 JSON 的 hash（去掉大字段内容，保留结构）
+    try:
+        s = json.dumps(_sanitize_params(p), ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        s = str(p)
+    return hashlib.md5(s.encode("utf-8")).hexdigest()[:16]
+
 def _check_failure_lock(user_id: str, target: str, action: str, params: dict) -> str:
     """同指纹累计 >= 3 次时，返回拒绝原因；否则返回空串。
 
@@ -2301,6 +2331,8 @@ def _check_failure_lock(user_id: str, target: str, action: str, params: dict) ->
         items = data.get("items", [])
         if not items:
             return ""
+
+        cur_param_fp = _param_fingerprint(action, params or {})   # ★ 新增
 
         for it in items:
             it_target = it.get("target", "") or ""
@@ -2318,13 +2350,19 @@ def _check_failure_lock(user_id: str, target: str, action: str, params: dict) ->
             c = int(it.get("count", 1))
             if c < 3:
                 continue
+            # ★ 新增：参数指纹不同 → 说明这次实质参数已改，不算"同一调用"，放行
+            it_param_fp = it.get("param_fp", "") or ""
+            if it_param_fp and it_param_fp != cur_param_fp:
+                continue
             # 命中：给拒绝原因
             eid = it.get("id", "")
             fix = it.get("fix", "") or ""
             return (
                 f"同一调用已失败 {c} 次（{eid}），本轮拒绝执行。"
                 f"先读经验背包 {eid} 的正确做法：{fix or '先用 contract_agent.get 看参数'}。"
-                f"补全参数后重发，不要原样重试。"
+                f"⚠️ 注意：本次 target/action/参数与失败记录完全一致。"
+                f"如已修改 code/plugin_args 内容，请确认参数确实变了再重发；"
+                f"否则请改用其他工具或换思路。"
             )
     except Exception:
         return ""
@@ -2348,6 +2386,7 @@ def _record_failure(agent, user_id, session_id, target, action, params,
         is_app = target.startswith("applications/")
         et, phrase = _error_signature(error_text, error_category)
         fp = _failure_fingerprint(target, action, error_text, error_category)
+        param_fp = _param_fingerprint(action, params or {})   # ★ 新增
         data = _load_backpack(user_id)
         items = data.get("items", [])
         now = datetime.now().isoformat()
@@ -2375,6 +2414,7 @@ def _record_failure(agent, user_id, session_id, target, action, params,
             if it.get("fingerprint") == fp:
                 it["count"] = int(it.get("count", 1)) + 1
                 it["last_seen"] = now
+                it["param_fp"] = param_fp
                 if not it.get("fix") and fix:
                     it["fix"] = fix
                 c = it["count"]
@@ -2415,6 +2455,7 @@ def _record_failure(agent, user_id, session_id, target, action, params,
             "params_snapshot": params_snapshot,
             "fix": fix,
             "fingerprint": fp,
+            "param_fp": param_fp,
             "count": 1,
             "error_type": et,
             "error_source": error_source,
@@ -2703,12 +2744,27 @@ class ToolRegistry:
 
             if _lock_reason:
                 call_id = str(uuid.uuid4())[:8]
+                # ★ 1) call_error：让渲染层认出这是"失败"，不再显示"（执行中，无返回）"
                 await flow.append_system(
                     action="call_error",
                     result_think=f"⛔ {target} 被经验背包拦截",
                     detail={"call_id": call_id, "target": target, "error": _lock_reason},
                     retain=2,
                     chain_no=chain_no,
+                )
+                # ★ 2) task_summary：给模型"怎么绕过"的行动指引
+                await flow.append_system(
+                    action="task_summary",
+                    result_think=(
+                        f"⛔ {target} 被拦截：target/action/参数与历史失败完全一致。\n"
+                        f"**不要原样重发**。要绕过拦截，必须让参数实质变化：\n"
+                        f"- code_runner：重写 `code` 字段（如补全 async def execute(envelop, agent)）\n"
+                        f"- 其他插件：修改 plugin_args 的具体值，而不是只改 think 描述\n"
+                        f"改完后重新提交；参数指纹变了就不会再被拦。"
+                    ),
+                    detail={"reason": "failure_lock", "target": target},
+                    retain=2,
+                    chain_no=chain_no,      # ★ 同一个 chain_no，别让 task_summary 跑到别的链
                 )
                 await _push_progress(
                     agent, user_id, session_id, "error",
@@ -2991,7 +3047,7 @@ class LLMThinker:
 
         # ★ 每轮 LLM 调用算一个 turn，供 manage_flow 的 TTL 判断
         flow._current_turn += 1
-        flow._gc_expanded()
+        flow._gc_ignored()
 
         system_prompt = PromptBuilder.build_system(session_id)
         _base = (getattr(agent, "base_url", "") or "http://127.0.0.1:9000").rstrip("/")
@@ -3002,6 +3058,9 @@ class LLMThinker:
 
         # 动态上下文（经验背包 / 任务看板 / 深度提示 / 执行环境 / 本机基址）拼到最后一条 user 尾部
         tail = PromptBuilder.build_tail(user_id, session_id, depth, flow=flow)
+        _now = datetime.now()
+        _week = "一二三四五六日"[_now.weekday()]
+        tail += f"\n\n【当前时间】{_now:%Y-%m-%d} 周{_week} {_now:%H:%M:%S}（{_now:%Z}）"
         tail += f"\n\n【本机基址】{_base}（给用户可点击链接时直接用这个，不要写 {{base_url}} 占位符）"
         tail += f"\n\n【当前会话】{session_id}"
         tail += f"\n\n【工作目录】data/workspace/{session_id}（临时文件放这里，任务完成后清理）"
@@ -3016,11 +3075,22 @@ class LLMThinker:
             Logger.warn(f"[debug] dump messages 失败: {_e}")
 
 
+        # ★ 上下文压力阈值（字符数；折叠是纯减法，触发后必然下降）
+        _ctx_chars = sum(len(m.get("content") or "") for m in messages)
+        _pressure = _ctx_chars >= CONTEXT_PRESSURE_THRESHOLD
+
         if depth >= MAX_RECURSION_DEPTH - 1:
-                tools = [t for t in TOOL_SCHEMAS if t["function"]["name"] == "reply"]
-                tool_choice = "auto"
+            tools = [t for t in TOOL_SCHEMAS_BASE if t["function"]["name"] == "reply"]
+            tool_choice = "auto"
+        elif _pressure:
+            tools = list(TOOL_SCHEMAS_PRESSURE)
+            tool_choice = "auto"
+            Logger.warn(
+                f"[pressure] ctx={_ctx_chars} ≥ {CONTEXT_PRESSURE_THRESHOLD}，"
+                f"仅注入 manage_flow，depth={depth}"
+            )
         else:
-            tools = list(TOOL_SCHEMAS)
+            tools = list(TOOL_SCHEMAS_BASE)
             tool_choice = "auto"
 
         tool_calls_list: list = []
@@ -3041,6 +3111,12 @@ class LLMThinker:
                     chunk = event.get("content", "")
                     text_buf += chunk
                     _buffer_stream_chunk(agent, user_id, session_id, chunk)
+                elif etype == "tool_call_delta":
+                    # ★ 仅推送进度，不写入 text_buf / flow；让前端在“等完整 tool_call”期间看到参数在涨
+                    _name = event.get("name", "") or ""
+                    _alen = event.get("args_len", 0) or 0
+                    _buf = f"\n⚙️ {_name} ({_alen}B)" if _name else f"\n⚙️ ({_alen}B)"
+                    _buffer_stream_chunk(agent, user_id, session_id, _buf)
                 elif etype == "retry":
                     await _push_progress(
                         agent, user_id, session_id, "executing",
@@ -3050,53 +3126,107 @@ class LLMThinker:
                 elif etype == "tool_call":
                     tc = event.get("tool_call")
 
-                    # ★ manage_flow 特殊处理：直接执行，不进 tool_calls_list
-                    # ★ manage_flow 特殊处理：直接执行，不进 tool_calls_list
                     if tc.name == "manage_flow":
+                        # ★ manage_flow 走「正常工具调用」路径：call_start / call_end / 推 WS
                         args = tc.arguments or {}
+                        call_id = str(uuid.uuid4())[:8]
+                        t0 = time.time()
+                        ctx_before = flow.estimate_context_chars()
+                        mf_chain_no = flow._next_chain()
+                        mf_params = {
+                            "collapse": args.get("collapse"),
+                            "ignore": args.get("ignore"),
+                        }
+
+                        # 推 start（前端 handleToolStart 认 status: "start"）
+                        await _push_progress(
+                            agent, user_id, session_id, "executing",
+                            "⚡ manage_flow",
+                            extra={
+                                "call_id": call_id,
+                                "target": "builtins/agents/main_agent",
+                                "action": "manage_flow",
+                                "params": mf_params,
+                                "status": "start",
+                                "think": args.get("reason", ""),
+                            },
+                        )
+
+                        # 写 call_start（走正常 chain 编号，进 ## 分组）
+                        await flow.append_system(
+                            action="call_start",
+                            result_think="📤 调用工具: manage_flow",
+                            detail={
+                                "call_id": call_id,
+                                "target": "builtins/agents/main_agent",
+                                "action": "manage_flow",
+                                "params": mf_params,
+                                "status": "pending",
+                            },
+                            retain=2,
+                            chain_no=mf_chain_no,
+                        )
+
+                        ok = True
+                        error_msg = ""
+                        result = {}
                         try:
                             result = await flow.manage_flow(
                                 collapse=args.get("collapse"),
                                 ignore=args.get("ignore"),
-                                expand=args.get("expand"),
-                                ttl=args.get("ttl", 3),
                             )
                             manage_flow_done = True
-                            _info_parts = result.get("think", "")
-                            Logger.info(f"[manage_flow] depth={depth} {_info_parts}")
-
-                            # ★ 写进 flow：让下一轮 context 能看到「我折叠/展开了什么、为什么、TTL 剩几轮」
-                            #   chain_no=0 → 不进 ## 分组，跟 #N 同轮，作为轮级 system entry 渲染
-                            try:
-                                await flow.append_system(
-                                    action="manage_flow",
-                                    result_think=f"🧭 信息流：{_info_parts}",
-                                    detail={
-                                        "applied": result.get("data", {}),
-                                        "ttl": args.get("ttl", 3),
-                                        "reason": args.get("reason", ""),
-                                        "current_turn": flow._current_turn,
-                                        "expires_at_turn": flow._current_turn + max(1, min(int(args.get("ttl", 3) or 3), 20)),
-                                    },
-                                    retain=2,   # 只保留 2 轮，不长期占 context
-                                    chain_no=0
-                                )
-                            except Exception as e:
-                                Logger.warn(f"[manage_flow] 写 flow 失败: {e}")
-
-                            try:
-                                await _push_progress(
-                                    agent, user_id, session_id, "executing",
-                                    f"🧭 信息流：{_info_parts}",
-                                    extra={"status": "manage_flow"},
-                                )
-                            except Exception:
-                                pass
                         except Exception as e:
-                            Logger.warn(f"[manage_flow] 执行失败: {e}")
+                            ok = False
+                            error_msg = str(e)
                             manage_flow_done = True
-                        # ★ 不 break、不 continue 特殊处理——manage_flow 进 tool_calls_list 之外，
-                        #   但流继续消费（模型可能先 manage_flow 再 use_tool）
+                            Logger.warn(f"[manage_flow] 执行失败: {e}")
+
+                        ctx_after = flow.estimate_context_chars()
+                        freed = max(0, ctx_before - ctx_after)
+                        elapsed_ms = int((time.time() - t0) * 1000)
+                        _info_parts = (result.get("think", "") if ok else error_msg)
+                        Logger.info(
+                            f"[manage_flow] depth={depth} {_info_parts} "
+                            f"ctx {ctx_before}→{ctx_after} (freed={freed})"
+                        )
+
+                        # 写 call_end / call_error
+                        await flow.append_system(
+                            action="call_end" if ok else "call_error",
+                            result_think="📨 调用完成: manage_flow" if ok else "❌ manage_flow 失败",
+                            detail={
+                                "call_id": call_id,
+                                "target": "builtins/agents/main_agent",
+                                "action": "manage_flow",
+                                "result": {
+                                    "ok": ok,
+                                    "data": {
+                                        "applied": (result.get("data", {}) if ok else {}),
+                                        "ctx_before": ctx_before,
+                                        "ctx_after": ctx_after,
+                                        "freed": freed,
+                                    },
+                                    "error": error_msg,
+                                },
+                                "duration_ms": elapsed_ms,
+                            },
+                            retain=2,
+                            chain_no=mf_chain_no,
+                        )
+
+                        # 推 done / error
+                        await _push_progress(
+                            agent, user_id, session_id, "done" if ok else "error",
+                            "✅ manage_flow" if ok else "❌ manage_flow",
+                            extra={
+                                "call_id": call_id,
+                                "target": "builtins/agents/main_agent",
+                                "status": "ok" if ok else "error",
+                                "duration_ms": elapsed_ms,
+                                "error": error_msg if not ok else None,
+                            },
+                        )
                         continue
 
                     # 正常 tool_call（reply / use_tool）
@@ -3177,6 +3307,11 @@ class LLMThinker:
                         )
                         raise NarrationReplyError(content[:200])
                     await flow.append_ai(think, "reply", content=content, retain=args.get("retain", 3))
+                    # ★ 固化本轮折叠形态（供下一轮渲染历史轮时用）
+                    try:
+                        await flow.snapshot_round(flow._round_counter)
+                    except Exception as e:
+                        Logger.warn(f"[snapshot] 固化失败: {e}")
                     return {"call": "reply", "content": content, "args": {}}
 
                 if name == "use_tool":
@@ -3509,7 +3644,9 @@ async def _push_stats(agent, user_id: str, session_id: str, depth: int = 0):
         task = asyncio.ensure_future(agent.system.call(core.Envelop(
             sender="builtins/agents/main_agent",
             receiver="os/_websocket",
+             meta={"session_id": session_id},
             payload={"action": "push", "channel_id": f"pa_{user_id}",
+
                      "data": {"type": "stats", "session_id": session_id, "stats": stats}}
         )))
         try:
@@ -3852,6 +3989,8 @@ async def _run_processing(agent, user_id, session_id, flow):
                     await flow.append_user(pending)
                 except Exception as e:
                     Logger.error(f"[_run_processing] append_user 失败: {e}")
+            # ★ 新回合开始：重置无前端标记，让第一次推送重新探测
+            _WS_DEAD[session_id] = False
             # ★ 基线快照写进 flow（轮级 system entry，不进 ## 分组）
             baseline = getattr(flow, "_current_baseline", None)
             if baseline is not None:
@@ -3888,6 +4027,8 @@ async def _run_processing(agent, user_id, session_id, flow):
                 core_processor._think_sessions.discard(session_id)
                 core_processor.clear_interrupt(session_id)
                 core_processor.mark_turn_end(session_id)
+                # ★ 回合结束清理无前端标记（下次新回合重新探测）
+                _WS_DEAD.pop(session_id, None)
 
     except ConnectionError as e:
         Logger.warn(f"[network] 网络中断: {str(e)[:150]}")
@@ -4428,6 +4569,7 @@ async def execute(envelop, agent):
             if hasattr(agent.llm, "reset_round"):
                 agent.llm.reset_round(session_id)
             core_processor._think_sessions.add(session_id)
+            _WS_DEAD[session_id] = False   # ★ 分身回合开始：重置
             try:
                 async with _get_processing_lock(session_id):
                     result = await core_processor.process(agent, user_id, session_id, flow, 0)
@@ -4480,6 +4622,7 @@ async def execute(envelop, agent):
             finally:
                 core_processor._think_sessions.discard(session_id)
                 core_processor.clear_interrupt(session_id)
+                _WS_DEAD.pop(session_id, None)   # ★ 分身回合结束清理
 
             # ★ 显式带回 task_id / parent_session，供 task_manager 认领
             envelop.payload = {
@@ -4553,6 +4696,7 @@ async def execute(envelop, agent):
             ))
 
         core_processor._think_sessions.add(session_id)
+        _WS_DEAD[session_id] = False   # ★ 新回合开始：重置无前端标记
         asyncio.create_task(_run_processing(agent, user_id, session_id, flow))
         envelop.payload = {
             "ok": True, "waiting": False, "call": "processing",
@@ -4634,6 +4778,8 @@ async def _handle_callback(envelop, agent):
     ok = True
     final_content = ""
     core_processor._think_sessions.add(session_id)
+    # ★ 回调回合开始：重置无前端标记
+    _WS_DEAD[session_id] = False
     try:
         result = await core_processor.process(agent, user_id, session_id, flow)
         final_content = result.get("content", "")
@@ -4656,6 +4802,8 @@ async def _handle_callback(envelop, agent):
     finally:
         core_processor._think_sessions.discard(session_id)
         core_processor.clear_interrupt(session_id)
+        # ★ 回调回合结束清理
+        _WS_DEAD.pop(session_id, None)
 
     envelop.payload = {"ok": ok, "content": final_content}
     return envelop

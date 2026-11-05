@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Debug Log · AICP</title>
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<style>
+:root{
+  --bg:#08090A; --surface:#16171C; --surface-2:#1E1F25; --surface-3:#25262D;
+  --border:rgba(255,255,255,0.06); --border-strong:rgba(255,255,255,0.10);
+  --text:#F7F8F8; --text-2:#B4B8C0; --text-3:#8A8F98; --text-4:#5C6068;
+  --brand:#5E6AD2; --brand-hover:#6E79DB; --brand-soft:rgba(94,106,210,0.12);
+  --ok:#4CB782; --err:#E5484D; --warn:#D9A441;
+  --radius:10px; --radius-sm:6px;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',Roboto,sans-serif;
+  --font-mono:'SF Mono',Menlo,Consolas,'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--font-sans); background:var(--bg); color:var(--text);
+  font-size:13px; -webkit-font-smoothing:antialiased;
+  display:flex; flex-direction:column; height:100vh;
+}
+.header{
+  display:flex; align-items:center; gap:10px;
+  padding:0 14px; height:46px; flex-shrink:0;
+  border-bottom:1px solid var(--border); background:var(--surface);
+}
+.header .mark{
+  width:22px;height:22px;border-radius:6px;
+  background:linear-gradient(135deg,#5E6AD2,#8B5CF6);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;color:#fff;flex-shrink:0;
+}
+.header .title{font-size:13px;font-weight:600;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.header .title .sub{color:var(--text-3);font-weight:400;font-size:11px;margin-left:6px}
+.lang-toggle{
+  display:flex;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:2px;gap:2px;height:24px;align-items:center;
+}
+.lang-toggle button{
+  border:none;background:transparent;padding:2px 7px;border-radius:4px;
+  font-size:10px;font-weight:500;height:18px;color:var(--text-3);
+  cursor:pointer;font-family:inherit;transition:.15s;line-height:1;
+}
+.lang-toggle button.active{background:var(--surface-3);color:var(--text)}
+.icon-btn{
+  width:26px;height:26px;border-radius:var(--radius-sm);
+  background:transparent;border:1px solid var(--border);
+  color:var(--text-3);cursor:pointer;display:inline-flex;
+  align-items:center;justify-content:center;transition:.15s;flex-shrink:0;
+}
+.icon-btn:hover{background:var(--surface-2);color:var(--text);border-color:var(--border-strong)}
+.icon-btn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.content{flex:1;min-height:0;overflow-y:auto;padding:12px 14px 18px}
+.session-head{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;
+}
+.session-title{font-size:13px;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.session-meta{font-size:10.5px;color:var(--text-3);margin-top:3px;
+  display:flex;gap:10px;flex-wrap:wrap;font-family:var(--font-mono);}
+.session-meta .cnt{
+  font-family:var(--font-mono);font-size:10px;padding:0 6px;
+  border-radius:999px;background:var(--brand-soft);color:var(--brand);
+}
+.file-row{
+  display:flex;align-items:center;gap:8px;
+  padding:9px 12px;margin-bottom:6px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-sm);cursor:pointer;transition:.15s;
+}
+.file-row:hover{background:var(--surface-2);border-color:rgba(94,106,210,0.3)}
+.file-row .fname{
+  flex:1;min-width:0;font-family:var(--font-mono);font-size:11.5px;
+  color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.file-row .fbadge{
+  font-size:9px;font-family:var(--font-mono);padding:1px 6px;
+  border-radius:999px;background:var(--surface-2);border:1px solid var(--border);
+  color:var(--text-3);flex-shrink:0;
+}
+.file-row .fsize{font-size:10px;color:var(--text-4);font-family:var(--font-mono);flex-shrink:0}
+
+.viewer{
+  position:fixed;inset:0;background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);z-index:1000;
+  display:none;align-items:center;justify-content:center;padding:14px;
+}
+.viewer.show{display:flex}
+.viewer-card{
+  background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:14px;width:100%;max-width:860px;max-height:90vh;
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5);
+}
+.viewer-head{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.viewer-title{flex:1;min-width:0;font-family:var(--font-mono);font-size:12px;
+  color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.viewer-actions{display:flex;gap:6px;flex-shrink:0}
+.viewer-body{
+  flex:1;overflow-y:auto;padding:16px 20px;
+  font-size:12px;line-height:1.6;color:var(--text-2);
+}
+.viewer-body pre{
+  background:var(--bg);border:1px solid var(--border);border-radius:6px;
+  padding:10px 12px;overflow-x:auto;font-size:11px;line-height:1.55;
+  font-family:var(--font-mono);color:#A5D6FF;margin:6px 0;
+}
+.viewer-body code{background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:3px;
+  font-size:11.5px;font-family:var(--font-mono);}
+.viewer-body h1,.viewer-body h2,.viewer-body h3{font-size:13px;margin:10px 0 6px;color:var(--text)}
+.viewer-body hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.viewer-body p{margin:4px 0}
+
+/* ===== 工作区 Tab ===== */
+.tabs{
+  display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:3px;margin-bottom:10px;flex-shrink:0;
+}
+.tabs button{
+  border:none;background:transparent;padding:6px 14px;border-radius:5px;
+  font-size:11.5px;font-weight:500;color:var(--text-3);cursor:pointer;
+  font-family:inherit;transition:.15s;line-height:1.4;
+}
+.tabs button.active{background:var(--surface-3);color:var(--text)}
+.tabs button:hover:not(.active){color:var(--text-2)}
+
+.ws-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.ws-search{
+  flex:1;min-width:160px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:7px 11px;font-size:11.5px;
+  color:var(--text);font-family:inherit;outline:none;
+}
+.ws-search:focus{border-color:rgba(94,106,210,0.5)}
+.ws-search::placeholder{color:var(--text-4)}
+.ws-select{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:7px 9px;font-size:11px;color:var(--text-2);font-family:inherit;outline:none;cursor:pointer;
+}
+.ws-check{
+  display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-3);
+  cursor:pointer;user-select:none;white-space:nowrap;
+}
+.ws-check input{accent-color:var(--brand);cursor:pointer;margin:0}
+
+.ws-table{width:100%;border-collapse:collapse;font-size:11.5px}
+.ws-table th{
+  text-align:left;padding:7px 10px;color:var(--text-4);font-weight:500;
+  border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);
+}
+.ws-table td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:var(--text-2)}
+.ws-table tbody tr{cursor:pointer;transition:.12s}
+.ws-table tbody tr:hover{background:rgba(255,255,255,0.03)}
+.ws-table tbody tr.active{background:var(--brand-soft)}
+.ws-table .mono{font-family:var(--font-mono);font-size:10.5px;color:var(--text-3)}
+.ws-table .ellip{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-badge{
+  font-size:9.5px;font-family:var(--font-mono);padding:1px 7px;border-radius:999px;
+  white-space:nowrap;display:inline-block;
+}
+.ws-badge.yes{background:rgba(76,183,130,.12);color:var(--ok);border:1px solid rgba(76,183,130,.28)}
+.ws-badge.no{background:rgba(255,255,255,.05);color:var(--text-4);border:1px solid var(--border)}
+
+.ws-pager{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:12px 0 4px;font-size:11px;color:var(--text-3);flex-wrap:wrap;
+}
+.ws-pager button{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:5px 11px;font-size:11px;color:var(--text-2);cursor:pointer;font-family:inherit;transition:.15s;
+}
+.ws-pager button:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
+.ws-pager button:disabled{opacity:.35;cursor:not-allowed}
+
+.ws-tree-panel{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:10px 12px;margin-top:12px;
+}
+.ws-tree-head{
+  display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;
+}
+.ws-tree-title{
+  font-size:11.5px;font-weight:600;color:var(--text);flex:1;min-width:0;
+  font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.ws-tree-actions{display:flex;gap:5px;flex-shrink:0}
+.ws-mini{
+  background:var(--surface-2);border:1px solid var(--border);border-radius:5px;
+  padding:3px 9px;font-size:10px;color:var(--text-3);cursor:pointer;font-family:inherit;transition:.15s;
+}
+.ws-mini:hover{background:var(--surface-3);color:var(--text)}
+.ws-node{
+  display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:5px;
+  cursor:pointer;transition:.12s;font-size:11.5px;
+}
+.ws-node:hover{background:var(--surface-2)}
+.ws-node .caret{
+  width:12px;flex-shrink:0;color:var(--text-4);font-size:9px;text-align:center;
+  transition:transform .15s;display:inline-block;
+}
+.ws-node.open > .caret{transform:rotate(90deg)}
+.ws-node .ico{width:14px;flex-shrink:0;text-align:center;font-size:11px}
+.ws-node .nname{
+  flex:1;min-width:0;font-family:var(--font-mono);font-size:11px;color:var(--text-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.ws-node .nsize{font-size:9.5px;color:var(--text-4);font-family:var(--font-mono);flex-shrink:0}
+.ws-children{margin-left:16px;border-left:1px dashed rgba(255,255,255,0.06);padding-left:4px}
+
+.empty{padding:40px 12px;text-align:center;color:var(--text-3);font-size:12px}
+.loading{padding:30px 12px;text-align:center;color:var(--text-3);font-size:12px}
+
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.15)}
+
+@media(max-width:640px){
+  .viewer{padding:0}
+  .viewer-card{max-height:100vh;border-radius:0;height:100vh;max-width:100%}
+}
+
+/* ===== Debug 格式化 ===== */
+.dbg-section{margin-bottom:16px}
+.dbg-section-title{
+  font-size:11px;font-weight:600;letter-spacing:.04em;
+  color:var(--text-3);text-transform:uppercase;margin-bottom:8px;
+}
+.dbg-kv{
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:8px;padding:8px 12px;
+}
+.dbg-kv-row{
+  display:flex;gap:10px;padding:3px 0;font-size:11.5px;
+  border-bottom:1px dashed rgba(255,255,255,0.04);
+}
+.dbg-kv-row:last-child{border-bottom:none}
+.dbg-k{width:110px;flex-shrink:0;color:var(--text-4);font-family:var(--font-mono)}
+.dbg-v{flex:1;min-width:0;color:var(--text-2);font-family:var(--font-mono);word-break:break-all}
+
+.dbg-table{
+  width:100%;border-collapse:collapse;font-size:11px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:8px;overflow:hidden;
+}
+.dbg-table th{
+  text-align:left;padding:6px 10px;color:var(--text-4);font-weight:500;
+  border-bottom:1px solid var(--border);background:rgba(255,255,255,0.02);
+}
+.dbg-table td{padding:5px 10px;border-bottom:1px solid rgba(255,255,255,0.04);color:var(--text-2)}
+.dbg-table tr:last-child td{border-bottom:none}
+.dbg-table .mono{font-family:var(--font-mono);color:var(--text-3)}
+
+.role-badge{
+  display:inline-block;font-size:9.5px;font-family:var(--font-mono);
+  padding:1px 7px;border-radius:999px;font-weight:600;line-height:1.6;
+}
+.role-system{background:rgba(139,92,246,.14);color:#A78BFA;border:1px solid rgba(139,92,246,.3)}
+.role-user{background:rgba(94,106,210,.14);color:#8E97E5;border:1px solid rgba(94,106,210,.3)}
+.role-assistant{background:rgba(76,183,130,.12);color:#4CB782;border:1px solid rgba(76,183,130,.28)}
+.role-other{background:rgba(255,255,255,.06);color:var(--text-3);border:1px solid var(--border)}
+
+.dbg-msg{
+  border:1px solid var(--border);border-radius:8px;margin-bottom:6px;
+  background:var(--surface-2);overflow:hidden;
+}
+.dbg-msg-head{
+  display:flex;align-items:center;gap:8px;padding:7px 10px;
+  cursor:pointer;user-select:none;
+}
+.dbg-msg-head:hover{background:rgba(255,255,255,0.03)}
+.dbg-msg-idx{font-size:10px;color:var(--text-4);width:30px;flex-shrink:0}
+.dbg-msg-len{font-size:10px;color:var(--text-4);margin-left:auto;flex-shrink:0}
+.dbg-msg-toggle{font-size:10px;color:var(--text-3);width:12px;text-align:center;flex-shrink:0}
+
+.dbg-msg-body{border-top:1px solid var(--border);background:var(--bg)}
+.dbg-msg-body.collapsed{display:none}
+.dbg-msg-body pre{
+  margin:0;padding:10px 12px;font-size:11px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;
+  font-family:var(--font-mono);color:#C9D1D9;max-height:420px;overflow:auto;
+}
+.dbg-msg.role-system .dbg-msg-body pre{color:#D8CCFF}
+.dbg-msg.role-user .dbg-msg-body pre{color:#CFD6FF}
+.dbg-msg.role-assistant .dbg-msg-body pre{color:#D7F0E1}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="mark">D</span>
+  <span class="title"><span data-i18n="dl.title">调试日志</span><span class="sub" data-i18n="dl.sub">当前会话最后一组</span></span>
+  <div class="lang-toggle" id="langToggle">
+    <button data-lang="zh">中</button>
+    <button data-lang="en" class="active">EN</button>
+  </div>
+  <button class="icon-btn" id="refreshBtn" title="Refresh">
+    <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+  </button>
+</div>
+
+<div class="tabs">
+  <button id="tabDebug" class="active" data-i18n="dl.tabDebug">调试日志</button>
+  <button id="tabWorkspace" data-i18n="dl.tabWorkspace">工作区</button>
+</div>
+
+<div class="content" id="content">
+  <div class="loading" data-i18n="common.loading">Loading...</div>
+</div>
+
+<div id="wsPanel" style="display:none">
+  <div class="ws-tree-panel" id="wsTreePanel">
+    <div class="ws-tree-head">
+      <span class="ws-tree-title" id="wsTreeTitle">—</span>
+      <div class="ws-tree-actions">
+        <button class="ws-mini" id="wsExpandAll" data-i18n="dl.wsExpandAll">展开全部</button>
+        <button class="ws-mini" id="wsCollapseAll" data-i18n="dl.wsCollapseAll">折叠全部</button>
+      </div>
+    </div>
+    <div id="wsTree"></div>
+  </div>
+</div>
+
+<div class="viewer" id="viewer" onclick="if(event.target===this)closeViewer()">
+  <div class="viewer-card">
+    <div class="viewer-head">
+      <span class="viewer-title" id="viewerTitle">—</span>
+      <div class="viewer-actions">
+        <button class="icon-btn" onclick="copyViewer()" title="Copy">
+          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button>
+        <button class="icon-btn" onclick="closeViewer()" title="Close">
+          <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="viewer-body" id="viewerBody"></div>
+  </div>
+</div>
+
+<script>
+var API = '/api/builtins/agents/main_agent';
+var WS_API = '/api/os/_workspace';
+var SESSION_ID = new URLSearchParams(location.search).get('session_id') || '';
+
+var I18N = {
+  zh: {
+    'dl.title':'调试日志','dl.sub':'当前会话最后一组',
+    'dl.files':'个文件','dl.depth':'深度',
+    'dl.empty':'当前会话暂无调试记录',
+    'dl.readFail':'读取失败: ','dl.copy':'已复制',
+    'dl.meta': '基本信息',
+    'common.loading':'加载中…',
+    'dl.tabDebug':'调试日志','dl.tabWorkspace':'工作区',
+    'dl.wsExpandAll':'展开全部','dl.wsCollapseAll':'折叠全部',
+    'dl.wsEmpty':'该会话没有工作区',
+    'dl.wsLoadingTree':'加载目录…',
+    'dl.wsBinary':'二进制文件，无法预览',
+    'dl.wsTruncated':'内容已截断（仅显示前 {n}）',
+    'dl.wsReadFail':'读取失败: ',
+    'dl.wsCopied':'已复制'
+  },
+  en: {
+    'dl.title':'Debug Log','dl.sub':'Last batch of this session',
+    'dl.files':' files','dl.depth':'depth',
+    'dl.empty':'No debug records for this session',
+    'dl.readFail':'Read failed: ','dl.copy':'Copied',
+    'dl.meta': 'Meta',
+    'common.loading':'Loading…',
+    'dl.tabDebug':'Debug Log','dl.tabWorkspace':'Workspace',
+    'dl.wsExpandAll':'Expand all','dl.wsCollapseAll':'Collapse all',
+    'dl.wsEmpty':'This session has no workspace',
+    'dl.wsLoadingTree':'Loading directory…',
+    'dl.wsBinary':'Binary file, cannot preview',
+    'dl.wsTruncated':'Content truncated (first {n} shown)',
+    'dl.wsReadFail':'Read failed: ',
+    'dl.wsCopied':'Copied'
+  }
+};
+
+var _lang = 'en';
+try { _lang = localStorage.getItem('aicp_lang') || 'en'; } catch(e) {}
+if (_lang !== 'zh' && _lang !== 'en') _lang = 'en';
+function t(k){ return (I18N[_lang] && I18N[_lang][k]) || k; }
+
+function escapeHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function fmtBytes(n){
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  return (n/1024/1024).toFixed(2) + ' MB';
+}
+function fmtTime(iso){
+  if (!iso) return '';
+  try {
+    var d = new Date(iso);
+    var p = function(x){ return String(x).padStart(2,'0'); };
+    if (_lang === 'zh') {
+      return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())
+           +' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+    }
+    return d.toLocaleString('en-US', {hour12:false});
+  } catch(e) { return iso; }
+}
+
+function applyLang(lang){
+  _lang = lang;
+  try { localStorage.setItem('aicp_lang', lang); } catch(e) {}
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    var v = t(el.getAttribute('data-i18n'));
+    if (v) el.textContent = v;
+  });
+  document.querySelectorAll('#langToggle button').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-lang') === lang);
+  });
+  render();
+  if (typeof renderWsTree === 'function') renderWsTree();
+  notifyParentLang(lang);
+}
+function notifyParentLang(lang){
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type:'aicp_lang', lang:lang }, '*');
+    }
+  } catch(e) {}
+}
+window.addEventListener('message', function(e){
+  if (!e.data || e.data.type !== 'aicp_lang') return;
+  var lang = e.data.lang;
+  if (lang !== 'zh' && lang !== 'en') return;
+  if (lang === _lang) return;
+  _lang = lang;
+  try { localStorage.setItem('aicp_lang', lang); } catch(e) {}
+  applyLang(lang);
+});
+
+function getToken(){
+  var m = document.cookie.match(/aicp_token=([^;]+)/);
+  if (m) return m[1];
+  try { return localStorage.getItem('aicp_token') || ''; } catch(e) { return ''; }
+}
+function apiFetch(body){
+  var headers = {'Content-Type':'application/json'};
+  var token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return fetch(API, {method:'POST', headers:headers, body: JSON.stringify(body)});
+}
+
+var STATE = { data: null, loading: true };
+
+async function loadLogs(){
+  STATE.loading = true;
+  render();
+  try {
+    var res = await apiFetch({action:'list_debug_logs', session_id: SESSION_ID});
+    var data = await res.json();
+    STATE.data = (data && data.ok) ? data : null;
+  } catch(e) {
+    STATE.data = null;
+    console.warn('[debug-log] load error:', e);
+  } finally {
+    STATE.loading = false;
+    render();
+  }
+}
+
+/* ========== 工作区 Tab ========== */
+
+var WS_API_URL = '/api/os/_workspace';
+
+var WS = {
+  tab: 'debug',
+  curSid: '',
+  tree: {},
+  openDirs: {},
+  loaded: false,
+  reqSeq: 0
+};
+
+function wsFetch(body){
+  var headers = {'Content-Type':'application/json'};
+  var token = getToken();
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  return fetch(WS_API_URL, {method:'POST', headers:headers, body: JSON.stringify(body)});
+}
+
+function fmtStr(tpl, vars){
+  var out = String(tpl == null ? '' : tpl);
+  Object.keys(vars||{}).forEach(function(k){ out = out.split('{'+k+'}').join(String(vars[k])); });
+  return out;
+}
+
+async function loadWsTree(rel, force){
+  var sid = WS.curSid;
+  if (!sid) return;
+  var seq = ++WS.reqSeq;
+  if (force || !WS.tree[rel]) {
+    try {
+      var res = await wsFetch({action:'list_tree', session_id: sid, path: rel || ''});
+      var data = await res.json();
+      if (seq !== WS.reqSeq) return;
+      if (data && data.ok) {
+        WS.tree[rel || ''] = data.entries || [];
+      } else {
+        WS.tree[rel || ''] = [];
+      }
+    } catch(e) {
+      if (seq !== WS.reqSeq) return;
+      WS.tree[rel || ''] = [];
+    }
+  }
+  renderWsTree();
+}
+
+function wsIconFor(name, type, ext){
+  if (type === 'dir') return '📁';
+  switch(ext){
+    case '.md': return '📘';
+    case '.py': return '🐍';
+    case '.js': case '.ts': case '.json': return '📜';
+    case '.html': case '.css': return '🌐';
+    case '.png': case '.jpg': case '.jpeg': case '.gif': return '🖼';
+    case '.pdf': return '📕';
+    case '.zip': case '.tar': case '.gz': return '🗜';
+    default: return '📄';
+  }
+}
+
+function renderWsTree(){
+  var panel = document.getElementById('wsTreePanel');
+  var box = document.getElementById('wsTree');
+  if (!panel || !box) return;
+  if (!WS.curSid) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  document.getElementById('wsTreeTitle').textContent = 'data/workspace/' + WS.curSid;
+
+  function renderLevel(rel, depth){
+    var entries = WS.tree[rel] || [];
+    if (!entries.length) return '';
+    var out = '';
+    entries.forEach(function(e){
+      var key = rel ? (rel + '/' + e.name) : e.name;
+      var isDir = e.type === 'dir';
+      var open = !!WS.openDirs[key];
+      out += '<div class="ws-node' + (open ? ' open' : '') + '" data-key="' + escapeHtml(key) + '" data-type="' + e.type + '" data-depth="' + depth + '">';
+      out += '  <span class="caret">' + (isDir ? (open ? '▾' : '▸') : '·') + '</span>';
+      out += '  <span class="ico">' + wsIconFor(e.name, e.type, e.ext) + '</span>';
+      out += '  <span class="nname" title="' + escapeHtml(key) + '">' + escapeHtml(e.name) + '</span>';
+      if (!isDir) out += '  <span class="nsize">' + escapeHtml(fmtBytes(e.size)) + '</span>';
+      else if (e.child_count) out += '  <span class="nsize">' + e.child_count + '</span>';
+      out += '</div>';
+      if (isDir && open) {
+        out += '<div class="ws-children" data-parent="' + escapeHtml(key) + '">' + renderLevel(key, depth + 1) + '</div>';
+      }
+    });
+    return out;
+  }
+
+  box.innerHTML = renderLevel('', 0);
+
+  box.querySelectorAll('.ws-node').forEach(function(node){
+    node.addEventListener('click', function(e){
+      e.stopPropagation();
+      var key = node.getAttribute('data-key');
+      var type = node.getAttribute('data-type');
+      if (type === 'dir') {
+        WS.openDirs[key] = !WS.openDirs[key];
+        if (WS.openDirs[key]) loadWsTree(key, false);
+        else renderWsTree();
+      } else {
+        openWsFile(key);
+      }
+    });
+  });
+}
+
+async function openWsFile(rel){
+  var body = document.getElementById('viewerBody');
+  document.getElementById('viewerTitle').textContent = rel;
+  body.innerHTML = '<div class="loading">' + escapeHtml(t('common.loading')) + '</div>';
+  document.getElementById('viewer').classList.add('show');
+  try {
+    var res = await wsFetch({action:'read_file', session_id: WS.curSid, path: rel});
+    var data = await res.json();
+    if (!data || !data.ok) {
+      body.innerHTML = '<div class="empty">' + escapeHtml(t('dl.wsReadFail') + ((data && data.error) || '')) + '</div>';
+      return;
+    }
+    if (data.binary) {
+      body.innerHTML = '<div class="empty">' + escapeHtml(t('dl.wsBinary')) + '<div class="mono" style="margin-top:8px">'
+        + escapeHtml(fmtBytes(data.size)) + '</div></div>';
+      return;
+    }
+    var html = '';
+    if (data.truncated) {
+      html += '<div class="empty" style="padding:8px 0;text-align:left">'
+           + escapeHtml(fmtStr(t('dl.wsTruncated'), {n: fmtBytes(512*1024)})) + '</div>';
+    }
+    var isMd = /\.md$/i.test(rel);
+    html += isMd ? renderMarkdownSafe(data.content || '') : ('<pre>' + esc(data.content || '') + '</pre>');
+    body.innerHTML = html;
+    body.scrollTop = 0;
+  } catch(e) {
+    body.innerHTML = '<div class="empty">' + escapeHtml(t('dl.wsReadFail') + e.message) + '</div>';
+  }
+}
+
+function renderMarkdownSafe(src){
+  try {
+    if (window.marked && window.DOMPurify) {
+      var html = window.marked.parse ? window.marked.parse(src) : window.marked(src);
+      return window.DOMPurify.sanitize(html);
+    }
+  } catch(e) { /* fall through */ }
+  return '<pre>' + esc(src) + '</pre>';
+}
+
+function switchTab(tab){
+  WS.tab = tab;
+  document.getElementById('tabDebug').classList.toggle('active', tab === 'debug');
+  document.getElementById('tabWorkspace').classList.toggle('active', tab === 'ws');
+  document.getElementById('content').style.display = (tab === 'debug') ? '' : 'none';
+  document.getElementById('wsPanel').style.display = (tab === 'ws') ? '' : 'none';
+  if (tab === 'ws' && !WS.loaded) {
+    WS.curSid = SESSION_ID;
+    loadWsTree('', true);
+  }
+}
+
+function render(){
+  var box = document.getElementById('content');
+  if (STATE.loading) {
+    box.innerHTML = '<div class="loading">' + escapeHtml(t('common.loading')) + '</div>';
+    return;
+  }
+  var d = STATE.data;
+  if (!d || !d.files || !d.files.length) {
+    box.innerHTML = '<div class="empty">' + escapeHtml(t('dl.empty')) + '</div>';
+    return;
+  }
+  var html = '';
+  html += '<div class="session-head">';
+  html += '  <div class="session-title">' + escapeHtml(d.title || d.session_id) + '</div>';
+  html += '  <div class="session-meta">';
+  html += '    <span>' + escapeHtml(d.session_id) + '</span>';
+  html += '    <span>' + escapeHtml(fmtTime(d.updated_at)) + '</span>';
+  html += '    <span class="cnt">' + d.files.length + escapeHtml(t('dl.files')) + '</span>';
+  html += '  </div>';
+  html += '</div>';
+  d.files.forEach(function(f){
+    var depth = (f.name.match(/depth_(\d+)_/) || [])[1] || '';
+    html += '<div class="file-row" onclick="openFile(this)"'
+         + ' data-path="' + escapeHtml(f.path) + '"'
+         + ' data-name="' + escapeHtml(f.name) + '">';
+    html += '  <span class="fname">' + escapeHtml(f.name) + '</span>';
+    if (depth) html += '  <span class="fbadge">' + escapeHtml(t('dl.depth')) + ' ' + escapeHtml(depth) + '</span>';
+    html += '  <span class="fsize">' + escapeHtml(fmtBytes(f.size)) + '</span>';
+    html += '</div>';
+  });
+  box.innerHTML = html;
+}
+
+async function openFile(rowEl){
+  var path = rowEl.getAttribute('data-path');
+  var name = rowEl.getAttribute('data-name');
+  var body = document.getElementById('viewerBody');
+  document.getElementById('viewerTitle').textContent = name || path;
+  body.innerHTML = '<div class="loading">' + escapeHtml(t('common.loading')) + '</div>';
+  document.getElementById('viewer').classList.add('show');
+  try {
+    var res = await apiFetch({action:'read_debug_log', session_id: SESSION_ID, path: path});
+    var data = await res.json();
+    if (!data || !data.ok) {
+      body.innerHTML = '<div class="empty">' + escapeHtml(t('dl.readFail') + ((data && data.error) || '')) + '</div>';
+      return;
+    }
+    body.innerHTML = renderDebug(data.content || '');
+    body.scrollTop = 0;
+  } catch(e) {
+    body.innerHTML = '<div class="empty">' + escapeHtml(t('dl.readFail') + e.message) + '</div>';
+  }
+}
+
+/* ========== 格式化 Debug 文件（替代 renderMarkdown） ========== */
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function renderDebug(content){
+  if (!content) return '<div class="empty">(empty)</div>';
+  var text = String(content);
+
+  // 1) 拆头 / 正文
+  var headerJson = null;
+  var messages = null;
+  var sep = text.indexOf('\n---');
+  var headPart = sep >= 0 ? text.slice(0, sep) : text;
+  var bodyPart = sep >= 0 ? text.slice(sep + 4) : '';
+
+  // 头部：去掉 '# Debug Messages' 行，剩下的当 JSON 解析
+  var headClean = headPart.replace(/^#\s*Debug Messages\s*/i, '').trim();
+  if (headClean) {
+    try { headerJson = JSON.parse(headClean); } catch(e) { headerJson = null; }
+  }
+
+  // 正文：尝试解析 messages 数组
+  var bodyClean = bodyPart.trim();
+  if (bodyClean) {
+    try { messages = JSON.parse(bodyClean); } catch(e) { messages = null; }
+  }
+
+  // 解析失败 → 原文兜底
+  if (!headerJson && !messages) {
+    return '<pre>' + esc(text) + '</pre>';
+  }
+
+  var html = '';
+
+  // ===== 头部信息 =====
+  if (headerJson) {
+    html += '<div class="dbg-section">';
+    html += '<div class="dbg-section-title">📋 ' + (t('dl.meta') || 'Meta') + '</div>';
+    html += '<div class="dbg-kv">';
+    var metaRows = [
+      ['session_id', headerJson.session_id],
+      ['user_id', headerJson.user_id],
+      ['depth', headerJson.depth],
+      ['timestamp', headerJson.timestamp],
+      ['flow_entries', headerJson.flow_entries],
+      ['rounds', headerJson.rounds],
+      ['current_turn', headerJson.current_turn],
+      ['message_count', headerJson.message_count],
+    ];
+    metaRows.forEach(function(row){
+      if (row[1] === undefined || row[1] === null) return;
+      html += '<div class="dbg-kv-row"><span class="dbg-k">' + esc(row[0]) + '</span>'
+           + '<span class="dbg-v">' + esc(row[1]) + '</span></div>';
+    });
+    html += '</div>';
+
+    // msg_hashes 表格
+    var hashes = headerJson.msg_hashes || [];
+    if (hashes.length) {
+      html += '<div class="dbg-section-title" style="margin-top:12px">🔑 msg_hashes (' + hashes.length + ')</div>';
+      html += '<table class="dbg-table"><thead><tr>'
+           + '<th>#</th><th>role</th><th>hash</th><th>len</th>'
+           + '</tr></thead><tbody>';
+      hashes.forEach(function(h){
+        var roleCls = 'role-' + (h.role || 'other');
+        html += '<tr>'
+             + '<td class="mono">' + esc(h.idx) + '</td>'
+             + '<td><span class="role-badge ' + roleCls + '">' + esc(h.role) + '</span></td>'
+             + '<td class="mono">' + esc(h.hash) + '</td>'
+             + '<td class="mono">' + esc(h.len) + '</td>'
+             + '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+  }
+
+  // ===== messages =====
+  if (messages && messages.length) {
+    html += '<div class="dbg-section">';
+    html += '<div class="dbg-section-title">💬 messages (' + messages.length + ')</div>';
+    messages.forEach(function(m, i){
+      var role = m.role || 'other';
+      var content = m.content == null ? '' : String(m.content);
+      var len = content.length;
+      var roleCls = 'role-' + role;
+      var collapsed = len > 800;
+      var mid = 'msg_' + i;
+      html += '<div class="dbg-msg ' + roleCls + '" data-len="' + len + '">';
+      html += '  <div class="dbg-msg-head" onclick="toggleMsg(\'' + mid + '\')">';
+      html += '    <span class="dbg-msg-idx mono">#' + i + '</span>';
+      html += '    <span class="role-badge ' + roleCls + '">' + esc(role) + '</span>';
+      html += '    <span class="dbg-msg-len mono">' + len + ' chars</span>';
+      if (collapsed) html += '    <span class="dbg-msg-toggle">▸</span>';
+      html += '  </div>';
+      html += '  <div class="dbg-msg-body' + (collapsed ? ' collapsed' : '') + '" id="' + mid + '">'
+           + '<pre>' + esc(content) + '</pre></div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // 头部或正文有一边解析失败 → 附上原文
+  if (!headerJson && headPart.trim()) {
+    html += '<div class="dbg-section"><div class="dbg-section-title">📄 头部原文</div><pre>' + esc(headPart) + '</pre></div>';
+  }
+  if (!messages && bodyClean) {
+    html += '<div class="dbg-section"><div class="dbg-section-title">📄 正文原文</div><pre>' + esc(bodyClean) + '</pre></div>';
+  }
+
+  return html;
+}
+
+function toggleMsg(id){
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('collapsed');
+  var head = el.parentNode.querySelector('.dbg-msg-head');
+  var tg = el.parentNode.querySelector('.dbg-msg-toggle');
+  if (tg) tg.textContent = el.classList.contains('collapsed') ? '▸' : '▾';
+}
+
+function closeViewer(){ document.getElementById('viewer').classList.remove('show'); }
+
+function copyViewer(){
+  var text = document.getElementById('viewerBody').innerText || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text);
+    toast(t('dl.copy'));
+  }
+}
+
+var _toastEl = null;
+function toast(msg){
+  if (!_toastEl) {
+    _toastEl = document.createElement('div');
+    _toastEl.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);'
+      + 'background:var(--surface-3);color:var(--text);padding:8px 18px;border-radius:8px;'
+      + 'font-size:12px;z-index:2000;border:1px solid var(--border-strong);pointer-events:none;'
+      + 'transition:opacity .3s;';
+    document.body.appendChild(_toastEl);
+  }
+  _toastEl.textContent = msg;
+  _toastEl.style.opacity = '1';
+  clearTimeout(_toastEl._t);
+  _toastEl._t = setTimeout(function(){ _toastEl.style.opacity = '0'; }, 2000);
+}
+
+document.getElementById('langToggle').addEventListener('click', function(e){
+  var b = e.target.closest('button[data-lang]');
+  if (!b) return;
+  applyLang(b.getAttribute('data-lang'));
+});
+document.getElementById('refreshBtn').addEventListener('click', function(){
+  if (WS.tab === 'ws') { WS.loaded = false; loadWsTree('', true); }
+  else loadLogs();
+});
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeViewer(); });
+
+/* ---- Tab 切换 ---- */
+document.getElementById('tabDebug').addEventListener('click', function(){ switchTab('debug'); });
+document.getElementById('tabWorkspace').addEventListener('click', function(){ switchTab('ws'); });
+
+/* ---- 工作区面板事件 ---- */
+document.getElementById('wsExpandAll').addEventListener('click', function(){
+  Object.keys(WS.tree).forEach(function(rel){
+    (WS.tree[rel] || []).forEach(function(en){
+      if (en.type === 'dir') WS.openDirs[rel ? (rel + '/' + en.name) : en.name] = true;
+    });
+  });
+  renderWsTree();
+});
+document.getElementById('wsCollapseAll').addEventListener('click', function(){
+  WS.openDirs = {};
+  renderWsTree();
+});
+
+/* ---- session 切换联动（console.html 切会话时重置 iframe 并换 session_id） ---- */
+function onSessionChanged(newSid){
+  if (!newSid || newSid === SESSION_ID) return;
+  SESSION_ID = newSid;
+  WS.curSid = newSid;
+  WS.tree = {};
+  WS.openDirs = {};
+  WS.loaded = false;
+  loadLogs();
+  if (WS.tab === 'ws') loadWsTree('', true);
+}
+window.addEventListener('message', function(e){
+  var d = e.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'aicp_session' && d.session_id) onSessionChanged(String(d.session_id));
+});
+window.addEventListener('popstate', function(){
+  var sid = new URLSearchParams(location.search).get('session_id') || '';
+  if (sid) onSessionChanged(sid);
+});
+
+applyLang(_lang);
+loadLogs();
+</script>
+</body>
+</html>
