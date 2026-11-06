@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>附件预览</title>
+<style>
+:root{
+  --bg:#0f1115;--surface:#161a21;--surface-2:#1e232c;--border:#2a3039;
+  --text:#e6e9ef;--text-2:#b6bdc9;--text-3:#7c8595;--text-4:#5a6270;
+  --accent:#4a9eff;--err:#f85149;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"SF Mono",Menlo,Consolas,"Courier New",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;width:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font)}
+#wrap{display:flex;flex-direction:column;height:100vh;width:100%;overflow:hidden}
+#bar{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:6px 10px;background:var(--surface);border-bottom:1px solid var(--border)}
+#name{flex:1;min-width:0;font-size:12px;font-family:var(--mono);color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#badge{flex:0 0 auto;font-size:10px;padding:2px 7px;border-radius:10px;background:var(--surface-2);color:var(--text-3);border:1px solid var(--border);white-space:nowrap}
+#bar button{flex:0 0 auto;font-size:11px;padding:3px 9px;border-radius:4px;background:transparent;border:1px solid var(--border);color:var(--text-2);cursor:pointer;white-space:nowrap}
+#bar button:hover{background:var(--surface-2);color:var(--text)}
+#dl{flex:0 0 auto;font-size:11px;padding:3px 9px;border-radius:4px;background:transparent;border:1px solid var(--border);color:var(--text-2);cursor:pointer;text-decoration:none;white-space:nowrap}
+#dl:hover{background:var(--surface-2);color:var(--text)}
+#langToggle{flex:0 0 auto;display:flex;align-items:center;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+#langToggle button{font-size:11px;padding:3px 8px;border:0;background:transparent;color:var(--text-3);cursor:pointer;white-space:nowrap}
+#langToggle button.active{background:var(--surface-2);color:var(--text)}
+#langToggle button:hover{color:var(--text)}
+#body{flex:1 1 auto;min-height:0;overflow:hidden;padding:12px;display:flex;align-items:center;justify-content:center}
+#body.fill{align-items:stretch;justify-content:stretch;padding:0}
+#body img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;border-radius:4px;display:block}
+#body video{max-width:100%;max-height:100%;width:auto;height:auto;background:#000;border-radius:4px;display:block}
+#body audio{width:min(560px,92%);outline:none}
+pre#text{margin:0;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--text-2);white-space:pre-wrap;word-break:break-word;width:100%;height:100%;overflow:auto;box-sizing:border-box}
+#mediaInfo{flex:0 0 auto;font-size:11px;font-family:var(--mono);color:var(--text-4);margin-top:8px;text-align:center;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.audioWrap{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%}
+.nopreview{text-align:center;color:var(--text-3)}
+.nopreview .big{font-size:44px;margin-bottom:8px}
+.nopreview .msg{font-size:13px;color:var(--text-2);margin-bottom:6px}
+.nopreview .size{font-size:11px;font-family:var(--mono);color:var(--text-4);margin-bottom:12px}
+.nopreview a{display:inline-block;font-size:12px;padding:6px 14px;border-radius:5px;background:var(--accent);color:#fff;text-decoration:none}
+.nopreview a:hover{filter:brightness(1.1)}
+.err{color:var(--err);font-size:12px;font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="bar">
+    <span id="name">—</span>
+    <span id="badge"></span>
+    <button id="fs" type="button" title="全屏">⤢ 全屏</button>
+    <a id="dl" download>⬇ 下载</a>
+    <div id="langToggle">
+      <button type="button" data-lang="zh">中</button>
+      <button type="button" data-lang="en">EN</button>
+    </div>
+  </div>
+  <div id="body"><span class="err" id="err"></span></div>
+</div>
+<script>
+(function(){
+  var IMG = ['png','jpg','jpeg','gif','webp','bmp','svg','ico','avif'];
+  var TXT = ['txt','md','markdown','csv','json','yaml','yml','xml','html','htm','css','js','jsx','ts','tsx','py','java','c','cpp','h','hpp','go','rs','rb','php','sh','bash','zsh','sql','ini','cfg','conf','toml','log','tsv','srt','vtt'];
+  var VID = ['mp4','webm','mov','m4v','ogv','ogg','avi','mkv','flv','wmv','mpeg','mpg','3gp','ts'];
+  var AUD = ['mp3','wav','m4a','aac','flac','oga','opus','wma','aiff','aif','amr'];
+  var $name = document.getElementById('name');
+  var $badge = document.getElementById('badge');
+  var $dl = document.getElementById('dl');
+  var $body = document.getElementById('body');
+  var $err = document.getElementById('err');
+  var $langToggle = document.getElementById('langToggle');
+  var $fs = document.getElementById('fs');
+
+  var I18N = {
+    zh: {
+      'title':'附件预览',
+      'download':'⬇ 下载',
+      'downloadFile':'⬇ 下载文件',
+      'image':'图片',
+      'text':'文本',
+      'video':'视频',
+      'audio':'音频',
+      'noPreview':'无法预览',
+      'noAttInfo':'无附件信息',
+      'err':'错误',
+      'missingParam':'缺少附件参数 f',
+      'unnamed':'未命名',
+      'noUrl':'该附件没有可访问的 URL',
+      'imgLoadFail':'图片加载失败：',
+      'mediaLoadFail':'媒体加载失败：',
+      'loading':'加载中…',
+      'previewFail':'预览失败：',
+      'notSupported':'该格式无法在页面内预览',
+      'fullscreen':'⤢ 全屏',
+      'fullscreenFail':'无法进入全屏：'
+    },
+    en: {
+      'title':'Attachment Preview',
+      'download':'⬇ Download',
+      'downloadFile':'⬇ Download file',
+      'image':'Image',
+      'text':'Text',
+      'video':'Video',
+      'audio':'Audio',
+      'noPreview':'No preview',
+      'noAttInfo':'No attachment info',
+      'err':'Error',
+      'missingParam':'Missing attachment parameter f',
+      'unnamed':'Unnamed',
+      'noUrl':'This attachment has no accessible URL',
+      'imgLoadFail':'Image failed to load: ',
+      'mediaLoadFail':'Media failed to load: ',
+      'loading':'Loading…',
+      'previewFail':'Preview failed: ',
+      'notSupported':'This format cannot be previewed in the page',
+      'fullscreen':'⤢ Fullscreen',
+      'fullscreenFail':'Fullscreen failed: '
+    }
+  };
+
+  var _lang = localStorage.getItem('aicp_lang') || 'en';
+  if (_lang !== 'zh' && _lang !== 'en') _lang = 'en';
+
+  function t(key){ return (I18N[_lang] && I18N[_lang][key]) || key; }
+
+  function ext(n){ n = String(n||'').toLowerCase(); var i = n.lastIndexOf('.'); return i>=0 ? n.slice(i+1) : ''; }
+  function kind(n){
+    var e = ext(n);
+    if (IMG.indexOf(e)>=0) return 'image';
+    if (TXT.indexOf(e)>=0) return 'text';
+    if (VID.indexOf(e)>=0) return 'video';
+    if (AUD.indexOf(e)>=0) return 'audio';
+    return 'binary';
+  }
+  function sizeText(sz){
+    sz = Number(sz||0);
+    if (!sz) return '';
+    if (sz < 1024) return sz + ' B';
+    if (sz < 1048576) return (sz/1024).toFixed(1) + ' KB';
+    return (sz/1048576).toFixed(2) + ' MB';
+  }
+  function encPath(u){
+    if (!u) return '';
+    var q = u.indexOf('?');
+    if (q < 0) return encodeURI(u);
+    return encodeURI(u.slice(0, q)) + u.slice(q);
+  }
+
+  var q = new URLSearchParams(location.search);
+  var raw = q.get('f');
+  var f = null;
+  if (raw) { try { f = JSON.parse(raw); } catch(e) { f = null; } }
+
+  var k = f ? kind(f.name) : 'binary';
+  var sz = f ? sizeText(f.size) : '';
+
+  var textCache = null;
+  var textFailed = null;
+  var mediaEl = null;
+
+  function fail(msg){ $err.textContent = msg; $body.classList.remove('fill'); }
+
+  function mediaError(msg){
+    if (mediaEl) { mediaEl.style.display = 'none'; }
+    $err.textContent = msg;
+  }
+
+  function toggleFullscreen(){
+    var el = mediaEl || document.documentElement;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        return;
+      }
+      if (el.requestFullscreen) {
+        el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+      } else if (mediaEl && mediaEl.webkitEnterFullscreen) {
+        mediaEl.webkitEnterFullscreen();
+      } else {
+        $err.textContent = t('fullscreenFail');
+      }
+    } catch(e) {
+      $err.textContent = t('fullscreenFail') + (e && e.message ? e.message : '');
+    }
+  }
+
+  function renderMedia(){
+    var wrap = document.createElement('div');
+    wrap.className = 'audioWrap';
+    if (k === 'video') {
+      var v = document.createElement('video');
+      v.controls = true;
+      v.preload = 'metadata';
+      v.playsInline = true;
+      v.setAttribute('playsinline', '');
+      v.src = encPath(f.url);
+      v.onerror = function(){ mediaError(t('mediaLoadFail') + encPath(f.url)); };
+      mediaEl = v;
+      wrap.appendChild(v);
+    } else {
+      var a = document.createElement('audio');
+      a.controls = true;
+      a.preload = 'metadata';
+      a.src = encPath(f.url);
+      a.onerror = function(){ mediaError(t('mediaLoadFail') + encPath(f.url)); };
+      mediaEl = a;
+      wrap.appendChild(a);
+      var info = document.createElement('div');
+      info.id = 'mediaInfo';
+      info.textContent = (f.name || '') + (sz ? ' · ' + sz : '');
+      wrap.appendChild(info);
+    }
+    $body.classList.add('fill');
+    $body.appendChild(wrap);
+  }
+
+  function render(){
+    if (!f) {
+      $name.textContent = t('noAttInfo');
+      $badge.textContent = t('err');
+      $dl.style.display = 'none';
+      $fs.style.display = 'none';
+      fail(t('missingParam'));
+      return;
+    }
+    $name.textContent = f.name || t('unnamed');
+    var label = (k === 'image' ? t('image') : (k === 'text' ? t('text') : (k === 'video' ? t('video') : (k === 'audio' ? t('audio') : t('noPreview')))));
+    $badge.textContent = label;
+    if (sz) $badge.textContent += ' · ' + sz;
+    $dl.textContent = t('download');
+    if (f.url) { $dl.href = encPath(f.url); $dl.setAttribute('download', f.name || ''); $dl.style.display = ''; }
+    else { $dl.style.display = 'none'; }
+    $fs.textContent = t('fullscreen');
+    $fs.style.display = (k === 'video') ? '' : 'none';
+
+    if (k === 'image') {
+      if (!f.url) { fail(t('noUrl')); return; }
+      var img = document.querySelector('#body img');
+      if (!img) {
+        img = document.createElement('img');
+        img.alt = f.name || 'image';
+        img.onerror = function(){ fail(t('imgLoadFail') + encPath(f.url)); };
+        img.src = encPath(f.url);
+        $body.classList.add('fill');
+        $body.appendChild(img);
+      }
+    } else if (k === 'video' || k === 'audio') {
+      if (!f.url) { fail(t('noUrl')); return; }
+      if (!mediaEl) renderMedia();
+    } else if (k === 'text') {
+      if (!f.url) { fail(t('noUrl')); return; }
+      var pre = document.getElementById('text');
+      if (!pre) {
+        pre = document.createElement('pre');
+        pre.id = 'text';
+        $body.classList.add('fill');
+        $body.appendChild(pre);
+      }
+      if (textFailed !== null) {
+        pre.textContent = textFailed;
+        pre.style.color = 'var(--err)';
+      } else if (textCache !== null) {
+        pre.textContent = textCache;
+        pre.style.color = '';
+      } else {
+        pre.textContent = t('loading');
+        pre.style.color = '';
+        fetch(encPath(f.url)).then(function(r){
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        }).then(function(txt){
+          textCache = txt;
+          pre.textContent = txt;
+        }).catch(function(e){
+          textFailed = t('previewFail') + e.message;
+          pre.textContent = textFailed;
+          pre.style.color = 'var(--err)';
+        });
+      }
+    } else {
+      $body.classList.remove('fill');
+      $body.innerHTML = '<div class="nopreview">'
+        + '<div class="big">📦</div>'
+        + '<div class="msg"></div>'
+        + '<div class="size"></div>'
+        + (f.url ? '<a class="dlfile"></a>' : '')
+        + '</div>';
+      $body.querySelector('.nopreview .msg').textContent = t('notSupported');
+      $body.querySelector('.nopreview .size').textContent = (f.name||'') + (sz ? ' · ' + sz : '');
+      if (f.url) {
+        var a2 = $body.querySelector('.nopreview a.dlfile');
+        a2.href = encPath(f.url);
+        a2.setAttribute('download', f.name || '');
+        a2.textContent = t('downloadFile');
+      }
+    }
+  }
+
+  function applyLang(lang){
+    if (lang !== 'zh' && lang !== 'en') return;
+    _lang = lang;
+    localStorage.setItem('aicp_lang', lang);
+    document.documentElement.lang = (lang === 'zh' ? 'zh-CN' : 'en');
+    document.title = t('title');
+    if ($langToggle) {
+      $langToggle.querySelectorAll('button').forEach(function(b){
+        b.classList.toggle('active', b.getAttribute('data-lang') === lang);
+      });
+    }
+    render();
+  }
+
+  if ($langToggle) {
+    $langToggle.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click', function(){
+        var lang = b.getAttribute('data-lang');
+        if (lang !== 'zh' && lang !== 'en') return;
+        applyLang(lang);
+        try { if (window.parent && window.parent !== window) window.parent.postMessage({type:'aicp_lang', lang:lang}, '*'); } catch(e) {}
+        try { window.opener && window.opener.postMessage({type:'aicp_lang', lang:lang}, '*'); } catch(e) {}
+      });
+    });
+  }
+
+  if ($fs) { $fs.addEventListener('click', toggleFullscreen); }
+
+  window.addEventListener('message', function(e){
+    if (!e.data || e.data.type !== 'aicp_lang') return;
+    var lang = e.data.lang;
+    if (lang !== 'zh' && lang !== 'en') return;
+    applyLang(lang);
+  });
+
+  window.addEventListener('storage', function(e){
+    if (e.key !== 'aicp_lang') return;
+    var lang = e.newValue;
+    if (lang !== 'zh' && lang !== 'en') return;
+    applyLang(lang);
+  });
+
+  applyLang(_lang);
+})();
+</script>
+</body>
+</html>

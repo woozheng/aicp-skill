@@ -670,6 +670,90 @@ body{
 }
 .modal-input:focus{border-color:var(--brand);background:var(--bg)}
 
+/* ============ 附件卡片 ============ */
+.att-card{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 10px;margin-top:6px;
+  border:1px solid var(--border);border-radius:8px;
+  background:var(--surface-2);cursor:pointer;transition:.15s;
+  max-width:320px;
+}
+.att-card:hover{border-color:var(--brand);background:var(--surface-3)}
+.att-icon{font-size:16px;line-height:1;flex-shrink:0}
+.att-meta{min-width:0;flex:1}
+.att-name{font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.att-sub{font-size:10px;color:var(--text-4);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.att-badge{font-size:9px;padding:1px 5px;border-radius:4px;background:var(--surface);color:var(--text-3);border:1px solid var(--border);flex-shrink:0}
+.att-badge.no{color:var(--warn);background:var(--warn-soft);border-color:rgba(217,164,65,0.3)}
+.att-dl{font-size:11px;color:var(--text-3);text-decoration:none;flex-shrink:0;padding:2px 4px;border-radius:4px}
+.att-dl:hover{color:var(--brand);background:var(--brand-soft)}
+.att-preview-body{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;padding:14px}
+.att-preview-body img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px}
+.att-preview-text{
+  flex:1;width:100%;height:100%;overflow:auto;margin:0;
+  padding:16px 18px;background:var(--bg);
+  font-family:var(--font-mono);font-size:12px;line-height:1.6;
+  color:var(--text-2);white-space:pre-wrap;word-break:break-word;
+}
+.att-nopreview{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:36px 20px;color:var(--text-3);font-size:12px;text-align:center;width:100%}
+.att-nopreview .big{font-size:34px;opacity:.6}
+.att-nopreview .size{font-size:11px;color:var(--text-4)}
+.att-nopreview a{color:var(--brand);text-decoration:none;font-size:12px;border:1px solid var(--border);padding:6px 14px;border-radius:6px}
+.att-nopreview a:hover{border-color:var(--brand);background:var(--brand-soft)}
+
+/* ============ 经验背包：条目列表 ============ */
+.exp-list{flex:1;overflow-y:auto;display:block;padding:14px 16px}
+.exp-item{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:10px 12px;margin-bottom:8px;
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--surface-2);transition:border-color .2s;
+}
+.exp-item:hover{border-color:var(--border-strong)}
+.exp-item-main{flex:1;min-width:0}
+.exp-item-title{
+  font-size:13px;font-weight:600;color:var(--text);
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+}
+.exp-item-id{
+  font-family:var(--font-mono);font-size:10px;color:var(--brand);
+  background:var(--brand-soft);border-radius:4px;padding:1px 6px;
+}
+.exp-item-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}
+.exp-item-tag{
+  font-size:10px;color:var(--text-3);background:var(--surface);
+  border:1px solid var(--border);border-radius:4px;padding:1px 6px;
+}
+.exp-item-summary{
+  font-size:11.5px;color:var(--text-3);margin-top:5px;
+  line-height:1.55;word-break:break-word;
+}
+.exp-item-count{
+  font-family:var(--font-mono);font-size:10px;font-weight:600;
+  color:var(--err);background:rgba(229,72,77,0.1);
+  border:1px solid rgba(229,72,77,0.28);border-radius:4px;padding:1px 6px;
+  white-space:nowrap;
+}
+.exp-item-fix{
+  margin-top:6px;padding:6px 9px;border-radius:5px;
+  background:var(--brand-soft);border:1px solid var(--border);
+  font-size:11.5px;color:var(--text);line-height:1.55;word-break:break-word;
+}
+.exp-item-fix-label{
+  display:block;font-size:10px;font-weight:600;color:var(--brand);
+  margin-bottom:3px;
+}
+.exp-item-fix-text{color:var(--text-2)}
+.exp-del{
+  flex-shrink:0;background:transparent;border:1px solid rgba(229,72,77,0.3);
+  color:var(--err);border-radius:5px;padding:3px 9px;cursor:pointer;
+  font-size:11px;font-family:inherit;transition:.15s;
+}
+.exp-del:hover{background:rgba(229,72,77,0.12)}
+.exp-empty{
+  text-align:center;color:var(--text-3);font-size:12px;padding:40px 0;
+}
+
 /* ============ 底部状态栏（28px） ============ */
 .footer-bar{
   display:flex;align-items:center;gap:8px;
@@ -1015,7 +1099,7 @@ body{
           <button class="icon-btn-round" onclick="document.getElementById('fileInput').click()" title="Attach">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           </button>
-          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFiles(this.files)">
+          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFiles(this.files);this.value='';">
           <textarea id="msgInput" class="input-textarea" rows="1" data-i18n-ph="chat.placeholder" placeholder="Type your request..."></textarea>
           <button id="stopBtn" class="icon-btn-round stop-btn" onclick="stopCurrentTurn()" title="Stop" style="display:none">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
@@ -1117,7 +1201,10 @@ body{
         <button onclick="closeStateModal()">✕</button>
       </div>
     </div>
-    <div class="modal-body"><textarea id="stateEditor" class="modal-editor"></textarea></div>
+    <div class="modal-body" id="stateModalBody">
+      <textarea id="stateEditor" class="modal-editor"></textarea>
+      <div class="exp-list" id="expList" style="display:none"></div>
+    </div>
   </div>
 </div>
 
@@ -1223,6 +1310,20 @@ body{
       <div id="subTaskList" style="width:280px;border-right:1px solid var(--border);overflow-y:auto;padding:8px"></div>
       <div id="subTaskDetail" style="flex:1;overflow-y:auto;padding:12px 16px"><div class="empty-state" data-i18n="modal.selectSub">Select a sub task</div></div>
     </div>
+  </div>
+</div>
+
+<!-- 附件预览弹窗 -->
+<div class="modal-overlay" id="attPreviewOverlay" onclick="if(event.target===this)closeAttPreview()">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header">
+      <span id="attPreviewTitle">Preview</span>
+      <div class="modal-actions">
+        <a id="attPreviewDownload" class="btn-save" style="text-decoration:none;padding:5px 12px;border-radius:var(--radius-sm);font-size:12px" download>⬇ 下载</a>
+        <button onclick="closeAttPreview()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" id="attPreviewBody"></div>
   </div>
 </div>
 
@@ -1987,8 +2088,11 @@ function buildTurnNode(turnData) {
     turn.className = 'turn';
     var div = document.createElement('div');
     div.className = 'msg user';
-    div.innerHTML = '<div class="bubble">' + escapeHtml(turnData.user.content || '') + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + formatTime(turnData.user.timestamp) + '</div>';
+    var _att = parseAttachments(turnData.user.content || '');
+    var _body = (_att.text ? '<div>' + escapeHtml(_att.text) + '</div>' : '') + renderAttachmentCards(_att.files);
+    div.innerHTML = '<div class="bubble">' + _body + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + formatTime(turnData.user.timestamp) + '</div>';
     turn.appendChild(div);
+    bindAttCardClicks(turn);
     var chain = document.createElement('div');
     chain.className = 'tool-chain';
     var hasChain = false;
@@ -2129,6 +2233,146 @@ function ensureMessagesInner() {
     return inner;
 }
 
+// ============ 附件：结构化解析 / 卡片渲染 / 预览 ============
+// 后端传来的 <attachments> 块形如：
+//   <attachments>
+//   {"name":"a.png","path":"E:\\...\\a.png","url":"/data/uploads/xx/a.png","size":1234}
+//   </attachments>
+// 前端剥离该块，改渲染成附件小卡片（用户看不到路径，但主控拿得到）。
+var ATT_IMG = ['png','jpg','jpeg','gif','webp','bmp','svg','ico','avif'];
+var ATT_TEXT = ['txt','md','markdown','csv','json','yaml','yml','xml','html','htm','css','js','jsx','ts','tsx','py','java','c','cpp','h','hpp','go','rs','rb','php','sh','bash','zsh','sql','ini','cfg','conf','toml','log','tsv','srt','vtt'];
+var ATT_VIDEO = ['mp4','webm','mov','m4v','ogv','ogg','avi','mkv','flv','wmv','mpeg','mpg','3gp','ts'];
+var ATT_AUDIO = ['mp3','wav','m4a','aac','flac','oga','opus','wma','aiff','aif','amr'];
+var ATT_NO_PREVIEW = ['pdf','doc','docx','xls','xlsx','ppt','pptx','zip','rar','7z','gz','tar','exe','dll','so','dmg','iso'];
+
+function attExt(name) {
+    var n = String(name || '').toLowerCase();
+    var i = n.lastIndexOf('.');
+    return i >= 0 ? n.slice(i + 1) : '';
+}
+function attSizeText(sz) {
+    sz = Number(sz || 0);
+    if (!sz) return '';
+    if (sz < 1024) return sz + ' B';
+    if (sz < 1024 * 1024) return (sz / 1024).toFixed(1) + ' KB';
+    return (sz / 1024 / 1024).toFixed(2) + ' MB';
+}
+function attKind(name) {
+    var e = attExt(name);
+    if (ATT_IMG.indexOf(e) >= 0) return 'image';
+    if (ATT_TEXT.indexOf(e) >= 0) return 'text';
+    if (ATT_VIDEO.indexOf(e) >= 0) return 'video';
+    if (ATT_AUDIO.indexOf(e) >= 0) return 'audio';
+    return 'binary';
+}
+function attIcon(kind) {
+    if (kind === 'image') return '🖼';
+    if (kind === 'text') return '📄';
+    if (kind === 'video') return '🎬';
+    if (kind === 'audio') return '🎵';
+    return '📦';
+}
+function attKindLabel(kind) {
+    if (kind === 'image') return '图片';
+    if (kind === 'text') return '文本';
+    if (kind === 'video') return '视频';
+    if (kind === 'audio') return '音频';
+    return '无法预览';
+}
+
+// 从消息文本中解析 <attachments> 块，返回 {text, files}
+function parseAttachments(content) {
+    var src = String(content == null ? '' : content);
+    var files = [];
+    var m = src.match(/<attachments>([\s\S]*?)<\/attachments>/);
+    if (m) {
+        m[1].split('\n').forEach(function(line) {
+            line = line.trim();
+            if (!line) return;
+            try {
+                var o = JSON.parse(line);
+                if (o && o.name) files.push(o);
+            } catch(e) { /* 非法行忽略 */ }
+        });
+        src = src.replace(/<attachments>[\s\S]*?<\/attachments>/g, '');
+    }
+    return {text: src.replace(/\n{3,}/g, '\n\n').trim(), files: files};
+}
+
+// 渲染附件小卡片（整卡可点；文件信息以 data-* 属性直传，避免 JSON 内联转义问题）
+function renderAttachmentCards(files) {
+    if (!files || !files.length) return '';
+    var html = '';
+    files.forEach(function(f, i) {
+        var kind = attKind(f.name);
+        var sz = attSizeText(f.size);
+        var sub;
+        if (kind === 'binary') {
+            sub = (sz || '大小未知') + ' · ' + attKindLabel(kind);
+        } else {
+            sub = sz;
+        }
+        var badge = kind === 'binary' ? '<span class="att-badge no">' + attKindLabel(kind) + '</span>' : '<span class="att-badge">' + attKindLabel(kind) + '</span>';
+        var dl = f.url ? '<a class="att-dl" href="' + escapeHtml(f.url) + '" download title="下载" onclick="event.stopPropagation();">⬇</a>' : '';
+        html += '<div class="att-card" data-att="' + i + '"'
+              + ' data-att-name="' + escapeHtml(f.name || '') + '"'
+              + ' data-att-url="' + escapeHtml(f.url || '') + '"'
+              + ' data-att-size="' + escapeHtml(String(f.size || 0)) + '"'
+              + ' title="点击预览">'
+              + '<span class="att-icon">' + attIcon(kind) + '</span>'
+              + '<span class="att-meta"><span class="att-name">' + escapeHtml(f.name) + '</span><span class="att-sub">' + escapeHtml(sub) + '</span></span>'
+              + badge + dl + '</div>';
+    });
+    return html;
+}
+
+// 附件预览：在右侧 webview 面板打开独立预览页（同域，iframe 加载）
+// 只编码 URL 的 path 部分，保留 query
+function attEncUrl(u) {
+    if (!u) return '';
+    var q = u.indexOf('?');
+    if (q < 0) return encodeURI(u);
+    return encodeURI(u.slice(0, q)) + u.slice(q);
+}
+// 组装预览页 URL：?f=<urlencoded JSON>
+function attPreviewUrl(f) {
+    return '/tools/att-preview.html?f=' + encodeURIComponent(JSON.stringify({
+        name: f.name || '', url: f.url || '', size: f.size || 0
+    }));
+}
+// 在右侧 webview 面板打开附件预览
+function openAttPreviewInWebview(f) {
+    if (!f || !f.url) return;
+    var url = attPreviewUrl(f);
+    if (typeof openWebview === 'function') {
+        openWebview(url, f.name || '附件预览');
+    } else {
+        window.open(url, '_blank', 'noopener');
+    }
+}
+// 事件委托：点击 .att-card[data-att] 打开预览
+function bindAttCardClicks(scope) {
+    var root = scope || document;
+    var cards = root.querySelectorAll('.att-card[data-att]');
+    for (var i = 0; i < cards.length; i++) {
+        (function(card){
+            if (card.__attBound) return;
+            card.__attBound = true;
+            card.addEventListener('click', function(ev){
+                // 下载按钮单独处理
+                if (ev.target && ev.target.closest && ev.target.closest('.att-dl')) return;
+                var f = {
+                    name: card.getAttribute('data-att-name') || '',
+                    url: card.getAttribute('data-att-url') || '',
+                    size: Number(card.getAttribute('data-att-size') || 0)
+                };
+                if (!f.url) return;
+                openAttPreviewInWebview(f);
+            });
+        })(cards[i]);
+    }
+}
+
 function addUserMessage(content) {
     if (thinkingLine && thinkingLine.parentNode) {
         thinkingLine.remove();
@@ -2142,8 +2386,11 @@ function addUserMessage(content) {
     turn.className = 'turn';
     var div = document.createElement('div');
     div.className = 'msg user';
-    div.innerHTML = '<div class="bubble">' + escapeHtml(content) + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + new Date().toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}) + '</div>';
+    var _att = parseAttachments(content);
+    var _body = (_att.text ? '<div>' + escapeHtml(_att.text) + '</div>' : '') + renderAttachmentCards(_att.files);
+    div.innerHTML = '<div class="bubble">' + _body + '</div><div class="time">' + (_lang === 'zh' ? '我 · ' : 'Me · ') + new Date().toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}) + '</div>';
     turn.appendChild(div);
+    bindAttCardClicks(turn);
     inner.appendChild(turn);
     currentTurn = turn;
     toolNodes = {};
@@ -2946,7 +3193,18 @@ async function stopCurrentTurn() {
 async function sendMessage() {
     var input = document.getElementById('msgInput');
     var text = input.value.trim();
-    if (!text) { showToast(t('msg.inputRequired')); return; }
+    if (!text && !uploadedFiles.length) { showToast(t('msg.inputRequired')); return; }
+    // ★ 已上传成功的文件：以结构化对象告知后端（主控自行决定如何处理），
+    //   前端渲染时剥离该块、换成附件小卡片，用户看不到路径但主控拿得到。
+    var _files = uploadedFiles.slice();
+    if (_files.length) {
+        var _att = _files.map(function(f){
+            return JSON.stringify({name:f.name, path:f.path, url:f.url || '', size:f.size || 0});
+        }).join('\n');
+        text += (text ? '\n\n' : '') + '<attachments>\n' + _att + '\n</attachments>';
+        uploadedFiles = [];   // 发送后清空，避免同一附件重复附加到下一条消息
+        renderFilePreview();
+    }
     // ★ 搜索无结果、聊天区被清空时拦住发送，提示先清搜索或选对话，避免误发到新建会话
     if (!currentConversationId && (document.getElementById('convSearchInput') || {}).value.trim()) {
         showToast(_lang === 'zh' ? '请先清空搜索或选择一个对话' : 'Clear search or pick a conversation first');
@@ -3095,6 +3353,16 @@ function openStateModal(type) {
     // 经验：隐藏保存按钮（只能通过 add_experience 改）
     var saveBtn = document.querySelector('#stateModalOverlay .btn-save');
     if (saveBtn) saveBtn.style.display = (type === 'exp') ? 'none' : '';
+    // 经验模式显示条目列表，看板模式显示文本编辑器
+    var editor = document.getElementById('stateEditor');
+    var expList = document.getElementById('expList');
+    if (type === 'exp') {
+        editor.style.display = 'none';
+        expList.style.display = 'block';
+    } else {
+        editor.style.display = '';
+        expList.style.display = 'none';
+    }
     document.getElementById('stateModalOverlay').classList.add('show');
     reloadState();
 }
@@ -3102,21 +3370,97 @@ function openStateModal(type) {
 function closeStateModal() { document.getElementById('stateModalOverlay').classList.remove('show'); }
 async function reloadState() {
     var editor = document.getElementById('stateEditor');
+    var expList = document.getElementById('expList');
     editor.value = t('common.loading');
     editor.disabled = true;
     // 经验：只读（Step 4 后经验由 add_experience 管理，不支持直接编辑）
     editor.readOnly = (currentStateType === 'exp');
+    if (currentStateType === 'exp') expList.innerHTML = '<div class="exp-empty">' + escapeHtml(t('common.loading')) + '</div>';
     try {
         var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_state', session_id:currentConversationId, type:currentStateType});
         var data = await res.json();
         if (data.ok && data.data) {
-            // 经验：后端返回 content（人类可读的 - [id] title 列表）
-            editor.value = data.data.content || (currentStateType === 'exp' ? '(暂无经验)' : '(empty)');
+            if (currentStateType === 'exp') {
+                renderExpList(data.data.items || []);
+            } else {
+                editor.value = data.data.content || '(empty)';
+            }
         } else {
-            editor.value = t('msg.loadFailShort');
+            if (currentStateType === 'exp') {
+                expList.innerHTML = '<div class="exp-empty">' + escapeHtml(t('msg.loadFailShort')) + '</div>';
+            } else {
+                editor.value = t('msg.loadFailShort');
+            }
         }
-    } catch(e) { editor.value = t('msg.loadFail') + e.message; }
+    } catch(e) {
+        if (currentStateType === 'exp') {
+            expList.innerHTML = '<div class="exp-empty">' + escapeHtml(t('msg.loadFail') + e.message) + '</div>';
+        } else {
+            editor.value = t('msg.loadFail') + e.message;
+        }
+    }
     editor.disabled = false;
+}
+// ============ 经验背包：条目列表 ============
+function renderExpList(items) {
+    var box = document.getElementById('expList');
+    window._expItems = items || [];
+    if (!items || !items.length) {
+        box.innerHTML = '<div class="exp-empty">' + escapeHtml(_lang === 'zh' ? '暂无经验' : 'No experience yet') + '</div>';
+        return;
+    }
+    var html = '';
+    items.forEach(function(it){
+        var id = String(it.id || '');
+        var title = String(it.title || '');
+        var summary = String(it.summary || '');
+        var tags = (it.tags && it.tags.length) ? it.tags : [];
+        var tagHtml = '';
+        tags.forEach(function(tg){ tagHtml += '<span class="exp-item-tag">' + escapeHtml(String(tg)) + '</span>'; });
+        var count = parseInt(it.count, 10);
+        var hasCount = !isNaN(count) && count > 0;
+        var fix = String(it.fix || '').trim();
+        html += '<div class="exp-item">';
+        html += '<div class="exp-item-main">';
+        html += '<div class="exp-item-title"><span class="exp-item-id">' + escapeHtml(id) + '</span><span>' + escapeHtml(title) + '</span>';
+        if (hasCount) {
+            html += '<span class="exp-item-count" title="' + escapeHtml(_lang === 'zh' ? '失败次数' : 'Failure count') + '">'
+                  + escapeHtml(_lang === 'zh' ? '失败 ×' + count : '×' + count + ' failed') + '</span>';
+        }
+        html += '</div>';
+        if (summary) html += '<div class="exp-item-summary">' + escapeHtml(summary) + '</div>';
+        if (tagHtml) html += '<div class="exp-item-tags">' + tagHtml + '</div>';
+        if (fix) {
+            html += '<div class="exp-item-fix"><span class="exp-item-fix-label">'
+                  + escapeHtml(_lang === 'zh' ? '✅ 正确做法' : '✅ Fix') + '</span>'
+                  + '<span class="exp-item-fix-text">' + escapeHtml(fix) + '</span></div>';
+        }
+        html += '</div>';
+        html += '<button class="exp-del" onclick="deleteExp(\'' + escapeHtml(id).replace(/'/g, '&#39;') + '\')" title="' + escapeHtml(_lang === 'zh' ? '删除这条经验' : 'Delete this experience') + '">'
+              + (_lang === 'zh' ? '删除' : 'Delete') + '</button>';
+        html += '</div>';
+    });
+    box.innerHTML = html;
+}
+async function deleteExp(id) {
+    var it = (window._expItems || []).filter(function(x){ return String(x.id) === String(id); })[0];
+    var label = it && it.title ? it.title : id;
+    var q = _lang === 'zh'
+        ? '确定删除经验「' + label + '」？删除后无法恢复。'
+        : 'Delete experience "' + label + '"? This cannot be undone.';
+    if (!confirm(q)) return;
+    try {
+        var res = await apiFetch('/api/builtins/tools/add_experience', {action:'delete', id:id});
+        var data = await res.json();
+        var payload = data.data || data;
+        if (payload.ok) {
+            showToast(_lang === 'zh' ? '已删除 ' + id : 'Deleted ' + id);
+            reloadState();
+            refreshActivity();
+        } else {
+            showToast('❌ ' + (payload.error || '?'));
+        }
+    } catch(e) { showToast('❌ ' + e.message); }
 }
 async function saveState() {
     // 经验：只能通过 add_experience 改，save_state 禁用
@@ -3914,7 +4258,8 @@ async function uploadFile(file) {
         var res = await fetch(url, {method:'POST', body:fd, headers:headers});
         var data = await res.json();
         if (data.success) {
-            uploadedFiles.push({name:file.name, path:data.file_path, size:file.size});
+            // ★ 同时记录：绝对路径（后端用）+ 静态 URL（前端预览/下载用）
+            uploadedFiles.push({name:file.name, path:data.file_path, url:data.url || '', size:data.file_size || file.size});
             fileList = fileList.filter(function(f){return f !== file;});
             showToast('✅ ' + file.name);
         } else {
@@ -3926,6 +4271,123 @@ async function uploadFile(file) {
         showToast('❌ ' + e.message);
     }
     renderFilePreview();
+}
+
+// ============ 粘贴自动转附件 ============
+// 规则：
+//   1. 剪贴板里有文件（图片等）→ 直接当附件上传，文件名取原名
+//   2. 纯文本且长度 > PASTE_TEXT_MAX → 自动生成附件（.json/.md/.txt 智能识别）
+//   3. 短文本 → 走浏览器默认粘贴行为（正常进输入框）
+// 4. 原文件名：优先从 text/uri-list 的 file:// 路径提取，取不到用兜底名
+var PASTE_TEXT_MAX = 300;   // 超过多少字符的纯文本自动转附件
+
+// 从剪贴板事件里找出原始文件名（浏览器在部分平台会带 text/uri-list）
+function pasteOriginalName(dt) {
+    try {
+        var uri = dt.getData('text/uri-list');
+        if (uri) {
+            var lines = uri.split(/\r?\n/).filter(function(l){ return l && l.trim(); });
+            for (var i = 0; i < lines.length; i++) {
+                var l = lines[i].trim();
+                if (l.indexOf('#') > 0) l = l.split('#')[0];
+                if (l.slice(0, 7).toLowerCase() !== 'file://') continue;
+                var p = decodeURIComponent(l.slice(7).replace(/^localhost/i, ''));
+                p = p.replace(/\\/g, '/');
+                var base = p.split('/').pop();
+                if (base && base.indexOf('.') > 0) return base;
+            }
+        }
+    } catch(e) {}
+    return '';
+}
+
+// 根据文本内容猜扩展名：JSON → .json，Markdown → .md，否则 .txt
+function guessTextExt(text) {
+    var t = (text || '').trim();
+    if (!t) return 'txt';
+    if ((t[0] === '{' && t[t.length-1] === '}') || (t[0] === '[' && t[t.length-1] === ']')) {
+        try { JSON.parse(t); return 'json'; } catch(e) {}
+    }
+    // Markdown 特征：标题 / 列表 / 代码块 / 表格 / 链接
+    if (/^#{1,6}\s+\S/m.test(t) || /^\s*[-*+]\s+\S/m.test(t) || /```/.test(t)
+        || /^\s*\|.*\|\s*$/m.test(t) || /^\s*\d+\.\s+\S/m.test(t)
+        || /\[[^\]]*\]\([^)]*\)/.test(t)) {
+        return 'md';
+    }
+    return 'txt';
+}
+
+// 生成一个可读的名字：clipboard_20261106_125330.txt
+function pasteAutoName(ext) {
+    var d = new Date();
+    function p(n){ return (n < 10 ? '0' : '') + n; }
+    return 'clipboard_' + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate())
+        + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.' + ext;
+}
+
+function uploadBlob(blob, filename) {
+    var fd = new FormData();
+    fd.append('file', blob, filename);
+    fd.append('session_id', currentConversationId || 'default');
+    var cfg = fetch('/api/upload_config').then(function(r){ return r.json(); });
+    return cfg.then(function(c) {
+        var url = (c && c.url) || '/upload';
+        var headers = {};
+        var token = getToken();
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        return fetch(url, {method:'POST', body:fd, headers:headers}).then(function(r){ return r.json(); });
+    }).then(function(data) {
+        if (data && data.success) {
+            uploadedFiles.push({name: data.file_name || filename, path:data.file_path, url:data.url || '', size:data.file_size || blob.size});
+            showToast('📎 ' + (data.file_name || filename));
+        } else {
+            showToast('❌ ' + ((data && data.error) || filename));
+        }
+        renderFilePreview();
+    }).catch(function(e) {
+        showToast('❌ ' + e.message);
+    });
+}
+
+function handlePaste(e) {
+    var dt = e.clipboardData;
+    if (!dt) return;
+
+    // 情况 1：剪贴板里有文件（图片等）→ 直接上传
+    var files = [];
+    if (dt.files && dt.files.length) {
+        for (var i = 0; i < dt.files.length; i++) files.push(dt.files[i]);
+    } else if (dt.items && dt.items.length) {
+        for (var j = 0; j < dt.items.length; j++) {
+            if (dt.items[j].kind === 'file') {
+                var f = dt.items[j].getAsFile();
+                if (f) files.push(f);
+            }
+        }
+    }
+    if (files.length) {
+        e.preventDefault();
+        var origName = pasteOriginalName(dt);
+        files.forEach(function(file, idx) {
+            var name = file.name || (idx === 0 ? origName : '') || pasteAutoName('png');
+            if (!/\.[A-Za-z0-9]+$/.test(name)) {
+                name = pasteAutoName((file.type || '').split('/')[1] || 'png');
+            }
+            uploadBlob(file, name);
+        });
+        return;
+    }
+
+    // 情况 2：纯文本
+    var text = dt.getData('text/plain') || dt.getData('text') || '';
+    if (text.length > PASTE_TEXT_MAX) {
+        e.preventDefault();
+        var ext = guessTextExt(text);
+        var fname = pasteOriginalName(dt) || pasteAutoName(ext);
+        if (!/\.(json|md|txt|markdown)$/i.test(fname)) fname = pasteAutoName(ext);
+        uploadBlob(new Blob([text], {type:'text/plain;charset=utf-8'}), fname);
+    }
+    // 情况 3：短文本 → 不拦截，走默认粘贴
 }
 
 // ============ 对话标题常驻左上角（滚动时不隐藏） ============
@@ -3954,6 +4416,8 @@ document.addEventListener('keydown', function(e){
         if (document.getElementById('webviewPanel').classList.contains('show')) closeWebview();
     }
 });
+// 粘贴自动转附件：长文本 / 图片 / 文件 → 走上传，短文本照常粘贴
+document.getElementById('msgInput').addEventListener('paste', handlePaste);
 document.getElementById('msgInput').addEventListener('input', function(){
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 140) + 'px';

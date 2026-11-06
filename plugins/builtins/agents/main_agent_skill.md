@@ -285,7 +285,7 @@ www/apps/_demo/index.html
 
 ### 标准路径
 
-1. 使用 `search(content="关键词", context=3)` 获取所有匹配行及前后原文。
+1. 使用 `search(content_pattern="关键词", context=3)` 获取所有匹配行及前后原文。需要正则时加 `content_regex=true`；需要限定文件类型时加 `file_pattern="*.py"`。
 2. 从 `context` 中确认目标片段和目标文件。
    - 同一关键词存在多处匹配时，不要修改错误文件。
 3. 调用 `edit_file(path, find=该片段, replace=新片段)`。
@@ -295,10 +295,26 @@ www/apps/_demo/index.html
 
 ### 搜索参数
 
-- `context=0`：默认只返回行号，适合确认关键词是否存在及所在文件。
-- `context=2~5`：返回匹配位置前后的原文，适合定位待修改代码。
-- 同一文件中的每处匹配会单独列出，不会只返回第一处。
-- 搜不到时更换关键词，不要直接读取全文。
+`search` 的两个维度是正交的，不要混用：
+
+- `file_pattern`：文件名 glob（如 `*.py`）。空=所有文件。
+- `content_pattern`：内容匹配。空=只列文件，不读内容。
+
+常用组合：
+
+- 只找文件：`file_pattern="*.py"`，`content_pattern` 空 → 返回 `mode:"files"`，每条含 `path`/`size`。
+- 只搜内容：`content_pattern="def execute"`，`file_pattern` 可空 → 返回 `mode:"content"`，每处命中一条，含 `path`/`line`/`text`。
+- 限定文件类型再搜内容：两者都填，先按 `file_pattern` 筛文件，再在文件里搜 `content_pattern`。
+
+参数细节：
+
+- `context=0`：只返回行号 + `text`（命中行原文），适合确认是否存在。
+- `context=2~5`：每处命中带前后原文，适合定位待修改代码。上限 10，超出返回 `context_applied`。
+- `content_regex=true`：`content_pattern` 按 Python 正则解析（支持 `\s`、`\d`、分组）。默认 `false` 是纯子串，写 `def\s+execute` 会当字面量，永远匹配不到。
+- `count_only=true`：只返回每个文件的命中数，不返回行内容，适合“哪些文件包含关键词”。
+- 同一文件中的每处命中都会单独列出，不会只返回第一处。
+- 返回里的 `binary_skipped` / `large_skipped` / `scan_truncated` 表示跳过了多少二进制/超大文件、是否因扫描上限（5000 文件）提前停止。`truncated=true` 且 `scan_truncated=false` 时，是命中数达到 `max_results`，不是没搜完。
+- 搜不到时先换关键词或 `content_regex`，不要直接读全文。
 - `code_structure` 适合先查看 Python 或 JavaScript 的函数地图。
 
 ### 反例
@@ -575,7 +591,7 @@ use_tool(
 | `edit_file` | `path`、`find`、`replace` | 局部替换；`find` 必须与原文完全一致且唯一匹配；`replace=""` 表示删除该片段 |
 | `delete_lines` | `path`、`start_line`、`end_line` | 按行号区间删除行；显式删除整段入口；不传 `new_content` |
 | `list_dir` | `path` | 列出目录 |
-| `search` | `path`、`pattern?`、`content?`、`max_results?`、`context?` | 递归搜索；`context>0` 时返回每处匹配的前后原文 |
+| `search` | `path`、`file_pattern?`、`content_pattern?`、`content_regex?`、`count_only?`、`max_results?`、`context?` | 递归搜索。`content_pattern` 空=只列文件（`mode:"files"`）；非空=搜内容（`mode:"content"`，每处命中带 `text`）。`content_regex=true` 走 Python 正则，否则纯子串。`count_only=true` 只返回每文件命中数。`context` 上限 10，超出返回 `context_applied`。 |
 | `mkdir` | `path` | 创建目录 |
 | `delete_file` | `path` | 删除文件 |
 | `file_exists` | `path` | 检查文件是否存在 |
@@ -591,7 +607,7 @@ use_tool(
   - 需要修改多处时，分别调用 `edit_file`，并确保每次 `find` 各自唯一。
   - 文件内容变化会导致行号漂移，因此不得依赖行号定位。
 - 整文件重写使用 `write_file`。
-- 读取大文件并定位时，使用 `search(context=3)` 获取原文片段。
+- 读取大文件并定位时，使用 `search(file_pattern="*.py", content_pattern="关键词", context=3)` 获取命中行及前后原文。`content_pattern` 是子串；需要正则时加 `content_regex=true`。
 - 删除整段代码时，使用 `delete_lines` 按行号区间删除，或使用 `edit_file(find=整段, replace="")`。
 - 空文件直接判定为失败，防止写入空白页面。
 - 超过 2 MB 的文件跳过语法校验。
@@ -643,7 +659,7 @@ async def execute(envelop, agent):
 | `agent.log` | 日志 |
 | `agent.base_url` | 对外地址 |
 
-需要 LLM 或跨插件调用时直接使用上述能力，无需额外导入。
+需要 LLM 或跨插件调用时直接使用上述能力，无需额外导入。用于llm分析图片、推理解决需求。
 
 使用 `agent.llm` 前必须检查：
 
@@ -1052,6 +1068,10 @@ MCP 工具应查看 prompt 中的 `<MCP_INDEX>` 并按签名传参。
 
 用户表示“默认就可以”或“直接做”后，本次会话内不再重复确认同类操作。
 
+### reply 前检查
+
+任务真实完成进度。新建、修改的文件是否真正落盘。不许说谎。
+
 ---
 
 ## 任务续接
@@ -1081,20 +1101,23 @@ MCP 工具应查看 prompt 中的 `<MCP_INDEX>` 并按签名传参。
 
 - 沉淀可复用的一般技能。
 - 不沉淀用户需求变更过程、错误历史或任务日志。
-- 写入路径：
-
-```text
-data/skills/aicp/{skill_id}/SKILL.md
-```
-
 - 写入前先检查是否存在类似内容：
-  - 如果存在，读取后归并。
-  - 如果内容已经按照规范开发，则无需记录。
+- 如果存在，读取后归并。
 - Skill 编写规范位于：
 
 ```text
 data/skills/_STANDARD.md
 ```
+
+- 写入前必须阅读规范，按规范书写并校验
+写入路径：
+
+```text
+data/skills/aicp/{skill_id}/SKILL.md
+```
+
+
+
 
 ---
 
@@ -1105,5 +1128,7 @@ data/skills/_STANDARD.md
 1. **做了什么**：列出真实产物路径。
 2. **失败或局限的原因**：区分客观限制与执行失误。
 3. **如何验证**：说明可用于验证应用或产物的方式。
+
+严禁没有证据的推测，必须仔细阅读最后连续的执行结果再输出
 
 不得只回复“已完成”。

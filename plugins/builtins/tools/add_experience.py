@@ -234,8 +234,38 @@ async def execute(envelop, agent):
     user_id = _resolve_user_id(envelop)
 
     action = str(envelop.payload.get("action", "") or params.get("action", "") or "append").lower()
-    if action not in ("append", "replace", "clear"):
+    if action not in ("append", "replace", "clear", "delete"):
         action = "append"
+
+    # delete（删除单条）
+    if action == "delete":
+        target_id = str(params.get("id", "") or "").strip()
+        if not target_id:
+            envelop.payload = {"ok": False, "error": "缺少 id 参数"}
+            return envelop
+        data = _load_backpack(user_id)
+        items = data.get("items", [])
+        kept = [it for it in items if str(it.get("id", "")) != target_id]
+        if len(kept) == len(items):
+            envelop.payload = {
+                "ok": False,
+                "error": f"未找到经验 {target_id}",
+                "count": len(items),
+            }
+            return envelop
+        revision = _backup_backpack(user_id, data)
+        data["items"] = kept
+        _save_backpack(user_id, data)
+        envelop.payload = {
+            "ok": True,
+            "message": f"✅ 已删除经验 {target_id}，剩余 {len(kept)} 条",
+            "action": "delete",
+            "user_id": user_id,
+            "id": target_id,
+            "count": len(kept),
+            "revision": revision,
+        }
+        return envelop
 
     # clear
     if action == "clear":
@@ -319,7 +349,7 @@ def help():
             f"replace 强制归并 / clear 清空）"
         ),
         "input": {
-            "action": "append（默认）/ replace / clear",
+            "action": "append（默认）/ replace / clear / delete",
             "experience": "纯文本经验（旧调用兼容）",
             "title": "结构化：标题",
             "summary": "结构化：一句话摘要",

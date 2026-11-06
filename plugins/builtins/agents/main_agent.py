@@ -31,9 +31,14 @@ from runtime._llm import is_llm_error_string
 # ============================================================
 # flow 落盘策略（JSONL 追加 + 原子 compact）
 # ============================================================
-_COMPACT_MAX_LINES = 2000                       # 追加 N 行触发 compact
-_COMPACT_MAX_BYTES = 8 * 1024 * 1024            # 或文件超过 8M 触发 compact
-_COMPACT_MIN_INTERVAL = 30.0                    # 两次 compact 至少间隔 30s（防抖）
+             # 两次 compact 至少间隔 30s（防抖）
+
+# 信息流单条内容最大长度（字节）。超过则截断并标注。
+# 可按需调整：调大保留更多上下文，调小压缩更快。
+FLOW_ENTRY_MAX_BYTES = 64 * 1024
+# 压缩后信息流目标上限（字节）。按体积保留最近条目。
+FLOW_COMPACT_TARGET_BYTES = 1024 * 1024
+FLOW_LOAD_TAIL_BYTES = 4 * 1024 * 1024
 # ============================================================
 # 常量
 # ============================================================
@@ -42,6 +47,7 @@ _COMPACT_MIN_INTERVAL = 30.0                    # 两次 compact 至少间隔 30
 # ============================================================
 _DEBUG_CTX_ENABLED = True      # 关掉改 False
 _DEBUG_CTX_DIR_NAME = "_debug_context"
+_SESSION_FLOWS_MAX = 6   # 已在常量区定义，这里只说明位置
 
 
 def _debug_dump_messages(flow, messages, depth):
@@ -367,6 +373,19 @@ async def _update_conversation_index(user_id: str, session_id: str, flow: list):
                 meta["last_preview"] = e["content"][:80]
                 break
         meta["archived"] = meta.get("archived", False)
+        # ★ 归档判定：flow 文件超过阈值且此前未归档 → 置 archived=True
+        #   这里是 index 的唯一写入点，避免多路径竞争导致 archived 标志丢失。
+        try:
+            flow_file = _conversations_dir(user_id, session_id) / "flow.jsonl"
+            if (not meta.get("archived")) and flow_file.exists():
+                size = flow_file.stat().st_size
+                if size >= _MAX_FLOW_BYTES:
+                    meta["archived"] = True
+                    meta["archived_at"] = datetime.now().isoformat()
+                    meta["archived_reason"] = f"超过 {_MAX_FLOW_BYTES} 字节"
+                    Logger.info(f"[archive] 会话 {session_id} 已归档（{size} 字节）")
+        except Exception as e:
+            Logger.warn(f"[archive] 检查归档失败: {e}")
         # ★ 分身会话：记录父会话，供前端把分身挂到「发起它的对话」下面
         if session_id.startswith("sub_"):
             _ps = _SUB_PARENTS.get(session_id, "")
@@ -430,7 +449,7 @@ def _conversations_dir(user_id: str, session_id: str = None) -> Path:
 BASE_ROUNDS = 8          # 降级时固定取最近 8 轮；正常由动态基线决定（见 _detect_baseline_rounds）
 FORCE_FOLD_THRESHOLD = 220_000   # context 字符数，超过就强制提示模型折叠
 # 发现类工具：只给条数，不列字段内容
-
+_MAX_FLOW_BYTES = 10 * 1024 * 1024   # 你定的 max_size
 
 class InformationFlow:
     _DISCOVERY_TARGETS = ("cogitor", "os/_registry", "contract_agent")
@@ -457,10 +476,10 @@ class InformationFlow:
 
         # 落盘相关（沿用）
         self._write_lock = asyncio.Lock()
-        self._append_fh = None
+
         self._append_fh_path = None
         self._appended_lines = 0
-        self._last_compact_at = 0.0
+
         self._current_baseline = None   # 动态基线：None=降级固定轮，[]=新任务，[3,10,...]=选中轮
         self._msg_cache: Dict[int, List[dict]] = {}   # round_no -> [user_msg, assistant_msg]
         self._dirty_rounds: set = set()               # manage_flow 对历史轮操作时标记
@@ -470,9 +489,19 @@ class InformationFlow:
         self._task_summary = ""          # ← 新增
         self._picked_skills = []         # ← 新增
 
-        self._cleanup_stale_tmp()
+
+
+
         self._load()
 
+    def _is_archived(self) -> bool:
+        """读 index 判断本会话是否已归档（不写盘）。"""
+        try:
+            meta = (_load_conversation_index(self.user_id) or {}).get(self.session_id) or {}
+            return bool(meta.get("archived"))
+        except Exception as e:
+            Logger.warn(f"[archive] 读取归档状态失败: {e}")
+            return False
 
     def _index_exists(self, s: str) -> bool:
         """校验编号是否对应真实 entry。"""
@@ -498,21 +527,26 @@ class InformationFlow:
         cur = self._current_turn
         self._ignored = {k: v for k, v in self._ignored.items() if v > cur}
 
-    async def manage_flow(self, collapse=None, ignore=None) -> dict:
-        """本轮减压阀：只做减法（collapse / ignore）。不展开、不增内容。"""
-        collapse = collapse or []
+    async def manage_flow(self, ignore=None, ignore_all_except_last=False) -> dict:
+        """超阈值减压：只做 ignore，只减不增。"""
         ignore = ignore or []
         self._current_turn += 1
 
-        applied = {"collapse": [], "ignore": [], "invalid": []}
+        applied = {"ignore": [], "invalid": []}
+        cur = self._round_counter
 
-        for idx in collapse:
-            s = self._norm_index(idx)
-            if not s or not self._index_exists(s):
-                applied["invalid"].append(idx); continue
-            self._ignored[s] = self._current_turn + 999
-            applied["collapse"].append(s)
+        # 批量：除当前轮外，所有 ##N.M 全忽略
+        if ignore_all_except_last:
+            for e in self._flow:
+                r = e.get("round_no") or 0
+                c = e.get("chain_no") or 0
+                if r and c and r != cur:
+                    k = f"{r}.{c}"
+                    if k not in self._ignored:
+                        self._ignored[k] = self._current_turn + 999
+                        applied["ignore"].append(k)
 
+        # 按编号忽略
         for idx in ignore:
             s = self._norm_index(idx)
             if not s or not self._index_exists(s):
@@ -522,7 +556,7 @@ class InformationFlow:
 
         self._gc_ignored()
 
-        for idx in applied["collapse"] + applied["ignore"]:
+        for idx in applied["ignore"]:
             try:
                 r = int(str(idx).split(".")[0])
                 if r != self._round_counter:
@@ -530,13 +564,31 @@ class InformationFlow:
             except (ValueError, IndexError):
                 pass
 
-        parts = []
-        if applied["collapse"]: parts.append(f"收起 {len(applied['collapse'])} 条")
-        if applied["ignore"]:   parts.append(f"关闭 {len(applied['ignore'])} 条")
-        if applied["invalid"]:  parts.append(f"无效 {len(applied['invalid'])} 个")
-        think = "，".join(parts) or "无变更"
+        ctx_after = self.estimate_context_chars()
+        threshold = CONTEXT_PRESSURE_THRESHOLD
+        still_over = ctx_after >= threshold
+        need_free = max(0, ctx_after - threshold)
 
-        return {"ok": True, "think": think, "data": applied}
+        n = len(applied["ignore"])
+        if still_over:
+            think = (
+                f"已忽略 {n} 条；仍超阈值 {ctx_after:,}/{threshold:,}，"
+                f"还需释放约 {need_free:,} 字。继续 ignore_all_except_last 或按编号补 ignore。"
+            )
+        else:
+            think = f"已忽略 {n} 条；上下文 {ctx_after:,} 已低于阈值 {threshold:,}，可以继续干活。"
+
+        return {
+            "ok": True,
+            "think": think,
+            "data": {
+                **applied,
+                "ctx_after": ctx_after,
+                "threshold": threshold,
+                "still_over": still_over,
+                "need_free": need_free,
+            },
+        }
 
     # ============================================================
     # 编号计数器
@@ -570,136 +622,101 @@ class InformationFlow:
     # 落盘（沿用原实现）
     # ============================================================
 
-    def _cleanup_stale_tmp(self):
-        try:
-            for p in self.flow_file.parent.glob(f".{self.flow_file.name}_*.tmp"):
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+
 
     def _load(self):
-        if self.flow_file.exists():
-            try:
+        """懒加载：只读文件尾部 FLOW_LOAD_TAIL_BYTES，避免全量反序列化。
+
+        - 尾部读取可能从半个 entry 开始，丢弃第一行；
+        - 丢弃第一个 user 之前的半截轮（保证 _split_rounds 从完整轮开始）；
+        - 编号从尾部最后一条有编号的 entry 恢复，不会与历史冲突；
+        - 折叠快照只恢复尾部范围内的（早期轮本来就不在渲染范围）。
+        """
+        if not self.flow_file.exists():
+            return
+        try:
+            size = self.flow_file.stat().st_size
+            if size > FLOW_LOAD_TAIL_BYTES:
+                with open(self.flow_file, "rb") as f:
+                    f.seek(-FLOW_LOAD_TAIL_BYTES, os.SEEK_END)
+                    raw = f.read()
+                text = raw.decode("utf-8", errors="ignore")
+                lines = text.split("\n")
+                # 第一行可能被截断，丢弃
+                lines = lines[1:] if lines else []
+            else:
                 with open(self.flow_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            self._flow.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            Logger.warn(f"[flow] 跳过坏行 sid={self.session_id}")
-                self._restore_counters()
-                # ★ 恢复历史轮折叠快照
-                for e in self._flow:
-                    if e.get("action") == "round_snapshot":
-                        r = e.get("round_no")
-                        if r:
-                            d = e.get("detail") or {}
-                            self._round_snapshots[r] = {
-                                "collapsed": d.get("collapsed", []) or [],
-                                "ignored": d.get("ignored", []) or [],
-                            }
-            except Exception as e:
-                Logger.error(f"[flow] 读取 jsonl 失败: {e}")
-                self._flow = []
+                    lines = f.read().split("\n")
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    self._flow.append(json.loads(line))
+                except json.JSONDecodeError:
+                    Logger.warn(f"[flow] 跳过坏行 sid={self.session_id}")
+
+            # 丢弃第一个 user 之前的半截轮
+            first_user = next(
+                (i for i, e in enumerate(self._flow) if e.get("from") == "user"),
+                None,
+            )
+            if first_user is not None and first_user > 0:
+                self._flow = self._flow[first_user:]
+
+            self._restore_counters()
+
+            # 只恢复尾部范围内的折叠快照
+            for e in self._flow:
+                if e.get("action") == "round_snapshot":
+                    r = e.get("round_no")
+                    if r:
+                        d = e.get("detail") or {}
+                        self._round_snapshots[r] = {
+                            "collapsed": d.get("collapsed", []) or [],
+                            "ignored": d.get("ignored", []) or [],
+                        }
+        except Exception as e:
+            Logger.error(f"[flow] 读取 jsonl 失败: {e}")
+            self._flow = []
 
 
 
     async def _save_locked(self):
+        """把内存 self._flow 全量写回 flow.jsonl（覆盖写）。
+
+        仅用于「内存被整体修改」的场景（如 clear_memory）。
+        普通对话追加走 _append_line_locked，不经过这里，不重写文件。
+        """
         async with self._write_lock:
-            await self._compact_locked()
+            self.flow_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(self.flow_file, "w", encoding="utf-8", newline="") as f:
+                    for entry in self._flow:
+                        f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                self._appended_lines = 0
+            except Exception as e:
+                Logger.error(f"[flow] 全量落盘失败 sid={self.session_id}: {e}")
+                raise
         await _update_conversation_index(self.user_id, self.session_id, list(self._flow))
         return True
 
     async def _append_line_locked(self, entry: dict):
-        if self._append_fh is None or self._append_fh_path != str(self.flow_file):
-            if self._append_fh is not None:
-                try:
-                    self._append_fh.close()
-                except Exception:
-                    pass
-            self.flow_file.parent.mkdir(parents=True, exist_ok=True)
-            self._append_fh = open(self.flow_file, "a", encoding="utf-8", newline="")
-            self._append_fh_path = str(self.flow_file)
-
+        self.flow_file.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(entry, ensure_ascii=False, default=str)
-        self._append_fh.write(line + "\n")
-        self._append_fh.flush()
+        try:
+            with open(self.flow_file, "a", encoding="utf-8", newline="") as f:
+                f.write(line + "\n")
+                f.flush()
+        except Exception as e:
+            Logger.error(f"[flow] 追加写入失败 sid={self.session_id}: {e}")
+            return
         self._appended_lines += 1
 
-        need = False
-        if self._appended_lines >= _COMPACT_MAX_LINES:
-            need = True
-        elif self.flow_file.exists() and self.flow_file.stat().st_size >= _COMPACT_MAX_BYTES:
-            need = True
-        if need and (time.monotonic() - self._last_compact_at) >= _COMPACT_MIN_INTERVAL:
-            await self._compact_locked()
 
-    async def _compact_locked(self):
-        if self._append_fh is not None:
-            try:
-                self._append_fh.close()
-            except Exception:
-                pass
-            self._append_fh = None
-            self._append_fh_path = None
-
-        target_dir = self.flow_file.parent
-        target_dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(target_dir), prefix=f".{self.flow_file.name}_", suffix=".tmp"
-        )
-        replaced = False
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-                for entry in self._flow:
-                    f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, str(self.flow_file))
-            replaced = True
-            try:
-                dir_fd = os.open(str(target_dir), os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except Exception:
-                pass
-            self._appended_lines = 0
-            self._last_compact_at = time.monotonic()
-        except Exception as e:
-            Logger.error(f"[flow] compact 失败: {e}")
-        finally:
-            if not replaced:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-
-
-
-    async def flush(self):
-        async with self._write_lock:
-            if self._append_fh is not None:
-                try:
-                    self._append_fh.flush()
-                except Exception:
-                    pass
-
-    async def close(self):
-        async with self._write_lock:
-            if self._append_fh is not None:
-                try:
-                    self._append_fh.close()
-                except Exception:
-                    pass
-                self._append_fh = None
-                self._append_fh_path = None
 
     # ============================================================
     # 写入：分配编号
@@ -721,7 +738,6 @@ class InformationFlow:
                 await self._append_line_locked(entry)
             except Exception as e:
                 Logger.error(f"保存对话失败（降级内存态）: {e}")
-                self._appended_lines = max(self._appended_lines, _COMPACT_MAX_LINES)
         await _update_conversation_index(self.user_id, self.session_id, list(self._flow))
 
     async def append_ai(self, think: str, call: str, content: str = "", args: dict = None, retain: int = 0):
@@ -751,17 +767,38 @@ class InformationFlow:
                 await self._append_line_locked(entry)
             except Exception as e:
                 Logger.error(f"保存对话失败（降级内存态）: {e}")
-                self._appended_lines = max(self._appended_lines, _COMPACT_MAX_LINES)
         await _update_conversation_index(self.user_id, self.session_id, list(self._flow))
 
     async def append_system(self, action: str, result_think: str, detail: dict = None,
                             extra: dict = None, retain: int = 1, chain_no: int = None):
+        detail = detail or {}
+        # ★ 单条截断：detail 序列化后超过 FLOW_ENTRY_MAX_BYTES，截断 result（保留 preview）
+        try:
+            detail_str = json.dumps(detail, ensure_ascii=False, default=str)
+            if len(detail_str.encode("utf-8")) > FLOW_ENTRY_MAX_BYTES:
+                r = detail.get("result")
+                if isinstance(r, dict):
+                    r_str = json.dumps(r, ensure_ascii=False, default=str)
+                    if len(r_str.encode("utf-8")) > FLOW_ENTRY_MAX_BYTES:
+                        detail["result"] = {
+                            "_truncated": True,
+                            "_original_size": len(r_str),
+                            "preview": r_str[: FLOW_ENTRY_MAX_BYTES // 2],
+                        }
+                else:
+                    # detail 本身过大但没有 result：截断整个 detail 的字符串字段
+                    for k, v in list(detail.items()):
+                        if isinstance(v, str) and len(v.encode("utf-8")) > FLOW_ENTRY_MAX_BYTES // 2:
+                            detail[k] = v[: FLOW_ENTRY_MAX_BYTES // 2] + f"…（截断，原 {len(v)} 字）"
+        except Exception:
+            pass
+
         entry = {
             "timestamp": datetime.now().isoformat(),
             "from": "system",
             "action": action,
             "result": result_think,
-            "detail": detail or {},
+            "detail": detail,
             "retain": retain,
             "round_no": self._round_counter,
             "chain_no": chain_no if chain_no is not None else self._chain_counter,
@@ -775,7 +812,6 @@ class InformationFlow:
                 await self._append_line_locked(entry)
             except Exception as e:
                 Logger.error(f"保存对话失败（降级内存态）: {e}")
-                self._appended_lines = max(self._appended_lines, _COMPACT_MAX_LINES)
         await _update_conversation_index(self.user_id, self.session_id, list(self._flow))
 
     # ============================================================
@@ -1100,7 +1136,7 @@ class InformationFlow:
         omitted = total - len(selected)
         if omitted > 0 and len(selected) > 1:
             msgs.append({"role": "user", "content":
-                f"（{omitted} 轮历史已省略"})
+                    f"（{omitted} 轮历史已省略）"})
 
         # ============================================================
         # 6. 渲染选中轮
@@ -1177,16 +1213,13 @@ class InformationFlow:
 
         # ★ 被 ignore / collapse 的链：保留锚点 + 目的，只省掉入参/返回/步骤 JSON。
         #   文本必须字节稳定（不含 TTL 等动态值），否则 TTL 期间每轮都改写这一条，前缀失效。
-        if self._is_ignored(f"##{r_no}.{c_no}"):
-            return (
-                f"【工具结果 ##{r_no}.{c_no}】{label}\n"
-                + (f"目的：{chain_think}\n" if chain_think else "")
-                + f"（已收起，内容已释放；如确需原文，按坐标用 read_file_lines 重新读取）"
-            )
+        # ★ 被 ignore 的链 / 整轮：彻底不渲染
+        if self._is_ignored(f"##{r_no}.{c_no}") or self._is_ignored(str(r_no)):
+            return ""
 
         lines = [f"【工具结果 ##{r_no}.{c_no}】{label}"]
         if chain_think:
-            lines.append(f"目的：{chain_think}")
+            lines.append(f"think：{chain_think}")
 
         # ---- 入参 ----
         start_params = None
@@ -1202,6 +1235,16 @@ class InformationFlow:
             lines.append(f"入参：{p_str}")
 
         # ---- 返回：错误 / skill 全文 / 普通 JSON ----
+        # ---- 返回：错误 / skill 全文 / 普通 JSON ----
+        # ★ step 级 ignore：call_end 这一步被 ignore 时，连返回都不渲染
+        end_step_no = None
+        for e in chain_entries:
+            if e.get("action") == "call_end":
+                end_step_no = e.get("step_no") or 0
+                break
+        if end_step_no and self._is_ignored(f"###{r_no}.{c_no}.{end_step_no}"):
+            return ""
+
         end_result = None
         end_error = None
         for e in chain_entries:
@@ -1267,6 +1310,9 @@ class InformationFlow:
 
     def _render_round_user(self, entries: List[dict]) -> str:
         """渲染一轮的 user 部分。多轮消息下不需要 > 引用块，直接原文。"""
+        r_no = entries[0].get("round_no") or 0
+        if r_no and self._is_ignored(str(r_no)):
+            return ""
         for e in entries:
             if e.get("from") == "user" and (e.get("content") or ""):
                 return f"👤 用户：{e['content']}"
@@ -1275,6 +1321,9 @@ class InformationFlow:
 
     def _render_round_reply(self, entries: List[dict]) -> str:
         """渲染一轮的 assistant 部分 —— reply 原文 +（可选）think。"""
+        r_no = entries[0].get("round_no") or 0
+        if r_no and self._is_ignored(str(r_no)):
+            return ""
         reply = ""
         think = ""
         for e in entries:
@@ -1442,13 +1491,14 @@ class InformationFlow:
                 cb = data.get("ctx_before")
                 ca = data.get("ctx_after")
                 applied = data.get("applied") or {}
-                n_collapse = len(applied.get("collapse") or [])
                 n_ignore = len(applied.get("ignore") or [])
                 bits = []
-                if n_collapse:
-                    bits.append(f"收起 {n_collapse} 条")
                 if n_ignore:
                     bits.append(f"忽略 {n_ignore} 条")
+                if cb is not None and ca is not None:
+                    bits.append(f"上下文 {cb:,} → {ca:,}")
+                if bits:
+                    return " → " + " · ".join(bits)
                 if cb is not None and ca is not None:
                     bits.append(f"上下文 {cb:,} → {ca:,}")
                 if bits:
@@ -1483,26 +1533,25 @@ class InformationFlow:
         return sum(len(m.get("content") or "") for m in msgs)
 
     async def snapshot_round(self, round_no: int) -> None:
-        """把当前轮的折叠形态固化进 flow（reply 时调用）。"""
-        collapsed = [
-            k.lstrip("#") for k, v in self._ignored.items()
-            if v > self._current_turn and k.count(".") == 1
-        ]
+        """把当前轮的 ignore 形态固化进 flow（reply 时调用）。"""
         ignored = [
             k.lstrip("#") for k, v in self._ignored.items()
             if v > self._current_turn and k.count(".") == 2
         ]
-        self._round_snapshots[round_no] = {"collapsed": collapsed, "ignored": ignored}
+        self._round_snapshots[round_no] = {"collapsed": [], "ignored": ignored}
         await self.append_system(
             action="round_snapshot",
-            result_think=f"📌 固化第 {round_no} 轮折叠形态",
-            detail={"collapsed": collapsed, "ignored": ignored},
+            result_think=f"📌 固化第 {round_no} 轮 ignore 形态",
+            detail={"ignored": ignored},
             retain=1,
             chain_no=0,
         )
 
     def _render_round_reply_with_snapshot(self, entries: List[dict], snap: dict) -> str:
         """按固化快照渲染历史轮的 assistant 部分。"""
+        r_no = entries[0].get("round_no") or 0
+        if r_no and self._is_ignored(str(r_no)):
+            return ""
         reply = ""
         for e in entries:
             if e.get("from") == "ai" and e.get("call") == "reply" and (e.get("content") or ""):
@@ -1587,10 +1636,23 @@ def _get_processing_lock(session_id: str) -> asyncio.Lock:
     return _session_processing_locks[session_id]
 
 
+
+
 def _get_or_create_flow(user_id: str, session_id: str) -> InformationFlow:
     key = f"{user_id}:{session_id}"
-    if key not in _session_flows:
-        _session_flows[key] = InformationFlow(user_id, session_id)
+    # 命中：移到末尾（LRU 最近使用）
+    if key in _session_flows:
+        _session_flows[key] = _session_flows.pop(key)
+        return _session_flows[key]
+    # 未命中：先淘汰，再新建
+    if len(_session_flows) >= _SESSION_FLOWS_MAX:
+        for k in list(_session_flows.keys()):
+            sid = k.split(":", 1)[1]
+            # 跳过正在处理的会话，避免淘汰活跃回合
+            if sid not in core_processor._think_sessions:
+                _session_flows.pop(k, None)
+                break
+    _session_flows[key] = InformationFlow(user_id, session_id)
     return _session_flows[key]
 
 
@@ -1616,7 +1678,10 @@ async def _push_progress(agent, user_id, session_id, step, msg, extra=None):
         }
     )))
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+        # ★ 不用 shield：shield 会让超时/取消无法传播到内层 task，
+        #   导致 task 泄漏在后台继续跑（持有 websocket 连接），且
+        #   _PUSH_BG_TASKS 的 done_callback 永不触发 → 集合无限堆积。
+        await asyncio.wait_for(task, timeout=6.0)
     except asyncio.TimeoutError:
         task.cancel()
         try:
@@ -1654,7 +1719,8 @@ async def _push_chat(agent, user_id, session_id, content):
         }
     )))
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+        # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
+        await asyncio.wait_for(task, timeout=6.0)
     except asyncio.TimeoutError:
         task.cancel()
         try:
@@ -1690,7 +1756,8 @@ async def _push_stream(agent, user_id: str, session_id: str, chunk: str):
         }
     )))
     try:
-        await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+        # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
+        await asyncio.wait_for(task, timeout=6.0)
     except asyncio.TimeoutError:
         task.cancel()
         try:
@@ -1836,44 +1903,30 @@ MANAGE_FLOW_SCHEMA = {
     "function": {
         "name": "manage_flow",
         "description": (
-            "【本轮递归内的减压阀】只在上下文过长、任务还没完成时由系统提供。\n"
-            "它只做减法：把本轮已经用过、暂时不需要的中间结果折叠成一行（保留坐标），"
-            "腾出空间继续跑。不展开、不增加内容。\n"
-            "\n"
-            "编号：#N 整轮、##N.M 工具链、###N.M.K 单步。\n"
-            "\n"
-            "## 语义\n"
-            "  collapse([...])：把 ##N.M 折叠成一行（保留结果摘要 + 坐标）。\n"
-            "  ignore([...])：把 ###N.M.K 完全不渲染（超长 stdout 的中间段等）。\n"
-            "\n"
-            "## 规则\n"
-            "  1. 只折叠「本轮」重复读取 / 已用完的 ##N.M，不要折叠当前正在依赖的结果。\n"
-            "  2. ignore 只用于 ###N.M.K，不要用于 #N 或 ##N.M。\n"
-            "  3. 折叠后你会看到「上下文从 X 缩到 Y」，自己判断够不够；够就继续干活。\n"
-            "  4. 本工具只在超阈值时出现；折叠完下一轮恢复正常工具集。\n"
+            "【上下文超限时的唯一工具】去除信息流无关当前任务的噪音、指定哪些编号就彻底不渲染哪些，折到上限以下本工具消失。\n"
+            "编号 \"3\" 折整轮，\"3.2\" 折单条链，\"3.2.1\" 折单步。\n"
+            "⚠️ 当前轮整轮不能折，只能折当前轮里不需要的单链。\n"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "为什么折叠（可选）。会写进信息流，下一轮你能看到自己当时的理由。"
-                },
-                "collapse": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "折叠的 ##N.M 编号列表。"
-                },
                 "ignore": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "完全不渲染的 ###N.M.K 编号列表。"
+                    "description": (
+                        "要忽略的编号列表：\n"
+                        "  \"3\"     → 折整轮（历史轮）\n"
+                        "  \"3.2\"   → 折第 3 轮第 2 条链\n"
+                        "  \"3.2.1\" → 折第 3 轮第 2 条链第 1 步\n"
+                        "指定哪些折哪些，未指定的不动。"
+                    )
                 }
             },
-            "required": []
+            "required": ["ignore"]
         }
     }
 }
+
 TOOL_SCHEMAS_BASE = [
     {
         "type": "function",
@@ -1950,7 +2003,9 @@ TOOL_SCHEMAS_BASE = [
                                 "file_utils_api.read_file_lines 必填 {\"path\": \"...\", \"start_line\": 1, \"end_line\": 50}；"
                                 "file_utils_api.edit_file  必填{\"path\": \"...\", \"find\": \"...\", \"replace\": \"...\"}；"
                                 "file_utils_api.write_file  必填{\"path\": \"...\", \"content\": \"...\"}；"
-                                "code_runner 必填 {\"code\": \"...\", \"packages\": []}。"
+                                "code_runner 必填 {\"code\": \"...\", \"packages\": []}，"
+                                "可选 {\"timeout_s\": 240}（默认 60，最大 300；"
+                                "pip install / 大文件下载给 180-300，纯计算给 15-30）。"
                                 "漏必填键会报『缺少 X 参数』——下一发必须补上 X 重发，禁止原样重试。"
                             ),
                             "additionalProperties": True
@@ -2540,7 +2595,7 @@ class PromptBuilder:
         failure_index = _load_failure_index(user_id)
         if failure_index:
             parts.append(
-                f"【经验背包 · 坑点，严禁反复踩坑】插件调用失败自动记录，不需要你手动写。\n"
+                f"【经验背包 · 坑点，严禁反复踩坑】输出必须校验规避以下错误。\n"
                 f"{failure_index}"
             )
 
@@ -2615,6 +2670,23 @@ class PromptBuilder:
                     f"决策时按此评估可行性：下载/安装超过 exec_timeout_s 的、"
                     f"gpu=false 时不要装 CUDA 包、网络慢时不要下大文件。"
                 )
+
+        # ★ 上下文压力：每轮都在 tail 末尾告诉模型"当前多少字、还差多少"
+        if flow is not None and hasattr(flow, "estimate_context_chars"):
+            try:
+                ctx_chars = flow.estimate_context_chars()
+                if ctx_chars >= CONTEXT_PRESSURE_THRESHOLD:
+                    need = ctx_chars - CONTEXT_PRESSURE_THRESHOLD
+                    parts.append(
+                        f"【上下文超限】上限 {CONTEXT_PRESSURE_THRESHOLD:,} 字，"
+                        f"现在 {ctx_chars:,} 字，超了 {need:,} 字。\n"
+                        f"本轮只有 manage_flow。**必须折叠**：\n"
+                        f"  `manage_flow(ignore=[\"2\", \"3\", \"4\", ...])`  ← 折历史轮整轮\n"
+                        f"  `manage_flow(ignore=[\"5.3\", \"5.4\"])`          ← 折当前轮不需要的单链\n"
+                        f"**当前轮整轮不能折**，只能折当前轮里不需要的单链。没折够继续补。"
+                    )
+            except Exception:
+                pass
 
         return "\n\n".join(parts)
 
@@ -2898,14 +2970,34 @@ class ToolRegistry:
 
         payload = {"action": tool_action, **call_params} if tool_action else dict(call_params)
 
+        # ★ 按 target 算 route 超时：
+        #    code_runner：从 plugin_args.timeout_s 动态推（默认 60，+20 余量，封顶 320）
+        #    save_blocks：120s（造应用要编译）
+        #    main_agent（分身）：180s
+        #    其余：30s（与 SystemServer.call 默认值一致）
+        if target == "builtins/tools/code_runner":
+            _ts = None
+            if isinstance(tool_params, dict):
+                _ts = tool_params.get("timeout_s")
+            try:
+                _ts = int(_ts) if _ts is not None else 60
+            except (TypeError, ValueError):
+                _ts = 60
+            route_timeout = min(max(_ts + 20, 60), 320)
+        elif target == "builtins/tools/save_blocks":
+            route_timeout = 120
+        elif target == "builtins/agents/main_agent":
+            route_timeout = 180
+        else:
+            route_timeout = 30
+
         try:
             result = await agent.system.call(core.Envelop(
                 sender="builtins/agents/main_agent",
                 receiver=target,
                 payload=payload,
                 meta=meta,
-            ))
-
+            ), timeout=route_timeout)
             data = result.result() if result is not None else {"ok": False, "error": "no response"}
 
             if data.get("status") == "processing":
@@ -3134,7 +3226,6 @@ class LLMThinker:
                         ctx_before = flow.estimate_context_chars()
                         mf_chain_no = flow._next_chain()
                         mf_params = {
-                            "collapse": args.get("collapse"),
                             "ignore": args.get("ignore"),
                         }
 
@@ -3172,7 +3263,6 @@ class LLMThinker:
                         result = {}
                         try:
                             result = await flow.manage_flow(
-                                collapse=args.get("collapse"),
                                 ignore=args.get("ignore"),
                             )
                             manage_flow_done = True
@@ -3185,27 +3275,35 @@ class LLMThinker:
                         ctx_after = flow.estimate_context_chars()
                         freed = max(0, ctx_before - ctx_after)
                         elapsed_ms = int((time.time() - t0) * 1000)
-                        _info_parts = (result.get("think", "") if ok else error_msg)
+                        _data = result.get("data", {}) if ok else {}
+                        _still_over = bool(_data.get("still_over", False))
+                        _need_free = int(_data.get("need_free", 0) or 0)
+                        _think_txt = (result.get("think", "") if ok else error_msg)
                         Logger.info(
-                            f"[manage_flow] depth={depth} {_info_parts} "
-                            f"ctx {ctx_before}→{ctx_after} (freed={freed})"
+                            f"[manage_flow] depth={depth} {_think_txt} "
+                            f"ctx {ctx_before}→{ctx_after} (freed={freed}, "
+                            f"still_over={_still_over}, need_free={_need_free})"
                         )
 
-                        # 写 call_end / call_error
+                        # 写 call_end / call_error：把 still_over / need_free 一起写进 result
                         await flow.append_system(
                             action="call_end" if ok else "call_error",
-                            result_think="📨 调用完成: manage_flow" if ok else "❌ manage_flow 失败",
+                            result_think=("📨 调用完成: manage_flow" if ok else "❌ manage_flow 失败")
+                                           + (f"（还需释放 {_need_free:,} 字）" if _still_over else ""),
                             detail={
                                 "call_id": call_id,
                                 "target": "builtins/agents/main_agent",
                                 "action": "manage_flow",
                                 "result": {
                                     "ok": ok,
+                                    "think": _think_txt,
                                     "data": {
-                                        "applied": (result.get("data", {}) if ok else {}),
+                                        "applied": _data,
                                         "ctx_before": ctx_before,
                                         "ctx_after": ctx_after,
                                         "freed": freed,
+                                        "still_over": _still_over,
+                                        "need_free": _need_free,
                                     },
                                     "error": error_msg,
                                 },
@@ -3336,6 +3434,16 @@ class LLMThinker:
                     f"session={session_id}: {content[:80]}"
                 )
                 raise NarrationReplyError(content[:200])
+            # ★ 压力模式：只有 manage_flow 时，模型输出文本 = 没调工具，不是交付
+            if _pressure:
+                Logger.warn(
+                    f"[LLMThinker][pressure_text] depth={depth} session={session_id} "
+                    f"压力模式下模型输出文本而非 manage_flow: {content[:120]}"
+                )
+                raise EmptyOutputError(
+                    "压力模式下你只能调 manage_flow，不要输出文本。"
+                    "请调 manage_flow(ignore=[...]) 折叠上下文。"
+                )
             await flow.append_ai("", "reply", content=content, retain=3)
             return {"call": "reply", "content": content, "args": {}}
 
@@ -3511,6 +3619,8 @@ class CoreProcessor:
                                 "应该用 use_tool / manage_flow 直接执行。"
                                 "请直接输出一个 tool_call（reply 或 use_tool 或 manage_flow），"
                                 "不要再只思考或只说要做什么。"
+                                "\n\n⚠️ 若本轮工具列表只有 manage_flow（上下文超限），"
+                                "**不要输出任何文本**，直接调 manage_flow(ignore=[...]) 折叠上下文。"
                             ),
                             detail={"reason": "empty_output"},
                             retain=2,
@@ -3650,7 +3760,8 @@ async def _push_stats(agent, user_id: str, session_id: str, depth: int = 0):
                      "data": {"type": "stats", "session_id": session_id, "stats": stats}}
         )))
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout=6.0)
+            # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
+            await asyncio.wait_for(task, timeout=6.0)
         except asyncio.TimeoutError:
             task.cancel()
             try:
@@ -4126,12 +4237,7 @@ async def _purge_session(user_id: str, session_id: str):
 
     # 2. 清内存缓存（主 + 所有分身）
     for sid in [session_id] + sub_ids:
-        old = _session_flows.pop(f"{user_id}:{sid}", None)
-        if old is not None:
-            try:
-                await old.close()
-            except Exception:
-                pass
+        _session_flows.pop(f"{user_id}:{sid}", None)
 
     # 3. 删 index 条目（主 + 所有分身）
     index = _load_conversation_index(user_id)
@@ -4354,12 +4460,20 @@ async def execute(envelop, agent):
 
         if action == "clear_memory":
             flow = _get_or_create_flow(user_id, session_id)
-            async with flow._write_lock:
-                flow._flow = []
-                flow._msg_cache = {}
-                flow._dirty_rounds = set()
-                await flow._compact_locked()
-            await _update_conversation_index(user_id, session_id, [])
+            flow._flow = []
+            flow._msg_cache = {}
+            flow._dirty_rounds = set()
+            await flow._save_locked()          # 内部自己拿锁
+            # 顺手取消归档
+            index = _load_conversation_index(user_id)
+            if session_id in index:
+                index[session_id]["archived"] = False
+                index[session_id].pop("archived_at", None)
+                index[session_id].pop("archived_reason", None)
+                _index_file(user_id).write_text(
+                    json.dumps({"conversations": index}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             envelop.payload = {"ok": True}
             return envelop
 
@@ -4527,6 +4641,20 @@ async def execute(envelop, agent):
         if not user_input and action != "interrupt":
             envelop.payload = {"ok": False, "error": "请输入内容"}
             return envelop
+
+        # ★ 归档会话：超过 max_size 后不可继续对话（后端强拦截，不依赖前端）
+        if action not in ("interrupt",) and user_input:
+            try:
+                _meta = (_load_conversation_index(user_id) or {}).get(session_id) or {}
+                if _meta.get("archived"):
+                    _reason = _meta.get("archived_reason") or f"会话已归档（{_MAX_FLOW_BYTES} 字节）"
+                    Logger.info(f"[archive] 拒绝已归档会话 {session_id} 的新消息")
+                    await _push_chat(agent, user_id, session_id,
+                                     f"🔒 该会话已归档（{_reason}），无法继续对话。请新建会话。")
+                    envelop.payload = {"ok": False, "error": "会话已归档，无法继续对话", "archived": True}
+                    return envelop
+            except Exception as e:
+                Logger.warn(f"[archive] 归档校验失败: {e}")
 
         # 5. 打断：只有显式 interrupt 请求才走这里（普通消息不能进这个分支）
         if envelop.sender == "os/_gateway" and action == "interrupt":
@@ -4758,7 +4886,7 @@ async def _handle_callback(envelop, agent):
 
 
 
-    payload = envelop.payload
+
 
 
     # ★ 改用 append_async_callback：追加新 ##，带 related，不碰已闭合 ##

@@ -48,6 +48,7 @@ logger = logging.getLogger("aicp.code_runner")
 
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_SUBPROCESS_TIMEOUT = 30
+MAX_TIMEOUT_SECONDS = 300
 
 # ★ code_runner 专用线程池：独立于默认池，卡住的执行不占其他插件的线程
 #   最多 2 个并发执行，第 3 个排队（避免无限起线程把内存打爆）
@@ -85,7 +86,9 @@ def _get_env_summary() -> Dict[str, Any]:
 
     now = time.time()
     if _ENV_CACHE is not None and (now - _ENV_CACHE_AT) < _ENV_CACHE_TTL:
-        return _ENV_CACHE
+        # ★ 返回浅拷贝：调用方会往 env 里写本次超时等字段，
+        #   直接返回缓存对象会造成「可变缓存污染」（污染后所有调用都看到脏值）
+        return dict(_ENV_CACHE)
 
     res: Dict[str, Any] = {}
 
@@ -171,16 +174,30 @@ def _get_env_summary() -> Dict[str, Any]:
     res["net"] = net
 
     # --- 执行限制（code_runner 自己的事实）---
-    res["exec_timeout_s"] = DEFAULT_TIMEOUT_SECONDS
+    # 注意：exec_timeout_s 不在这里写死。它是「本次实际值」，
+    # 由调用方在返回前写入 env；默认值见 env.exec_timeout_default。
     res["exec_max_concurrent"] = 2
     res["note"] = (
-        "exec_timeout_s 是单次 code_runner 执行的硬超时；"
+        "env.exec_timeout_s 是本次 code_runner 执行的实际硬超时；"
+        "env.exec_timeout_default 是不传 timeout_s 时的默认值。"
         "下载/安装类操作超过这个时间会被中断，请先估算耗时再决定。"
     )
 
     _ENV_CACHE = res
     _ENV_CACHE_AT = now
     return res
+
+
+def _failure_env() -> Dict[str, Any]:
+    """失败分支的 env：只有默认值，没有「本次实际值」。
+
+    校验失败（timeout_s 越界/格式错）时本次没有生效的超时，
+    因此不写 exec_timeout_s，避免和上一次调用的残留混淆。
+    """
+    env = _get_env_summary()
+    env.pop("exec_timeout_s", None)
+    env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
+    return env
 
 
 class SandboxBlockError(RuntimeError):
@@ -608,7 +625,7 @@ async def _run_execute_isolated(execute_fn, envelop, agent, timeout):
 # 执行器
 # ============================================================
 
-async def _execute_code(code: str, agent) -> Dict[str, Any]:
+async def _execute_code(code: str, agent, timeout_s: int = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
     """执行代码，返回 {ok, data/error, error_category}"""
 
     try:
@@ -623,6 +640,7 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": f"【错误分类】LLM_CODE\n【一句话】AST 预检失败\n【原因】{ast_err}",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
 
     # 2. 构建沙箱
@@ -633,6 +651,7 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": f"【错误分类】RUNTIME_INTERNAL\n【一句话】构建沙箱失败\n【原因】{type(e).__name__}: {e}",
             "error_category": "RUNTIME_INTERNAL",
+            "env": _failure_env(),
         }
 
     local_ns: Dict[str, Any] = {}
@@ -645,12 +664,14 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": f"【错误分类】LLM_CODE\n【一句话】语法错误\n【原因】第 {e.lineno} 行: {e.msg}",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
     except Exception as e:
         return {
             "ok": False,
             "error": f"【错误分类】LLM_CODE\n【一句话】代码加载失败\n【原因】{type(e).__name__}: {e}",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
 
     # 4. 检查 execute
@@ -660,12 +681,14 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": "【错误分类】LLM_CODE\n【一句话】找不到 execute 函数\n【原因】必须定义 async def execute(envelop, agent)",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
     if not asyncio.iscoroutinefunction(execute_fn):
         return {
             "ok": False,
             "error": "【错误分类】LLM_CODE\n【一句话】execute 不是 async 函数\n【原因】必须定义为 async def",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
 
     # 5. 执行（隔离到专用线程池，同步阻塞也挂不到主循环）
@@ -684,24 +707,32 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
 
     try:
         ret = await _run_execute_isolated(
-            execute_fn, envelop, agent, DEFAULT_TIMEOUT_SECONDS
+            execute_fn, envelop, agent, timeout_s
         )
         logger.info(f"[code_runner] 执行完成 耗时={time.time()-_t0:.1f}s")
     except SandboxBlockError as e:
         logger.warning(
             f"[code_runner] 沙箱拦截/超时 耗时={time.time()-_t0:.1f}s 原因={e}"
         )
+        _env = _get_env_summary()
+        _env["exec_timeout_s"] = timeout_s
+        _env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
         return {
             "ok": False,
             "error": f"【错误分类】SANDBOX_BLOCK\n【一句话】沙箱拦截\n【原因】{e}",
             "error_category": "SANDBOX_BLOCK",
+            "env": _env,
         }
     except Exception as e:
         tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        _env = _get_env_summary()
+        _env["exec_timeout_s"] = timeout_s
+        _env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
         return {
             "ok": False,
             "error": f"【错误分类】LLM_CODE\n【一句话】运行时异常\n【原因】{type(e).__name__}: {e}\n【堆栈】\n{tb}",
             "error_category": "LLM_CODE",
+            "env": _env,
         }
 
     # 6. 返回值校验
@@ -710,29 +741,64 @@ async def _execute_code(code: str, agent) -> Dict[str, Any]:
             "ok": False,
             "error": f"【错误分类】LLM_CODE\n【一句话】返回值不是字典\n【原因】必须 return {{'data': ...}}，实际是 {type(ret).__name__}",
             "error_category": "LLM_CODE",
+            "env": _failure_env(),
         }
     if "data" not in ret:
         return {
             "ok": False,
             "error": "【错误分类】LLM_CODE\n【一句话】返回值缺少 data 字段\n【原因】必须 return {'data': ...}",
             "error_category": "LLM_CODE",
-            "env": _get_env_summary(),
+            "env": _failure_env(),
         }
 
-    return {"ok": True, "data": ret["data"], "env": _get_env_summary()}
+    env = _get_env_summary()
+    env["exec_timeout_s"] = timeout_s                     # ★ 本次实际超时（LLM 应读这个）
+    env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS  # 不传 timeout_s 时的默认值
+    return {"ok": True, "data": ret["data"], "env": env}
 
 
 # ============================================================
 # 插件入口
 # ============================================================
 
+
 async def execute(envelop, agent):
     code = envelop.payload.get("code", "")
     packages = envelop.payload.get("packages", [])
+    timeout_s = envelop.payload.get("timeout_s")
 
     if not code:
         envelop.payload = {"ok": False, "error": "缺少 code 参数"}
         return envelop
+
+    # ★ timeout_s 校验：默认 60，范围 1-MAX_TIMEOUT_SECONDS(300)
+    if timeout_s is None:
+        timeout_s = DEFAULT_TIMEOUT_SECONDS
+    else:
+        try:
+            timeout_s = int(timeout_s)
+        except (TypeError, ValueError):
+            envelop.payload = {
+                "ok": False,
+                "error": (
+                    "【错误分类】LLM_CODE\n【一句话】timeout_s 参数格式错误\n"
+                    f"【原因】timeout_s 必须是整数，不能是 {type(timeout_s).__name__}"
+                ),
+                "error_category": "LLM_CODE",
+                "env": _failure_env(),
+            }
+            return envelop
+        if timeout_s < 1 or timeout_s > MAX_TIMEOUT_SECONDS:
+            envelop.payload = {
+                "ok": False,
+                "error": (
+                    "【错误分类】LLM_CODE\n【一句话】timeout_s 超出范围\n"
+                    f"【原因】timeout_s 必须在 1-{MAX_TIMEOUT_SECONDS} 之间，实际是 {timeout_s}"
+                ),
+                "error_category": "LLM_CODE",
+                "env": _failure_env(),
+            }
+            return envelop
 
     if not isinstance(packages, list):
         if packages:
@@ -745,7 +811,7 @@ async def execute(envelop, agent):
                     f"不能是 {type(packages).__name__}"
                 ),
                 "error_category": "LLM_CODE",
-                "env": _get_env_summary(),
+                "env": _failure_env(),
             }
             return envelop
         packages = []
@@ -764,11 +830,11 @@ async def execute(envelop, agent):
                 "ok": False,
                 "error": f"【错误分类】DEPENDENCY\n【一句话】依赖安装失败\n【原因】{e}",
                 "error_category": "DEPENDENCY",
-                "env": _get_env_summary(),
+                "env": _failure_env(),
             }
             return envelop
 
-    result = await _execute_code(code, agent)
+    result = await _execute_code(code, agent, timeout_s)
     if 'agent.llm' in code and not getattr(agent, 'llm', None):
         result['llm_notice'] = ('引擎未配置模型：aicp.yaml 缺 models.providers，agent.llm 为 None，'
                                 'LLM 调用不会生效，请提示用户先配置模型')
@@ -783,6 +849,7 @@ def help():
         "input": {
             "code": "Python 代码文本，必须定义 async def execute(envelop, agent)，必须 return {'data': ...}",
             "packages": "依赖列表（可选），如 ['pandas', 'requests']",
+            "timeout_s": "本次执行超时秒数（可选），默认 60，最大 300。pip install / 大文件下载给 180-300；纯计算给 15-30；调外部 API 给 30-60",
         },
         "output": {
             "ok": "是否成功",

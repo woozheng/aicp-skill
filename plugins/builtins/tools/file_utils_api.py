@@ -1404,33 +1404,65 @@ def _parse_config_structure(text: str, ext: str) -> dict:
 
     return {"keys": keys[:100]}
 
-def _search_files_sync(path_str, pattern="*", content=None, max_results=50, context=0):
-    """按文件名 glob + 内容关键词搜索文件，返回匹配列表。
+def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
+                       max_results=50, context=0, content_regex=False,
+                       count_only=False):
+    """按文件名 glob + 内容匹配搜索文件。
 
-    - 单文件超过 SEARCH_MAX_FILE_BYTES 跳过（防 OOM）
-    - 内容匹配流式逐行读取
-    - context>0 时：同一文件的**每一处**匹配都列出，并带上前后各 context 行原文，
-      调用方拿到后可直接定位修改位置，省掉一轮 read_file_lines。
+    语义（正交，互不污染）：
+      - file_pattern 空/缺省 → 所有文件；非空 → 只扫匹配 glob 的文件
+      - content_pattern 空   → 只列文件（mode=files），不读内容
+      - content_pattern 非空 → 在筛出的文件里搜内容（mode=content）
+      - content_regex=True  → content_pattern 按 Python re 解析；False → 纯子串
+    返回带 mode / binary_skipped / scan_truncated / context_applied，调用方无需猜。
     """
     p = _resolve_path(path_str)
     if not p.exists():
         raise FileNotFoundError(f"路径不存在: {path_str}")
 
-    root = p if p.is_dir() else p.parent
+    scope = "dir" if p.is_dir() else "file"
+    if p.is_file():
+        files_iter = [p]
+    else:
+        files_iter = p.rglob(file_pattern or "*")
     matches = []
     scanned = 0
-    ctx = max(0, min(int(context or 0), 10))
+    binary_skipped = 0
+    large_skipped = 0
+    scan_truncated = False
+
+    ctx_raw = int(context or 0)
+    ctx = max(0, min(ctx_raw, 10))
+    context_applied = ctx if ctx != ctx_raw else None
+
+    # 编译内容模式
+    content_re = None
+    if content_pattern:
+        if content_regex:
+            try:
+                content_re = re.compile(content_pattern)
+            except re.error as e:
+                raise ValueError(f"content_pattern 正则无效: {e}")
+        else:
+            content_re = None  # 子串模式
 
     skip_dirs = {"__pycache__", ".git", "node_modules", ".venv", "dist", "build"}
+    MAX_SCAN_FILES = 5000
 
-    for f in root.rglob(pattern):
+    def _hit(line: str) -> bool:
+        if content_re is not None:
+            return content_re.search(line) is not None
+        return content_pattern in line
+
+    for f in files_iter:
         if not f.is_file():
             continue
         if any(part in skip_dirs for part in f.parts):
             continue
 
         scanned += 1
-        if scanned > 5000:
+        if scanned > MAX_SCAN_FILES:
+            scan_truncated = True
             break
 
         try:
@@ -1438,54 +1470,79 @@ def _search_files_sync(path_str, pattern="*", content=None, max_results=50, cont
         except OSError:
             continue
 
-        if content:
-            if fsize > SEARCH_MAX_FILE_BYTES:
-                continue  # 跳过超大文件，防 OOM
-            try:
-                lines = []
-                with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-                    for line in fh:
-                        lines.append(line.rstrip("\r\n"))
-                hit_lines = [ln for ln, line in enumerate(lines, 1) if content in line]
-                if not hit_lines:
-                    continue
-                if ctx == 0:
-                    matches.append(
-                        {"path": _rel_path(f), "size": fsize, "line": hit_lines[0]}
-                    )
-                else:
-                    for ln in hit_lines:
-                        lo = max(1, ln - ctx)
-                        hi = min(len(lines), ln + ctx)
-                        matches.append(
-                            {
-                                "path": _rel_path(f),
-                                "size": fsize,
-                                "line": ln,
-                                "context": [
-                                    {"line": n, "text": lines[n - 1]}
-                                    for n in range(lo, hi + 1)
-                                ],
-                            }
-                        )
-                        if len(matches) >= max_results:
-                            break
-            except Exception:
-                continue
-        else:
+        # ---- 只列文件：不读内容 ----
+        if not content_pattern:
             matches.append({"path": _rel_path(f), "size": fsize})
+            if len(matches) >= max_results:
+                break
+            continue
 
+        # ---- 搜内容：先做二进制/超大检查 ----
+        if fsize > SEARCH_MAX_FILE_BYTES:
+            large_skipped += 1
+            continue
+        try:
+            with open(f, "rb") as fb:
+                head = fb.read(8192)
+            if b"\x00" in head:
+                binary_skipped += 1
+                continue
+        except OSError:
+            continue
+
+        try:
+            lines = []
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    lines.append(line.rstrip("\r\n"))
+        except Exception:
+            continue
+
+        hit_lines = [ln for ln, line in enumerate(lines, 1) if _hit(line)]
+        if not hit_lines:
+            continue
+
+        if count_only:
+            matches.append({"path": _rel_path(f), "size": fsize,
+                            "count": len(hit_lines)})
+            if len(matches) >= max_results:
+                break
+            continue
+
+        # 每一处命中都返回；ctx>0 时带前后文
+        for ln in hit_lines:
+            item = {"path": _rel_path(f), "size": fsize, "line": ln,
+                    "text": lines[ln - 1]}
+            if ctx > 0:
+                lo = max(1, ln - ctx)
+                hi = min(len(lines), ln + ctx)
+                item["context"] = [
+                    {"line": n, "text": lines[n - 1]}
+                    for n in range(lo, hi + 1)
+                ]
+            matches.append(item)
+            if len(matches) >= max_results:
+                break
         if len(matches) >= max_results:
             break
 
-    return {
+    mode = "files" if not content_pattern else "content"
+    result = {
+        "mode": mode,
+        "scope": scope,
         "matches": matches,
         "total": len(matches),
         "scanned": scanned,
-        "truncated": len(matches) >= max_results,
+        "truncated": len(matches) >= max_results or scan_truncated,
+        "scan_truncated": scan_truncated,
+        "binary_skipped": binary_skipped,
+        "large_skipped": large_skipped,
         "context": ctx,
     }
-
+    if context_applied is not None:
+        result["context_applied"] = context_applied
+        result["context_note"] = f"context 上限 10，已从 {ctx_raw} 钳到 {ctx}"
+    return result
 
 # ============================================================
 # 插件入口
@@ -1696,13 +1753,26 @@ async def execute(envelop, agent):
             return envelop
 
         elif action == "search":
-            pattern = envelop.payload.get("pattern", "*")
-            content = envelop.payload.get("content")
+            # ★ 新参数名；旧名 pattern/content 仍兼容
+            file_pattern = envelop.payload.get(
+                "file_pattern",
+                envelop.payload.get("pattern", "*"),
+            )
+            content_pattern = envelop.payload.get(
+                "content_pattern",
+                envelop.payload.get("content"),
+            )
             max_results = int(envelop.payload.get("max_results", 50))
             context = int(envelop.payload.get("context", 0) or 0)
+            content_regex = bool(envelop.payload.get("content_regex", False))
+            count_only = bool(envelop.payload.get("count_only", False))
+
             result = await loop.run_in_executor(
                 None,
-                lambda: _search_files_sync(path_str, pattern, content, max_results, context),
+                lambda: _search_files_sync(
+                    path_str, file_pattern, content_pattern,
+                    max_results, context, content_regex, count_only,
+                ),
             )
             envelop.payload = {"ok": True, "data": result}
             return envelop
@@ -1731,4 +1801,4 @@ async def execute(envelop, agent):
     except Exception as e:
         envelop.payload = {"ok": False, "error": f"操作失败: {str(e)}"}
         return envelop
-# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,delete_lines,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys,start_line,end_line,mode,old_lines,new_lines | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,pattern,max_results,context | type_values=directory,file
+# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,delete_lines,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys,start_line,end_line,mode,old_lines,new_lines,matches,total,scanned,scan_truncated,binary_skipped,large_skipped,context,context_applied,context_note,count,text | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,file_pattern,content_pattern,content_regex,count_only,max_results,context,pattern | type_values=directory,file
