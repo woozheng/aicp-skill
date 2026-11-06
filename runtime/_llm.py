@@ -881,7 +881,10 @@ class LLM:
             think_unclosed = False
             yielded_any = False
             stage = "响应头"
-            deadline = time.monotonic() + self.stream_timeout
+            attempt_start = time.monotonic()
+            deadline = attempt_start + self.stream_timeout
+            first_chunk_at: Optional[float] = None
+            first_token_at: Optional[float] = None
             try:
                 _log(f"📡 stream {attempt + 1}/{self.max_retries} → {actual_model}")
 
@@ -897,6 +900,7 @@ class LLM:
                     ),
                     timeout=self.request_timeout,
                 )
+                t_header = time.monotonic() - attempt_start
 
                 buffer = ""
                 in_think: Optional[bool] = None
@@ -909,6 +913,8 @@ class LLM:
                     inter_token_timeout=self.inter_token_timeout,
                     total_deadline=deadline,
                 ):
+                    if first_chunk_at is None:
+                        first_chunk_at = time.monotonic() - attempt_start
                     u = self._extract_usage(chunk)
                     if u:
                         usage_acc = u
@@ -918,6 +924,15 @@ class LLM:
                     token = chunk.choices[0].delta.content
                     if not token:
                         continue
+                    if first_token_at is None:
+                        first_token_at = time.monotonic() - attempt_start
+                        _info(
+                            f"⏱️ 首token延迟 sid={session_id or get_current_session() or 'default'} "
+                            f"model={actual_model} "
+                            f"header={t_header * 1000:.0f}ms "
+                            f"frame={(first_chunk_at or 0.0) * 1000:.0f}ms "
+                            f"ttft={first_token_at * 1000:.0f}ms"
+                        )
 
                     buffer += token
 
@@ -1333,6 +1348,8 @@ class LLM:
             stage = "响应头"
             attempt_start = time.monotonic()
             deadline = attempt_start + self.stream_timeout
+            first_chunk_at: Optional[float] = None
+            ttft_logged = False
 
             try:
                 _info(
@@ -1355,6 +1372,7 @@ class LLM:
                     ),
                     timeout=self.request_timeout,
                 )
+                t_header = time.monotonic() - attempt_start
 
                 finish_reason = ""
                 in_think: Optional[bool] = None
@@ -1367,6 +1385,8 @@ class LLM:
                     inter_token_timeout=self.inter_token_timeout,
                     total_deadline=deadline,
                 ):
+                    if first_chunk_at is None:
+                        first_chunk_at = time.monotonic() - attempt_start
                     u = self._extract_usage(chunk)
                     if u:
                         usage_acc = u
@@ -1375,6 +1395,24 @@ class LLM:
                         continue
                     choice = chunk.choices[0]
                     delta = choice.delta
+
+                    if not ttft_logged:
+                        _has_reasoning = bool(
+                            getattr(delta, "reasoning_content", None)
+                            or getattr(delta, "reasoning", None)
+                            or getattr(delta, "thinking", None)
+                        )
+                        _has_content = bool(
+                            delta and getattr(delta, "content", None)
+                        )
+                        if _has_reasoning or _has_content:
+                            ttft_logged = True
+                            _info(
+                                f"⏱️ 首token延迟 sid={sid} model={actual_model} "
+                                f"header={t_header * 1000:.0f}ms "
+                                f"frame={(first_chunk_at or 0.0) * 1000:.0f}ms "
+                                f"ttft={(time.monotonic() - attempt_start) * 1000:.0f}ms"
+                            )
 
                     if getattr(choice, "finish_reason", None):
                         finish_reason = choice.finish_reason

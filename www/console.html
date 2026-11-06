@@ -313,6 +313,20 @@ body{
 .webview-toggle-btn svg{width:14px;height:14px;stroke-width:1.8}
 .webview-toggle-btn.hidden{display:none}
 
+/* 悬浮「回到底部」箭头（右侧，避开正文） */
+.scroll-down-btn{
+  position:absolute;right:20px;bottom:110px;z-index:18;
+  width:30px;height:30px;
+  display:none;align-items:center;justify-content:center;
+  background:var(--surface-2);color:var(--text-2);
+  border:1px solid var(--border);border-radius:50%;
+  box-shadow:0 2px 10px rgba(0,0,0,.18);
+  cursor:pointer;transition:.15s;
+}
+.scroll-down-btn.show{display:inline-flex}
+.scroll-down-btn:hover{background:var(--surface-3);color:var(--text)}
+.scroll-down-btn svg{width:15px;height:15px;stroke-width:2}
+
 /* 消息区 */
 .messages{
   flex:1;overflow-y:auto;
@@ -1087,6 +1101,9 @@ body{
     <button class="webview-toggle-btn" id="webviewToggleBtn" onclick="toggleWebviewFromCorner()" title="Toggle Preview">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
     </button>
+    <button class="scroll-down-btn" id="scrollDownBtn" onclick="scrollToBottomNow()" data-i18n-title="chat.scrollBottom" title="Back to bottom">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><polyline points="19 12 12 19 5 12"/></svg>
+    </button>
     <div class="messages" id="chatMessages">
       <div class="empty-chat">
         <div class="empty-mark">A</div>
@@ -1343,7 +1360,7 @@ var I18N = {
     'sidebar.search':'搜索对话...','sidebar.new':'+ 新对话',
     'sidebar.chat':'对话','sidebar.apps':'应用','sidebar.system':'系统',
     'chat.new':'新对话','chat.emptyDesc':'描述你的需求，或点左上角 ☰ 切换对话',
-    'chat.placeholder':'输入需求...',
+    'chat.placeholder':'输入需求...','chat.scrollBottom':'回到底部',
     'apps.title':'我的应用',
     'footer.session':'会话: -','footer.local':'本地',
     'footer.exp':'经验','footer.board':'看板','footer.cron':'心跳','footer.skill':'技能','footer.sub':'分身',
@@ -1378,7 +1395,7 @@ var I18N = {
     'sidebar.search':'Search conversations...','sidebar.new':'+ New chat',
     'sidebar.chat':'Chat','sidebar.apps':'Apps','sidebar.system':'System',
     'chat.new':'New chat','chat.emptyDesc':'Describe what you need, or click ☰ to switch conversations.',
-    'chat.placeholder':'Type your request...',
+    'chat.placeholder':'Type your request...','chat.scrollBottom':'Back to bottom',
     'apps.title':'My Apps',
     'footer.session':'Session: -','footer.local':'Local',
     'footer.exp':'Exp','footer.board':'Board','footer.cron':'Cron','footer.skill':'Skill','footer.sub':'Sub',
@@ -2073,7 +2090,7 @@ async function loadConversationFlow(id, beforeTs) {
                     inner.insertAdjacentHTML('afterbegin', '<div id="loadMoreTip">↑ ' + (_lang === 'zh' ? '往上滚动加载更早的记录（共 ' + (data.round_count || '?') + ' 轮）' : 'Scroll up to load earlier (' + (data.round_count || '?') + ' rounds)') + '</div>');
                 }
             } else { msgs.dataset.hasMore = '0'; }
-            msgs.scrollTop = msgs.scrollHeight;
+            scrollToBottom(true);
         }
     } catch (e) {
         if (!isLoadMore) {
@@ -2395,7 +2412,7 @@ function addUserMessage(content) {
     currentTurn = turn;
     toolNodes = {};
     thinkingLine = null;
-    requestAnimationFrame(function() { msgs.scrollTop = msgs.scrollHeight; });
+    scrollToBottom(true);
 }
 
 function addAssistantMessage(content) {
@@ -2414,7 +2431,7 @@ function addAssistantMessage(content) {
     var _key = _norm(content);
     var _last = currentTurn.querySelector('.msg.assistant:last-of-type .bubble');
     if (_last && _key && _norm(_last.textContent) === _key) {
-        requestAnimationFrame(function() { var msgs2 = document.getElementById('chatMessages'); if (msgs2) msgs2.scrollTop = msgs2.scrollHeight; });
+        scrollToBottom();
         return;
     }
     var div = document.createElement('div');
@@ -2422,7 +2439,7 @@ function addAssistantMessage(content) {
     div.dataset.rawKey = _key;
     div.innerHTML = '<div class="bubble">' + renderMarkdown(content) + '</div><div class="time">' + (_lang === 'zh' ? '系统 · ' : 'AI · ') + new Date().toLocaleTimeString(_lang === 'zh' ? 'zh-CN' : 'en-US',{hour12:false}) + '</div>';
     currentTurn.appendChild(div);
-    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+    scrollToBottom();
 }
 
 // ============ 工具链 ============
@@ -2448,19 +2465,55 @@ function getOrCreateToolChain() {
 }
 var _scrollPending = false;
 var _stickToBottom = true;   // 用户上翻历史时不再强制拉回底部
-// 统一置底：rAF 合并，避免 thinking 行插入/增长后被底部裁掉
-function scrollToBottom() {
+// 是否已贴在底部
+function isAtBottom(tol) {
+    var msgs = document.getElementById('chatMessages');
+    if (!msgs) return true;
+    return (msgs.scrollTop + msgs.clientHeight) >= (msgs.scrollHeight - (tol || 48));
+}
+// 悬浮「回到底部」箭头：贴在输入区上方右侧
+// 位置只在输入区高度变化时重算，避免每次 scroll 事件都读 offsetHeight 触发重排
+function positionScrollDownBtn() {
+    var btn = document.getElementById('scrollDownBtn');
+    var wrap = document.querySelector('#panel-chat .input-wrap');
+    if (!btn || !wrap) return;
+    // 面板底部还预留了 22px 状态栏高度（.panel{padding-bottom:22px}），
+    // 箭头需叠在输入区正上方：22(状态栏) + 输入区高 + 12(间隙)
+    btn.style.bottom = (wrap.offsetHeight + 34) + 'px';
+}
+function updateScrollDownBtn() {
+    var btn = document.getElementById('scrollDownBtn');
+    if (!btn) return;
+    if (typeof t === 'function') btn.title = t('chat.scrollBottom');
+    if (isAtBottom(48)) btn.classList.remove('show');
+    else btn.classList.add('show');
+}
+// 点击悬浮箭头：强制回到最底部
+function scrollToBottomNow() {
     var msgs = document.getElementById('chatMessages');
     if (!msgs) return;
-    if (!_stickToBottom) return;
+    _stickToBottom = true;
+    msgs.scrollTop = msgs.scrollHeight;
+    updateScrollDownBtn();
+}
+// 统一置底：rAF 合并，避免 thinking 行插入/增长后被底部裁掉
+// force=true 时无视用户上翻位置（发送消息 / 载入会话）
+function scrollToBottom(force) {
+    var msgs = document.getElementById('chatMessages');
+    if (!msgs) return;
+    if (!force && !_stickToBottom) { updateScrollDownBtn(); return; }
+    if (force) _stickToBottom = true;   // 强制置底后恢复「跟随底部」，避免内容变短时箭头残留
     if (_scrollPending) return;
     _scrollPending = true;
     requestAnimationFrame(function() {
+        if (!force && !_stickToBottom) { _scrollPending = false; updateScrollDownBtn(); return; }
         msgs.scrollTop = msgs.scrollHeight;
         // 第二帧再兜一次：thinking 行/工具节点刚插入时高度可能还没稳定
         requestAnimationFrame(function() {
+            if (!force && !_stickToBottom) { _scrollPending = false; updateScrollDownBtn(); return; }
             msgs.scrollTop = msgs.scrollHeight;
             _scrollPending = false;
+            updateScrollDownBtn();
         });
     });
 }
@@ -2493,9 +2546,34 @@ function initAutoScroll() {
     msgs.__autoScrollBound = true;
     var mo = new MutationObserver(function(){ scrollToBottom(); });
     mo.observe(msgs, { childList: true, subtree: true, characterData: true });
+    // 跟随标记只在「用户主动上翻」时置 false。
+    // 旧逻辑在每次 scroll 事件里用 isAtBottom 重算，内容变高（thinking 推来）时
+    // scrollTop 落后于 scrollHeight，会误判为「用户上翻」而把跟随标记清掉，
+    // 导致后续 thinking 再也拉不动底部。
+    var _lastScrollTop = msgs.scrollTop;
     msgs.addEventListener('scroll', function(){
-        _stickToBottom = (msgs.scrollTop + msgs.clientHeight) >= (msgs.scrollHeight - 48);
+        var top = msgs.scrollTop;
+        if (isAtBottom(48)) {
+            _stickToBottom = true;              // 回到底部 → 恢复跟随
+        } else if (top < _lastScrollTop) {
+            _stickToBottom = false;             // 用户主动上翻（滚动条/键盘/惯性）
+        }
+        // 内容变高引起的滚动（scrollTop 未减少）不改变跟随状态
+        _lastScrollTop = top;
+        updateScrollDownBtn();
     });
+    // 滚轮向上：明确表达「我要往上翻」，避免极端情况下没触发 scroll 事件
+    // 已在最上端（scrollTop<=0，内容不足以滚动）时不算上翻，否则会误停跟随
+    msgs.addEventListener('wheel', function(e){
+        if (e.deltaY < 0 && msgs.scrollTop > 0) _stickToBottom = false;
+    }, { passive: true });
+    positionScrollDownBtn();
+    updateScrollDownBtn();
+    // 输入区高度变化（如文本框自动增高）时同步箭头位置，避免压住输入区
+    var wrap = document.querySelector('#panel-chat .input-wrap');
+    if (wrap && typeof ResizeObserver === 'function') {
+        new ResizeObserver(function(){ positionScrollDownBtn(); }).observe(wrap);
+    }
 }
 
 function ensureThinkingLine() {
@@ -2612,7 +2690,7 @@ function handleToolStart(data) {
     chain.appendChild(node);
     toolNodes[data.call_id] = node;
     _lastThink = '';
-    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+    scrollToBottom();
 }
 function handleToolEnd(data) {
     var node = toolNodes[data.call_id];
@@ -2621,7 +2699,7 @@ function handleToolEnd(data) {
     node.classList.add(data.status === 'ok' ? 'ok' : 'error');
     var dur = node.querySelector('.dur');
     if (dur && data.duration_ms != null) dur.textContent = (data.duration_ms/1000).toFixed(1) + 's';
-    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+    scrollToBottom();
 }
 function handleReplyEnd(data) {
     endTurn();   // 回合真正结束：唯一的权威解锁点之一
@@ -2644,7 +2722,7 @@ function handleReplyEnd(data) {
         chain.appendChild(arrow);
     }
     chain.appendChild(replyNode);
-    requestAnimationFrame(function() { var msgs = document.getElementById('chatMessages'); if (msgs) msgs.scrollTop = msgs.scrollHeight; });
+    scrollToBottom();
     refreshActivity();
 }
 // ============ 活动状态（E/T/H/A/S/M 高亮，按作用域分组） ============
@@ -2784,7 +2862,7 @@ function renderFlowAsTurns(flow) {
     });
     inner.appendChild(frag);
     msgs.appendChild(inner);
-    msgs.scrollTop = msgs.scrollHeight;
+    scrollToBottom(true);
 }
 
 // ============ WebSocket ============
@@ -3658,7 +3736,7 @@ async function reloadModel(force) {
         if (cur.model_id) _mpSel = _mpCurProvider ? _mpCurProvider + '/' + cur.model_id : cur.model_id;
         var mtEl = document.getElementById('mpMaxTokens');
         var tpEl = document.getElementById('mpTemperature');
-        if (mtEl) mtEl.value = (cur.max_tokens !== null && cur.max_tokens !== undefined && cur.max_tokens !== '') ? cur.max_tokens : 32768;
+        if (mtEl) mtEl.value = (cur.max_tokens !== null && cur.max_tokens !== undefined && cur.max_tokens !== '') ? cur.max_tokens : 16384;
         if (tpEl) tpEl.value = (cur.temperature !== null && cur.temperature !== undefined && cur.temperature !== '') ? cur.temperature : 0.1;
 
         var r2 = await apiFetch(API_MODEL_PICKER, {action:'list_providers'});

@@ -79,7 +79,7 @@ TOOL_TIMEOUT = {
     "builtins/tools/fetch": 60,
     "builtins/tools/file_utils_api": 30,
     "builtins/tools/cogitor": 15,
-    "builtins/tools/contract_agent": 30,
+    "builtins/tools/contract_agent": 120,
     "builtins/tools/aicp_chat": 120,
     "default": 60,
 }
@@ -281,9 +281,10 @@ data/uploads/   用于应用上传功能。 `data/uploads/`（`{本机基址}/da
    → **看到 validation_failed 就当场改，不要等下一步才发现。**
 
 2. **search 的两个参数别搞反**：
-   `pattern` = 文件名 glob（"*.py"），`content` = 要找的子串。
-   写反会返回 `scanned: 0` 的**静默空结果**，会被误判成"代码里没有"。
-   正确：`{pattern:"*.py", content:"MAX_PDF_BYTES"}`。
+   `file_pattern` = 文件名 glob（"*.py"），`content_pattern` = 要找的内容。
+   写反后可能返回 `mode:"files"`（只列文件）或 `matches` 为空，不会报错，容易被误判成"代码里没有"。
+   正确：`{file_pattern:"*.py", content_pattern:"MAX_PDF_BYTES"}`。
+   要正则匹配时加 `content_regex:true`；只想要命中计数时加 `count_only:true`。
 
 3. **edit_file 要求 find 唯一**，匹配多处会报错要求你加长 find。
    这比"默认替换第一处"安全，是保护不是限制。

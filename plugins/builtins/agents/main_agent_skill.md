@@ -540,7 +540,7 @@ use_tool(
 
 | 意图 | 使用的工具 | 调用方式 |
 |---|---|---|
-| 不知道是否有现成工具 | `cogitor.search` | 用中英文查找，关键词内不要有空格 |
+| 不知道是否有现成工具，是否有skill用法 | `cogitor.search` | 用中英文查找，关键词内不要有空格 |
 | 知道插件名，但不知道用法 | `contract_agent.get` | 获取插件契约 |
 | 读取、写入或修改文件 | `file_utils_api` | 见“文件操作” |
 | 运行代码或调用库 | `code_runner` | 见“执行代码” |
@@ -553,11 +553,14 @@ use_tool(
 `cogitor.search` 示例：
 
 ```python
+# 用户问题：console.html 里聊天区自动滚动有问题，我改了 atBottom 判断，
+#           但前端还是往上翻的时候被拉到底，帮我找找相关插件/文件。
+
 use_tool(
     target="builtins/tools/cogitor",
     action="search",
     plugin_args={
-        "terms": ["关键词"],
+        "terms": ["滚动", "前端", "console"],   # OR 匹配，命中任意一个就返回
         "limit": 5,
     },
 )
@@ -591,7 +594,7 @@ use_tool(
 | `edit_file` | `path`、`find`、`replace` | 局部替换；`find` 必须与原文完全一致且唯一匹配；`replace=""` 表示删除该片段 |
 | `delete_lines` | `path`、`start_line`、`end_line` | 按行号区间删除行；显式删除整段入口；不传 `new_content` |
 | `list_dir` | `path` | 列出目录 |
-| `search` | `path`、`file_pattern?`、`content_pattern?`、`content_regex?`、`count_only?`、`max_results?`、`context?` | 递归搜索。`content_pattern` 空=只列文件（`mode:"files"`）；非空=搜内容（`mode:"content"`，每处命中带 `text`）。`content_regex=true` 走 Python 正则，否则纯子串。`count_only=true` 只返回每文件命中数。`context` 上限 10，超出返回 `context_applied`。 |
+| `search` | `path`、`file_pattern?`、`content_pattern?`、`content_regex?`、`count_only?`、`max_results?`、`context?` 入参都是字符串| 递归搜索。`content_pattern` 空=只列文件（`mode:"files"`）；非空=搜内容（`mode:"content"`，每处命中带 `text`）。`content_regex=true` 走 Python 正则，否则纯子串。`count_only=true` 只返回每文件命中数。`context` 上限 10，超出返回 `context_applied`。 |
 | `mkdir` | `path` | 创建目录 |
 | `delete_file` | `path` | 删除文件 |
 | `file_exists` | `path` | 检查文件是否存在 |
@@ -842,7 +845,7 @@ list_dir("www/apps")
 
 ### 读取 Demo 文件
 
-创建应用时读取 `plugins/applications/_demo/` 下的核心文件：
+创建应用时读取 `plugins/applications/_demo/` 下的核心示例文件：
 
 1. `app.yaml`
    - 系统应用配置。
@@ -994,17 +997,28 @@ MCP 工具应查看 prompt 中的 `<MCP_INDEX>` 并按签名传参。
 
 ## 铁律
 
+### 行为准则
+- 绝不猜 URL
+- 除非任务完成，否则响应里必须带工具调用
+- 开始前先收集齐上下文
+- __"不要提出你还没读过的代码的修改方案"__
+- 改完必须验证
+- 不要过度设计、不要顺手重构、不要给没改的代码加注释
+
+
 ### 工具调用
 
-默认一次调用一个工具，拿到结果后再决定下一步。
+#### 可以并行的场景（一次发多个 tool_call）
+以下调用互不依赖，应在同一轮一起发出，不要串行：
+- 探目录：list_dir(A) + list_dir(B) + list_dir(C)，A/B/C 无父子关系时。
+- 定位文件：多个 search(file_pattern=...) 搜不同目录/不同文件名模式。
+- 读多个不相关文件：read_file_lines(A) + read_file_lines(B)，A/B 无依赖。
+- 验证多个端点：code_runner 里一次打多个 URL，或一次 code_runner 内串行多个 call。
 
-例外：互不依赖的调用可以在同一轮一起发出，例如：
-
-- 使用 `cogitor.search` 搜索多个关键词。
-- 读取多个不相关文件。
-- 执行批量自检。
-
-系统会按顺序串行执行这些调用，并非并行。存在依赖关系的调用必须拆成不同轮次。
+#### 必须串行的场景
+- 下一步的入参依赖上一步的返回（如先 search 拿到路径，再 read_file_lines）。
+- 写文件后要 read_file 校验。
+- 同一文件同一关键词已失败 2 次，第 3 次不要换写法重试，换文件或换思路。。
 
 ### 工具选择
 
@@ -1099,7 +1113,7 @@ MCP 工具应查看 prompt 中的 `<MCP_INDEX>` 并按签名传参。
 
 ### 沉淀要求
 
-- 沉淀可复用的一般技能。
+- 沉淀可复用的一般技能。沉淀前说明沉淀原因reply用户，同意后再开始沉淀
 - 不沉淀用户需求变更过程、错误历史或任务日志。
 - 写入前先检查是否存在类似内容：
 - 如果存在，读取后归并。

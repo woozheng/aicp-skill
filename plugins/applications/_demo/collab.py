@@ -64,10 +64,13 @@ async def execute(envelop, agent):
             # 真实契约来源：builtins/tools/contract_agent（旧路由 builtins/agents/contract_agent 不存在）
             plugin = str(payload.get("plugin") or "builtins/tools/file_utils_api").strip()
             try:
-                res = await agent.system.call(_envelop(
-                    "builtins/tools/contract_agent",
-                    {"action": "get", "plugin": plugin, "auto_load": False},
-                ))
+                res = await agent.system.call(
+                    _envelop(
+                        "builtins/tools/contract_agent",
+                        {"action": "get", "plugin": plugin, "auto_load": False},
+                    ),
+                    timeout=180,
+                )
             except Exception as e:
                 envelop.payload = {"ok": False, "error": f"contract_agent 调用失败: {str(e)[:160]}", "plugin": plugin}
                 return envelop

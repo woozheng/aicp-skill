@@ -34,7 +34,7 @@ def _sr():
 
 
 # 单次发送超时（秒）。对端不读 -> 超时 -> 剔除，避免 push 卡死。
-WS_SEND_TIMEOUT = 2.0
+WS_SEND_TIMEOUT = 0.5
 
 
 class WebSocketGateway:
@@ -69,64 +69,51 @@ class WebSocketGateway:
         self._ws_id.pop(ws, None)
 
     async def push(self, channel_id, data):
-        """向 channel 推送。单次 send 超时后强制 close，连续失败剔除。"""
-        sent = 0
-        dead = []
-        for ws in list(self._channels.get(channel_id, set())):
-            if ws.closed:
-                dead.append(ws)
-                continue
+        """向 channel 推送。并发发送，单次 send 超时 0.5s，close 超时 0.1s。"""
+        targets = [ws for ws in list(self._channels.get(channel_id, set())) if not ws.closed]
+        if not targets:
+            return 0
+        results = await asyncio.gather(
+            *[self._push_one(ws, channel_id, data) for ws in targets],
+            return_exceptions=True,
+        )
+        return sum(1 for r in results if r is True)
+
+    async def _push_one(self, ws, channel_id, data):
+        """单个连接发送。True=成功，False=失败已剔除。"""
+        try:
+            await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
+            self._send_fail_count.pop(ws, None)
+            return True
+        except asyncio.TimeoutError:
+            cnt = self._send_fail_count.get(ws, 0) + 1
+            self._send_fail_count[ws] = cnt
+            print(f"[WS Gateway] push 超时（{WS_SEND_TIMEOUT}s）第 {cnt} 次，"
+                  f"强制关闭 channel={channel_id}")
             try:
-                await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
-                sent += 1
-                self._send_fail_count.pop(ws, None)
-            except asyncio.TimeoutError:
-                cnt = self._send_fail_count.get(ws, 0) + 1
-                self._send_fail_count[ws] = cnt
-                print(
-                    f"[WS Gateway] push 超时（{WS_SEND_TIMEOUT}s）"
-                    f" 第 {cnt} 次，强制关闭 channel={channel_id}"
-                )
-                try:
-                    await asyncio.wait_for(ws.close(code=1001), timeout=1.0)
-                except Exception:
-                    pass
-                dead.append(ws)
-            except Exception as e:
-                print(f"[WS Gateway] push 发送异常: {e}")
-                dead.append(ws)
-        for ws in dead:
+                # ★ close 超时从 1.0 降到 0.1：只发 FIN，不等对端
+                await asyncio.wait_for(ws.close(code=1001), timeout=0.1)
+            except Exception:
+                pass
             self.unregister(ws)
             self._send_fail_count.pop(ws, None)
-        return sent
+            return False
+        except Exception as e:
+            print(f"[WS Gateway] push 发送异常: {e}")
+            self.unregister(ws)
+            self._send_fail_count.pop(ws, None)
+            return False
 
     async def broadcast(self, data):
-        """向所有连接广播。单次 send 超时后强制 close，死连接剔除。"""
-        sent = 0
-        dead = []
-        for ws in list(self._ws_to_channels.keys()):
-            if ws.closed:
-                dead.append(ws)
-                continue
-            try:
-                await asyncio.wait_for(ws.send_json(data), timeout=WS_SEND_TIMEOUT)
-                sent += 1
-                self._send_fail_count.pop(ws, None)
-            except asyncio.TimeoutError:
-                cnt = self._send_fail_count.get(ws, 0) + 1
-                self._send_fail_count[ws] = cnt
-                print(f"[WS Gateway] broadcast 超时（{WS_SEND_TIMEOUT}s）第 {cnt} 次，强制关闭")
-                try:
-                    await asyncio.wait_for(ws.close(code=1001), timeout=1.0)
-                except Exception:
-                    pass
-                dead.append(ws)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.unregister(ws)
-            self._send_fail_count.pop(ws, None)
-        return sent
+        """向所有连接广播。并发发送，单次 send 超时 0.5s。"""
+        targets = [ws for ws in list(self._ws_to_channels.keys()) if not ws.closed]
+        if not targets:
+            return 0
+        results = await asyncio.gather(
+            *[self._push_one(ws, "_broadcast", data) for ws in targets],
+            return_exceptions=True,
+        )
+        return sum(1 for r in results if r is True)
 
     def get_status(self):
         channels_info = {}

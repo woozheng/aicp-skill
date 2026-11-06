@@ -163,7 +163,7 @@ class SystemServer:
             else self._route(envelop, self._agent)
         )
         try:
-            response = await asyncio.wait_for(asyncio.shield(task), timeout=call_timeout)
+            response = await asyncio.wait_for(task, timeout=call_timeout)
         except asyncio.TimeoutError:
             task.cancel()
             try:

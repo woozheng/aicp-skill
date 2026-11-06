@@ -116,23 +116,40 @@ def _get_env_summary() -> Dict[str, Any]:
         res["disk_free_gb"] = "unknown"
 
     # --- GPU ---
+    # 不 import torch：仅为探测 GPU 存在性就 import torch 会常驻 ~175MB 内存。
+    # 用 nvidia-smi 判断有没有 NVIDIA GPU，用 find_spec 判断 torch 是否已安装。
     try:
-        import torch
-        if torch.cuda.is_available():
-            res["gpu"] = True
-            try:
-                res["gpu_name"] = torch.cuda.get_device_name(0)
-            except Exception:
-                res["gpu_name"] = "unknown"
-        else:
-            res["gpu"] = False
-            res["gpu_note"] = "torch 已装但 CUDA 不可用（无 GPU 或驱动缺失）"
-    except ImportError:
+        import importlib.util as _ilu_gpu
+        _has_torch = _ilu_gpu.find_spec("torch") is not None
+    except Exception:
+        _has_torch = False
+
+    _gpu_found = False
+    _gpu_name = None
+    try:
+        import subprocess as _sp
+        _r = _sp.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if _r.returncode == 0 and _r.stdout and _r.stdout.strip():
+            _lines = [x.strip() for x in _r.stdout.strip().splitlines() if x.strip()]
+            if _lines:
+                _gpu_found = True
+                _gpu_name = _lines[0]
+    except Exception:
+        pass
+
+    if _gpu_found:
+        res["gpu"] = True
+        res["gpu_name"] = _gpu_name
+        res["gpu_note"] = "检测到 NVIDIA GPU"
+    elif _has_torch:
+        res["gpu"] = False
+        res["gpu_note"] = "torch 已装但未检测到 NVIDIA GPU（无 GPU 或驱动缺失）"
+    else:
         res["gpu"] = "no_torch"
         res["gpu_note"] = "torch 未装，不要尝试 CUDA 相关包"
-    except Exception as e:
-        res["gpu"] = f"probe_fail: {type(e).__name__}"
-        res["gpu_note"] = "torch 探测失败，不要依赖 CUDA"
 
     # --- 常用库可用性 ---
     import importlib.util as _ilu

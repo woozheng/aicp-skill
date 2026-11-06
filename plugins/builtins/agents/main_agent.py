@@ -1094,7 +1094,7 @@ class InformationFlow:
             selected = [r for r in rounds if (r[0].get("round_no") or 0) in baseline_set]
 
         # ============================================================
-        # 2. 强制补「上一轮」（last_r_no - 1），供全展开示范
+        # 2. 强制补「上一轮」（last_r_no - 1），供 ##N.M 摘要
         # ============================================================
         if last_r_no > 1:
             prev_r_no = last_r_no - 1
@@ -1135,14 +1135,13 @@ class InformationFlow:
         total = len(rounds)
         omitted = total - len(selected)
         if omitted > 0 and len(selected) > 1:
-            msgs.append({"role": "user", "content":
-                    f"（{omitted} 轮历史已省略）"})
+            msgs.append({"role": "user", "content": f"（{omitted} 轮历史已省略）"})
 
         # ============================================================
-        # 6. 渲染选中轮
+        # 6. 渲染选中轮（三档）
         #   - 当前轮（is_last）：  #N + ##N.M 全量 + tail
-        #   - 上一轮（is_prev）：  #N + ##N.M 全量（不含 tail）
-        #   - 其他选中轮：         #N 级（user + reply）
+        #   - 上一轮（is_prev）：  #N + ##N.M 摘要（_chain_result_hint）
+        #   - 其他历史轮：          #N 级（user + reply）
         # ============================================================
         for entries in selected:
             r_no = entries[0].get("round_no") or 0
@@ -1158,31 +1157,34 @@ class InformationFlow:
             if reply_text and not is_last:
                 block.append({"role": "assistant", "content": reply_text})
 
-            if is_last or is_prev:
-                # ---- 当前轮 / 上一轮：全展开（##N.M 全量）----
+            if is_last:
+                # ---- 当前轮：全展开（##N.M 全量）+ tail ----
                 msgs.extend(block)
                 chains = self._group_chains(entries)
                 for c_no in sorted(chains.keys()):
                     full = self._render_chain_full(chains[c_no], r_no, c_no)
                     if full:
                         msgs.append({"role": "user", "content": full})
-                # 只有当前轮带 tail（manage_flow 记录）
-                if is_last:
-                    tail = self._render_current_tail(entries)
-                    if tail:
-                        msgs.append({"role": "user", "content": tail})
+                tail = self._render_current_tail(entries)
+                if tail:
+                    msgs.append({"role": "user", "content": tail})
+
+            elif is_prev:
+                # ---- 上一轮：#N 级 + ##N.M 摘要 ----
+                msgs.extend(block)
+                chains = self._group_chains(entries)
+                for c_no in sorted(chains.keys()):
+                    t, a = self._chain_target_action(chains[c_no])
+                    hint = self._chain_result_hint(chains[c_no])
+                    label = f"{t}.{a}" if a and a != "none" else t
+                    if hint:
+                        msgs.append({"role": "user", "content": f"## {r_no}.{c_no} {label}{hint}"})
+                    else:
+                        msgs.append({"role": "user", "content": f"## {r_no}.{c_no} {label}"})
+
             else:
-                # ---- 其他选中轮：优先用固化快照，没有则默认 ----
-                snap = self._round_snapshots.get(r_no)
-                if snap is not None:
-                    user_text = self._render_round_user(entries)
-                    reply_text = self._render_round_reply_with_snapshot(entries, snap)
-                    if user_text:
-                        msgs.append({"role": "user", "content": user_text})
-                    if reply_text:
-                        msgs.append({"role": "assistant", "content": reply_text})
-                else:
-                    msgs.extend(block)
+                # ---- 更早的历史轮：只给 #N 级（user + reply）----
+                msgs.extend(block)
 
         return msgs
 
@@ -1499,10 +1501,7 @@ class InformationFlow:
                     bits.append(f"上下文 {cb:,} → {ca:,}")
                 if bits:
                     return " → " + " · ".join(bits)
-                if cb is not None and ca is not None:
-                    bits.append(f"上下文 {cb:,} → {ca:,}")
-                if bits:
-                    return " → " + " · ".join(bits)
+
 
             # G. 兜底：抽 1~2 个标量
             scalars = []
@@ -1660,239 +1659,118 @@ def _get_or_create_flow(user_id: str, session_id: str) -> InformationFlow:
 # WS 推送
 # ============================================================
 
-async def _push_progress(agent, user_id, session_id, step, msg, extra=None):
-    # ★ 本 session 已确认无前端：直接短路
-    if _WS_DEAD.get(session_id, False):
+# ============================================================
+# WS 推送
+# ============================================================
+# 设计：
+#   - 所有 _push_* 都是 fire-and-forget：调用方最多等 50ms（task 启动窗口），
+#     不 await 推送完成，WS 慢/堵时不会卡主流程。
+#   - 真正的推送在 _push_bg 里跑，内部 6s 超时，失败静默，不抛异常。
+#   - sent=0 时置 _WS_DEAD，本回合后续推送直接短路。
+# ============================================================
+
+_PUSH_START_WINDOW = 0.05   # 调用方等待 task 启动的窗口（秒）
+_PUSH_BG_TASKS: set = set()
+_PUSH_BG_MAX = 256   # 上限保护：WS 长期异常时不无限堆积
+_WS_DEAD: Dict[str, bool] = {}
+_WS_DEAD_FAIL: Dict[str, int] = {}   # 连续 sent=0 计数
+
+async def _push_bg(agent, user_id: str, session_id: str, data: dict) -> int:
+    """后台推送：内部 6s 超时，失败静默。不抛异常，不阻塞调用方。"""
+    try:
+        result = await asyncio.wait_for(
+            agent.system.call(core.Envelop(
+                sender="builtins/agents/main_agent",
+                receiver="os/_websocket",
+                meta={"session_id": session_id},
+                payload={
+                    "action": "push",
+                    "channel_id": f"pa_{user_id}",
+                    "data": data,
+                }
+               ), timeout=5.0),
+            timeout=1.0,
+        )
+        payload = getattr(result, "payload", None) or {}
+        sent = int(payload.get("sent") or 0)
+        if sent == 0:
+            # ★ 连续 3 次 sent=0 才置 _WS_DEAD，避免一次网络抖动永久短路
+            cnt = _WS_DEAD_FAIL.get(session_id, 0) + 1
+            _WS_DEAD_FAIL[session_id] = cnt
+            if cnt >= 3:
+                _WS_DEAD[session_id] = True
+                Logger.warn(f"[WS] 连续 {cnt} 次 sent=0，置 _WS_DEAD session={session_id}")
+        else:
+            _WS_DEAD_FAIL.pop(session_id, None)
+        return sent
+    except asyncio.TimeoutError:
+        Logger.warn(f"[WS] 推送超时 6s，已放弃 type={data.get('type')}")
         return 0
+    except Exception as e:
+        Logger.warn(f"[WS] 推送失败: {type(e).__name__}: {e}")
+        return 0
+
+
+async def _push_nowait(agent, user_id: str, session_id: str, data: dict, critical: bool = False) -> int:
+    """fire-and-forget：create_task 后立即返回，不 await 完成。
+
+    critical=True 时忽略 _WS_DEAD，关键推送（chat / progress / stats）不短路。
+    """
+    if not critical and _WS_DEAD.get(session_id, False):
+        return 0
+    try:
+        if len(_PUSH_BG_TASKS) >= _PUSH_BG_MAX:
+            Logger.warn(f"[WS] 后台推送任务堆积达 {_PUSH_BG_MAX}，丢弃本帧 type={data.get('type')}")
+            return 0
+        task = asyncio.create_task(_push_bg(agent, user_id, session_id, data))
+    except Exception as e:
+        Logger.warn(f"[WS] 后台推送创建失败: {type(e).__name__}: {e}")
+        return 0
+    _PUSH_BG_TASKS.add(task)
+    task.add_done_callback(_PUSH_BG_TASKS.discard)
+    return 0
+
+
+async def _push_progress(agent, user_id, session_id, step, msg, extra=None):
     data = {"type": "progress", "session_id": session_id, "step": step, "msg": msg}
     if extra:
         data.update(extra)
-    task = asyncio.ensure_future(agent.system.call(core.Envelop(
-        sender="builtins/agents/main_agent",
-        receiver="os/_websocket",
-        meta={"session_id": session_id},
-        payload={
-            "action": "push",
-            "channel_id": f"pa_{user_id}",
-            "data": data,
-        }
-    )))
-    try:
-        # ★ 不用 shield：shield 会让超时/取消无法传播到内层 task，
-        #   导致 task 泄漏在后台继续跑（持有 websocket 连接），且
-        #   _PUSH_BG_TASKS 的 done_callback 永不触发 → 集合无限堆积。
-        await asyncio.wait_for(task, timeout=6.0)
-    except asyncio.TimeoutError:
-        task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
-        Logger.warn(f"[WS] push_progress 超时 6s，已放弃")
-        return 0
-    except Exception as e:
-        Logger.warn(f"[WS] push_progress 失败: {type(e).__name__}: {e}")
-        return 0
-    # ★ 拿到 sent：0 说明频道无人，本回合后续不再推
-    try:
-        res = task.result() if task.done() else None
-        payload = getattr(res, "payload", None) or {}
-        sent = int(payload.get("sent") or 0)
-    except Exception:
-        sent = 0
-    if sent == 0:
-        _WS_DEAD[session_id] = True
-    return sent
+    return await _push_nowait(agent, user_id, session_id, data, critical=True)
 
 
 async def _push_chat(agent, user_id, session_id, content):
-    if _WS_DEAD.get(session_id, False):
-        return 0
-    task = asyncio.ensure_future(agent.system.call(core.Envelop(
-        sender="builtins/agents/main_agent",
-        receiver="os/_websocket",
-        meta={"session_id": session_id},
-        payload={
-            "action": "push",
-            "channel_id": f"pa_{user_id}",
-            "data": {"type": "chat", "session_id": session_id, "content": content},
-        }
-    )))
-    try:
-        # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
-        await asyncio.wait_for(task, timeout=6.0)
-    except asyncio.TimeoutError:
-        task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
-        Logger.warn(f"[WS] 推送 chat 超时 6s，已放弃")
-        return 0
-    except Exception as e:
-        Logger.warn(f"[WS] 推送消息失败: {type(e).__name__}: {e}")
-        return 0
-    try:
-        res = task.result() if task.done() else None
-        payload = getattr(res, "payload", None) or {}
-        sent = int(payload.get("sent") or 0)
-    except Exception:
-        sent = 0
-    if sent == 0:
-        _WS_DEAD[session_id] = True
-    return sent
+    data = {"type": "chat", "session_id": session_id, "content": content}
+    return await _push_nowait(agent, user_id, session_id, data, critical=True)
+
 
 async def _push_stream(agent, user_id: str, session_id: str, chunk: str):
-    if _WS_DEAD.get(session_id, False):
-        return 0
-    task = asyncio.ensure_future(agent.system.call(core.Envelop(
-        sender="builtins/agents/main_agent",
-        receiver="os/_websocket",
-        meta={"session_id": session_id},
-        payload={
-            "action": "push",
-            "channel_id": f"pa_{user_id}",
-            "data": {"type": "summary_stream", "session_id": session_id, "chunk": chunk},
-        }
-    )))
-    try:
-        # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
-        await asyncio.wait_for(task, timeout=6.0)
-    except asyncio.TimeoutError:
-        task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
-        Logger.warn(f"[WS] 流式推送超时 6s，已放弃")
-        return 0
-    except Exception as e:
-        Logger.warn(f"[WS] 流式推送失败: {type(e).__name__}: {e}")
-        return 0
-    try:
-        res = task.result() if task.done() else None
-        payload = getattr(res, "payload", None) or {}
-        sent = int(payload.get("sent") or 0)
-    except Exception:
-        sent = 0
-    if sent == 0:
-        _WS_DEAD[session_id] = True
-    return sent
-# ★ 后台推送任务强引用集合：asyncio 只持弱引用，不存引用会被 GC 回收
-_PUSH_BG_TASKS: set = set()
-_PUSH_BG_MAX = 256   # 上限保护：WS 长期异常时不无限堆积
+    data = {"type": "summary_stream", "session_id": session_id, "chunk": chunk}
+    return await _push_nowait(agent, user_id, session_id, data)
 
-# ★ 无前端短路：session_id -> True 表示本回合已确认无 WS 连接，后续推送直接跳过
-#   初始不存在（视作「有前端」）；第一次 push 返回 sent=0 时置 True；回合结束清理。
-_WS_DEAD: Dict[str, bool] = {}
+
+async def _push_stats_data(agent, user_id, session_id, stats: dict):
+    data = {"type": "stats", "session_id": session_id, "stats": stats}
+    return await _push_nowait(agent, user_id, session_id, data, critical=True)
+
+
+
 
 
 def _push_stream_nowait(agent, user_id: str, session_id: str, chunk: str):
-    """后台推送流式片段，不阻塞调用方（用于 LLM 流消费循环内）。
-
-    与 _push_stream 的区别：不 await、不抛异常。
-    内部仍有 6s 超时兜底（在 _push_stream 里），所以任务不会永久挂住。
-    """
-    # ★ 本 session 已确认无前端：不创建任务
+    """后台推送流式片段，不阻塞调用方（用于 LLM 流消费循环内）。"""
     if _WS_DEAD.get(session_id, False):
         return
+    if len(_PUSH_BG_TASKS) >= _PUSH_BG_MAX:
+        Logger.warn(f"[WS] 后台推送任务堆积达 {_PUSH_BG_MAX}，丢弃本帧")
+        return
+    data = {"type": "summary_stream", "session_id": session_id, "chunk": chunk}
     try:
-        if len(_PUSH_BG_TASKS) >= _PUSH_BG_MAX:
-            Logger.warn(f"[WS] 后台推送任务堆积达 {_PUSH_BG_MAX}，丢弃本帧")
-            return
-        task = asyncio.create_task(
-            _push_stream(agent, user_id, session_id, chunk)
-        )
+        task = asyncio.create_task(_push_bg(agent, user_id, session_id, data))
     except Exception as e:
         Logger.warn(f"[WS] 后台推送创建失败: {type(e).__name__}: {e}")
         return
     _PUSH_BG_TASKS.add(task)
     task.add_done_callback(_PUSH_BG_TASKS.discard)
-
-
-# ============================================================
-# 流式推送：合并 + 异步
-# ============================================================
-_STREAM_BUFFERS: Dict[str, list] = {}       # session_id -> [chunk, ...]
-_STREAM_FLUSH_TASKS: Dict[str, asyncio.Task] = {}
-_STREAM_FLUSH_INTERVAL = 0.3                 # 100ms 合并一次
-_STREAM_BUFFER_MAX = 128                      # buffer 超过 64 个 chunk 强制 flush
-
-
-async def _flush_stream_buffer(agent, user_id: str, session_id: str):
-    if _WS_DEAD.get(session_id, False):
-        # 已确认无前端：清空 buffer，不再推
-        _STREAM_BUFFERS.pop(session_id, None)
-        return
-    buf = _STREAM_BUFFERS.get(session_id)
-    if not buf:
-        return
-    text = "".join(buf)
-    buf.clear()
-    if not text:
-        return
-    try:
-        await asyncio.wait_for(
-            _push_stream(agent, user_id, session_id, text),
-            timeout=2.0,
-        )
-    except (asyncio.TimeoutError, Exception) as e:
-        Logger.warn(f"[WS] flush 推送失败: {type(e).__name__}: {e}")
-
-
-async def _flush_loop(agent, user_id: str, session_id: str):
-    try:
-        while True:
-            await asyncio.sleep(_STREAM_FLUSH_INTERVAL)
-            try:
-                await asyncio.wait_for(
-                    _flush_stream_buffer(agent, user_id, session_id),
-                    timeout=3.0,
-                )
-            except (asyncio.TimeoutError, Exception) as e:
-                Logger.warn(f"[WS] flush 超时/失败: {type(e).__name__}: {e}")
-    except asyncio.CancelledError:
-        try:
-            await asyncio.wait_for(
-                _flush_stream_buffer(agent, user_id, session_id),
-                timeout=2.0,
-            )
-        except (asyncio.TimeoutError, Exception):
-            pass
-        raise
-
-
-def _buffer_stream_chunk(agent, user_id:str,session_id: str, chunk: str):
-    """把一个 chunk 塞进 buffer。超过阈值时立即 flush。"""
-    if not chunk:
-        return
-    # ★ 本 session 已确认无前端：不 buffer、不 flush
-    if _WS_DEAD.get(session_id, False):
-        return
-    buf = _STREAM_BUFFERS.setdefault(session_id, [])
-    buf.append(chunk)
-
-    # 超过阈值：立即异步 flush（不阻塞调用方）
-    if len(buf) >= _STREAM_BUFFER_MAX:
-        asyncio.create_task(_flush_stream_buffer(agent, user_id,session_id))
-
-    # 确保 flush loop 在跑
-    task = _STREAM_FLUSH_TASKS.get(session_id)
-    if task is None or task.done():
-        _STREAM_FLUSH_TASKS[session_id] = asyncio.create_task(_flush_loop(agent, user_id,session_id))
-
-
-async def _stop_stream_flush(session_id: str):
-    """停止 flush loop，并最后 flush 一次。"""
-    task = _STREAM_FLUSH_TASKS.pop(session_id, None)
-    if task and not task.done():
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-
 
 
 # ============================================================
@@ -2986,6 +2864,10 @@ class ToolRegistry:
             route_timeout = min(max(_ts + 20, 60), 320)
         elif target == "builtins/tools/save_blocks":
             route_timeout = 120
+        elif target == "builtins/tools/contract_agent":
+            # 契约提取内部 LLM 调用已给 120s（见 contract_agent.py 的 wait_for），
+            # 外层必须留余量，否则内层刚超时、外层 route 先断，看不到真实错误
+            route_timeout = 180
         elif target == "builtins/agents/main_agent":
             route_timeout = 180
         else:
@@ -3198,17 +3080,16 @@ class LLMThinker:
                 etype = event.get("type")
                 if etype == "thinking":
                     chunk = event.get("content", "")
-                    _buffer_stream_chunk(agent, user_id, session_id, chunk)
+                    _push_stream_nowait(agent, user_id, session_id, chunk)
                 elif etype == "text":
                     chunk = event.get("content", "")
                     text_buf += chunk
-                    _buffer_stream_chunk(agent, user_id, session_id, chunk)
+                    _push_stream_nowait(agent, user_id, session_id, chunk)
                 elif etype == "tool_call_delta":
-                    # ★ 仅推送进度，不写入 text_buf / flow；让前端在“等完整 tool_call”期间看到参数在涨
                     _name = event.get("name", "") or ""
                     _alen = event.get("args_len", 0) or 0
                     _buf = f"\n⚙️ {_name} ({_alen}B)" if _name else f"\n⚙️ ({_alen}B)"
-                    _buffer_stream_chunk(agent, user_id, session_id, _buf)
+                    _push_stream_nowait(agent, user_id, session_id, _buf)
                 elif etype == "retry":
                     await _push_progress(
                         agent, user_id, session_id, "executing",
@@ -3351,7 +3232,7 @@ class LLMThinker:
                 elif etype == "done":
                     break
         finally:
-            await _stop_stream_flush(session_id)
+            pass
 
         # ★ manage_flow 处理完，但本轮还有其他 tool_call / text → 正常走后续分支
         if manage_flow_done and not tool_calls_list and not text_buf.strip():
@@ -3723,13 +3604,11 @@ async def _push_stats(agent, user_id: str, session_id: str, depth: int = 0):
         else:
             ctx_k = _last_ctx_k.get(session_id, 0)
 
-        # ★ 最近一次调用命中率
         last_prompt = int(llm_stats.get("last_prompt_tokens", 0) or 0)
         last_cache_read = int(llm_stats.get("last_cache_read_tokens", 0) or 0)
         cache_hit_rate = round(last_cache_read / last_prompt, 4) if last_prompt > 0 else 0.0
         cache_hit_pct = round(cache_hit_rate * 100, 1)
 
-        # ★ 累计命中率
         total_prompt = int(llm_stats.get("prompt_tokens", 0) or 0)
         total_cache_read = int(llm_stats.get("cache_read_tokens", 0) or 0)
         cache_hit_rate_total = round(total_cache_read / total_prompt, 4) if total_prompt > 0 else 0.0
@@ -3740,37 +3619,17 @@ async def _push_stats(agent, user_id: str, session_id: str, depth: int = 0):
             "round_total": llm_stats.get("round_total_tokens", 0),
             "depth": depth,
             "max_depth": MAX_RECURSION_DEPTH,
-            # 最近一次
             "cache_read": last_cache_read,
             "cache_hit_rate": cache_hit_rate,
             "cache_hit_pct": cache_hit_pct,
             "last_prompt": last_prompt,
-            # 累计
             "cache_read_total": total_cache_read,
             "cache_hit_rate_total": cache_hit_rate_total,
             "cache_hit_pct_total": cache_hit_pct_total,
             "total_prompt": total_prompt,
         }
-        task = asyncio.ensure_future(agent.system.call(core.Envelop(
-            sender="builtins/agents/main_agent",
-            receiver="os/_websocket",
-             meta={"session_id": session_id},
-            payload={"action": "push", "channel_id": f"pa_{user_id}",
-
-                     "data": {"type": "stats", "session_id": session_id, "stats": stats}}
-        )))
-        try:
-            # ★ 不用 shield：超时后必须能真正取消 task，避免后台泄漏
-            await asyncio.wait_for(task, timeout=6.0)
-        except asyncio.TimeoutError:
-            task.cancel()
-            try:
-                await asyncio.wait_for(task, timeout=2.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
-            Logger.warn(f"[WS] 推送 stats 超时 6s，已放弃 session={session_id}")
-        except Exception as e:
-            Logger.warn(f"[WS] 推送 stats 失败: {type(e).__name__}: {e}")
+        # ★ fire-and-forget：不卡主流程
+        await _push_stats_data(agent, user_id, session_id, stats)
     except Exception as e:
         Logger.warn(f"[WS] 推送 stats 失败: {e}")
 
@@ -4139,7 +3998,6 @@ async def _run_processing(agent, user_id, session_id, flow):
                 core_processor.clear_interrupt(session_id)
                 core_processor.mark_turn_end(session_id)
                 # ★ 回合结束清理无前端标记（下次新回合重新探测）
-                _WS_DEAD.pop(session_id, None)
 
     except ConnectionError as e:
         Logger.warn(f"[network] 网络中断: {str(e)[:150]}")
@@ -4750,7 +4608,6 @@ async def execute(envelop, agent):
             finally:
                 core_processor._think_sessions.discard(session_id)
                 core_processor.clear_interrupt(session_id)
-                _WS_DEAD.pop(session_id, None)   # ★ 分身回合结束清理
 
             # ★ 显式带回 task_id / parent_session，供 task_manager 认领
             envelop.payload = {

@@ -6,8 +6,8 @@ tags: [runtime, llm, stream, think, timeout, retry]
 triggers: 不生效, 没生效, 不起作用, 重新加载, 重启引擎, 热重载, think剥离, 剥离think, 泄露think, 流式超时, 重试, 旧模块, not effective, restart engine, reload module, strip think, stream timeout, retry, stale module, hot reload
 not_triggers: 前端页面, 样式修改, 插件路由, 新建应用, 生成应用
 examples: "改了 runtime/_llm.py 但线上没生效", "think 标签还是泄露出来了", "帮我看下 edit_file 改完报语法错 line 120", "the llm stream still uses the old module after my edit"
-version: 2.0
-updated_at: 2026-11-05
+version: 2.1
+updated_at: 2026-11-06
 ---
 
 # 修 runtime/_llm.py 流式逻辑

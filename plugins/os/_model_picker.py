@@ -23,7 +23,7 @@ CONFIG_PATH = Path("aicp.yaml")
 ENV_PATTERN = re.compile(r"^\$\{(\w+)\}$")
 SECRET_PREFIX = "secret:"
 
-DEFAULT_MAX_TOKENS = 32768
+DEFAULT_MAX_TOKENS = 16384
 DEFAULT_TEMPERATURE = 0.1
 
 _CACHE_TTL = 300
