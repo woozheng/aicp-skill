@@ -614,7 +614,6 @@ def _scan_skills() -> list:
 # ============================================================
 
 def _term_search(terms, plugin_names, limit=10, mode="any"):
-    """内部插件搜索。2 字以内纯中文是泛词，name +5、desc +2。"""
     if not terms:
         return []
     terms = [t.lower().strip() for t in terms if t and t.strip()]
@@ -623,6 +622,8 @@ def _term_search(terms, plugin_names, limit=10, mode="any"):
 
     results = []
     for name in plugin_names:
+        if name.startswith("mcp/") or name.startswith("skill/"):
+            continue
         desc = _extract_desc(name)
         name_lower = name.lower()
         desc_lower = desc.lower()
@@ -633,7 +634,6 @@ def _term_search(terms, plugin_names, limit=10, mode="any"):
         desc_matched = []
 
         for term in terms:
-            # ★ 2 字以内纯中文（文件/代码/系统）是泛词，降权
             is_short_cn = len(term) <= 2 and bool(re.fullmatch(r'[一-龥]+', term))
             name_w = 5 if is_short_cn else 10
             desc_w = 2 if is_short_cn else 5
@@ -681,7 +681,7 @@ def _term_search(terms, plugin_names, limit=10, mode="any"):
             "matched_terms": matched_terms,
             "match_detail": match_detail,
             "desc_matched": desc_matched,
-            "triggers_hits": 0,   # 内部插件没有 triggers 概念，固定 0，供统一排序
+            "triggers_hits": 0,
         })
 
     results.sort(key=lambda x: (-x["score"], x["name"]))
@@ -759,7 +759,6 @@ def _search_mcp_tools(terms, mcp_tools, limit=10, mode="any") -> list:
         desc = (t.get("description") or "")[:200]
         name = f"mcp/{server}/{tool}"
 
-        # ★ 把 inputSchema 的参数名灌进语料（city/repo 这些参数名是强信号）
         schema = t.get("inputSchema") or {}
         props = schema.get("properties") if isinstance(schema, dict) else None
         param_names = " ".join(props.keys()) if isinstance(props, dict) else ""
@@ -797,8 +796,34 @@ def _search_mcp_tools(terms, mcp_tools, limit=10, mode="any") -> list:
             "inputSchema": t.get("inputSchema", {}),
             "triggers_hits": 0,
         })
-    hits.sort(key=lambda x: (-x["score"], x["name"]))
-    return hits[:limit]
+
+    # ★ 以下整段在 for 循环外（缩进从 8 空格减到 4 空格）
+    if not hits:
+        return []
+
+    by_server = {}
+    for h in hits:
+        by_server.setdefault(h.get("server", ""), []).append(h)
+    for srv in by_server:
+        by_server[srv].sort(key=lambda x: (-x["score"], x["name"]))
+
+    merged = []
+    cursors = {srv: 0 for srv in by_server}
+    servers = sorted(by_server.keys())
+    while len(merged) < limit:
+        progressed = False
+        for srv in servers:
+            if len(merged) >= limit:
+                break
+            idx = cursors[srv]
+            bucket = by_server[srv]
+            if idx < len(bucket):
+                merged.append(bucket[idx])
+                cursors[srv] += 1
+                progressed = True
+        if not progressed:
+            break
+    return merged
 
 
 # ============================================================
@@ -1009,6 +1034,7 @@ async def execute(envelop, agent):
 
         limit = _safe_int(envelop.payload.get("limit", 10), 10)
         mode = envelop.payload.get("mode", "any")  # any | all
+        server_filter = (envelop.payload.get("server") or "").strip()  # ★ 新增
 
         # 三路搜索
         plugin_names = await _get_plugin_names(agent)
@@ -1017,6 +1043,8 @@ async def execute(envelop, agent):
         skill_hits = _search_skills(terms, limit, mode)
 
         mcp_tools = await _list_mcp_tools(agent)
+        if server_filter:                       # ★ 新增
+            mcp_tools = [t for t in mcp_tools if t.get("server") == server_filter]
         mcp_hits = _search_mcp_tools(terms, mcp_tools, limit, mode)
 
         # 合并 + 排序（tie-breaker：score 降序 → triggers_hits 降序 → name 升序）

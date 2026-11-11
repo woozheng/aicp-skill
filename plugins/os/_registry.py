@@ -8,6 +8,7 @@ v4.1 改进：
 """
 
 import asyncio
+import ast
 import hashlib
 import importlib.util
 import json
@@ -112,6 +113,68 @@ def _delete_contract_file(plugin_name: str, agent=None) -> bool:
 
 
 # ============================================================
+# 工具函数：插件签名检测
+# ============================================================
+
+# 路径 -> (mtime, size, 是否有 execute 签名)
+_EXEC_SIG_CACHE: Dict[str, tuple] = {}
+
+
+def _has_execute_signature(py_file: Path) -> bool:
+    """判断 .py 是否定义了模块级 execute —— 插件的唯一签名。
+
+    非插件的辅助脚本（工具库、GUI 窗口等）不入插件表，
+    避免污染加载统计与 cogitor 搜索结果。
+
+    语法错误时返回 True：保留条目，把真实错误留给加载阶段暴露。
+    """
+    key = str(py_file)
+    try:
+        st = py_file.stat()
+        sig = (st.st_mtime, st.st_size)
+    except Exception:
+        return True
+
+    cached = _EXEC_SIG_CACHE.get(key)
+    if cached and cached[0] == sig:
+        return cached[1]
+
+    try:
+        src = py_file.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return True
+
+    # ★ AST 优先：只认「模块级」的 execute 定义。
+    #   用正则会误判 —— 文档/注释里行首写一行 "def execute(...)" 的示例代码
+    #   会被当成真插件。AST 只看顶层节点，判定精确。
+    result = False
+    try:
+        tree = ast.parse(src)
+    except Exception:
+        # 语法错误：保留条目，把真实错误留给加载阶段暴露
+        result = True
+    else:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name == "execute":
+                    result = True
+                    break
+            elif isinstance(node, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id == "execute"
+                       for t in node.targets):
+                    result = True
+                    break
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name) \
+                        and node.target.id == "execute":
+                    result = True
+                    break
+
+    _EXEC_SIG_CACHE[key] = (sig, result)
+    return result
+
+
+# ============================================================
 # 插件注册中心
 # ============================================================
 
@@ -192,10 +255,17 @@ class PluginRegistry:
 
         init_dirs: Set[Path] = set()
         for py_file in PLUGINS_ROOT.rglob("__init__.py"):
-            init_dirs.add(py_file.parent)
+            # ★ 只有自身就是插件的包目录，才按包模式注册
+            if _has_execute_signature(py_file):
+                init_dirs.add(py_file.parent)
 
         for py_file in PLUGINS_ROOT.rglob("*.py"):
             # v4.1: 不再跳过 _init.py
+            # ★ 只收录定义了模块级 execute 的文件（插件的唯一签名）。
+            #   辅助脚本 / 工具库 / GUI 窗口等非插件文件不入插件表，
+            #   避免污染加载统计与 cogitor 搜索结果。
+            if not _has_execute_signature(py_file):
+                continue
 
             rel_path = py_file.relative_to(PLUGINS_ROOT)
 
@@ -228,10 +298,16 @@ class PluginRegistry:
             return
         try:
             data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+            skipped = 0
             for name, meta_data in data.get("plugins", {}).items():
-                self._plugins[name] = PluginMetadata.from_dict(meta_data)
+                meta = PluginMetadata.from_dict(meta_data)
+                # ★ 陈旧缓存里的非插件条目（辅助脚本 / GUI 窗口等）不再入表
+                if not _has_execute_signature(meta.file_path):
+                    skipped += 1
+                    continue
+                self._plugins[name] = meta
             if self._agent:
-                self._agent.log.info(f"[registry] 加载缓存: {len(self._plugins)} 个插件")
+                self._agent.log.info(f"[registry] 加载缓存: {len(self._plugins)} 个插件（跳过非插件 {skipped} 个）")
         except Exception as e:
             if self._agent:
                 self._agent.log.warning(f"[registry] 缓存加载失败: {e}")
@@ -523,7 +599,9 @@ async def _maybe_restore_external(agent):
 
 
 # 对外隐藏的应用目录（模板/内置 demo 等），list 不返回、不暴露
-HIDDEN_APP_PREFIXES = ("applications/_demo/",)
+# 对外隐藏的应用目录（模板/内置 demo 等），list 不返回、不暴露
+# 2026-11-09：_demo 取消隐藏（本地实例需要能直接访问调试）。
+HIDDEN_APP_PREFIXES = ()
 
 
 async def _handle_list(envelop, agent):

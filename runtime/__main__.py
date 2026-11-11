@@ -140,6 +140,11 @@ async def main():
     else:
         logger.debug("Visualizer: disabled")
 
+    # ---------- 挂载引擎（必须在 load_all_plugins 之前）----------
+    from runtime.engine import Engine
+    agent.engine = Engine(agent)
+    logger.info(f"Engine: {len(agent.engine.pool.list('local'))} agents loaded")
+
     import core
     count = load_all_plugins()
     logger.info(f"Plugins: {count} loaded")
@@ -218,6 +223,16 @@ async def main():
         logger.info(f"WebSocket: ws://{host}:{ws_port}/ws")
     except Exception as e:
         logger.warning(f"WebSocket start failed: {e}")
+
+    # ---------- MCP stdio 会话管理器 ----------
+    # 只建 manager，不自动拉起 server；真正 spawn 在前端点 ▶ 时发生。
+    # manager 挂在 agent 上 → 会话随引擎 event loop 存活 → 跨调用可复用。
+    try:
+        from plugins.os._mcp_stdio import start_stdio_service
+        await start_stdio_service(agent)
+        logger.info("MCP stdio: manager ready")
+    except Exception as e:
+        logger.warning(f"MCP stdio manager failed: {e}")
 
     # ---------- FileReceiver ----------
     file_port = port + 2
@@ -373,6 +388,13 @@ async def main():
             await file_runner.cleanup()
         except Exception:
             pass
+
+    # 4.5 停止 MCP stdio 会话（杀 MCP server 子进程，避免孤儿）
+    try:
+        from plugins.os._mcp_stdio import stop_stdio_service
+        await stop_stdio_service(agent)
+    except Exception:
+        pass
 
     # 5. 清理 pool
     pool = core.plugins.get("os/_pool")

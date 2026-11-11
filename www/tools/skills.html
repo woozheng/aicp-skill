@@ -772,6 +772,7 @@ async function doPin(sid) {
   if (res && res.ok) {
     toast(t('sk.okLoad') + ': ' + (res.title || sid));
     await loadSkills();
+    notifyParentSkillChanged();
   } else {
     if (res && res.pinned_total !== undefined && res.new_size !== undefined) {
       const used = fmtBytes(res.pinned_total);
@@ -791,6 +792,7 @@ async function doUnpin(sid) {
   if (res && res.ok) {
     toast(t('sk.okUnload') + ': ' + (res.title || sid));
     await loadSkills();
+    notifyParentSkillChanged();
     if (STATE.viewerSkill && STATE.viewerSkill.skill_id === sid) {
       STATE.viewerSkill._p = false;
       updateViewerBadge();
@@ -988,6 +990,14 @@ function notifyParentLang(lang) {
   try {
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({ type: 'aicp_lang', lang: lang }, '*');
+    }
+  } catch (e) {}
+}
+
+function notifyParentSkillChanged() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'aicp_skill_pinned' }, '*');
     }
   } catch (e) {}
 }

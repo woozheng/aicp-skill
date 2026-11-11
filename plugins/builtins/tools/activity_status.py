@@ -11,6 +11,7 @@
 #        user    —— 用户级（exp）
 #        session —— 会话级（task / sub / skill）
 #        system  —— 实例级（cron / mcp，不带 uid，多用户共享）
+#   5. 路径统一走 engine.paths —— 多 agent 布局 memories/users/<uid>/<agent_id>/...
 # ============================================================
 
 import json
@@ -21,9 +22,6 @@ from pathlib import Path
 # ============================================================
 
 DATA_ROOT = Path("data")
-MEMORY_DIR = DATA_ROOT / "memories" / "main_agent"
-USERS_DIR = MEMORY_DIR / "users"
-SKILLS_DIR = DATA_ROOT / "skills" / "aicp"
 CRON_DIR = DATA_ROOT / "os_cron"
 
 MODULES = ["exp", "task", "cron", "sub", "skill", "mcp"]
@@ -43,14 +41,6 @@ SCOPE_LABELS = {
     "session": "本会话",
     "system": "实例",
 }
-
-
-def _user_dir(user_id: str) -> Path:
-    return USERS_DIR / user_id
-
-
-def _sessions_dir(user_id: str) -> Path:
-    return _user_dir(user_id) / "sessions"
 
 
 def _resolve_user_id(envelop) -> str:
@@ -74,13 +64,31 @@ def _resolve_session_id(envelop) -> str:
     return str(sid).strip()
 
 
+def _resolve_agent_id_from_index(paths, user_id: str, session_id: str) -> str:
+    """从用户级 index.json 反查 session_id 对应的 agent_id。"""
+    if not session_id:
+        return ""
+    try:
+        idx_file = paths.user_index_file(user_id)
+        if not idx_file.exists():
+            return ""
+        idx = json.loads(idx_file.read_text(encoding="utf-8", errors="replace"))
+        meta = (idx.get("conversations") or {}).get(session_id, {})
+        return meta.get("agent_id") or ""
+    except Exception:
+        return ""
+
+
 # ============================================================
 # 各模块探测 —— 每个都独立 try/except
 # ============================================================
 
-def _probe_exp(user_id: str) -> dict:
-    """经验背包：backpack.json 是否有 items（Step 4 结构化）"""
-    f = _user_dir(user_id) / "backpack.json"
+def _probe_exp(paths, user_id: str, agent_id: str) -> dict:
+    """经验背包：agent_backpack_file 是否有 items。"""
+    try:
+        f = paths.experiences_file()
+    except Exception as e:
+        return {"ok": False, "active": False, "detail": f"路径解析失败: {e}", "count": 0}
     if not f.exists():
         return {"ok": True, "active": False, "detail": "无背包文件", "count": 0}
     try:
@@ -98,11 +106,11 @@ def _probe_exp(user_id: str) -> dict:
     }
 
 
-def _probe_task(user_id: str, session_id: str) -> dict:
-    """任务看板：sessions/{sid}/taskboard.txt 是否有内容（session 级）"""
+def _probe_task(paths, user_id: str, agent_id: str, session_id: str) -> dict:
+    """任务看板：session_taskboard_file 是否有内容。"""
     if not session_id:
         return {"ok": True, "active": False, "detail": "无 session", "pending": 0}
-    p = _sessions_dir(user_id) / session_id / "taskboard.txt"
+    p = paths.session_taskboard_file(user_id, agent_id, session_id)
     if not p.exists():
         return {"ok": True, "active": False, "detail": "无看板文件", "pending": 0}
     try:
@@ -152,15 +160,11 @@ def _probe_cron() -> dict:
     }
 
 
-def _probe_sub(user_id: str, session_id: str) -> dict:
-    """分身：task_manager 落盘的任务（session 级 —— sessions/{sid}/tasks.json）
-
-    与 task_manager._tasks_file() 完全一致：分身是父会话派出去的 sub_session，
-    因此任务归属于会话，而不是用户。
-    """
+def _probe_sub(paths, user_id: str, agent_id: str, session_id: str) -> dict:
+    """分身：session_tasks_file 是否有任务（与 task_manager 落盘一致）。"""
     if not session_id:
         return {"ok": True, "active": False, "detail": "无 session", "count": 0}
-    f = _sessions_dir(user_id) / session_id / "tasks.json"
+    f = paths.session_tasks_file(user_id, agent_id, session_id)
     if not f.exists():
         return {"ok": True, "active": False, "detail": "无分身", "count": 0}
     try:
@@ -190,14 +194,23 @@ def _probe_sub(user_id: str, session_id: str) -> dict:
     }
 
 
-def _probe_skill(user_id: str, session_id: str) -> dict:
-    """技能：本 session 真正钉住（pinned）的技能数 —— 读 sessions/{sid}/pinned.json"""
+def _probe_skill(paths, user_id: str, agent_id: str, session_id: str) -> dict:
+    """技能：本 session pinned.json 的 pinned 数。"""
     if not session_id:
         return {"ok": True, "active": False, "detail": "无 session", "count": 0, "pinned": 0}
-    f = _sessions_dir(user_id) / session_id / "pinned.json"
+    # skill_loader 实际落盘在旧路径 data/memories/main_agent/users/<uid>/sessions/<sid>/pinned.json
+    # 新路径 paths.session_dir(...) 读不到，两处都试
+    candidates = [paths.session_dir(user_id, agent_id, session_id) / "pinned.json"]
+    try:
+        old_dir = DATA_ROOT / "memories" / "main_agent" / "users" / user_id / "sessions" / session_id
+        candidates.append(old_dir / "pinned.json")
+    except Exception:
+        pass
     pinned = 0
     total = 0
-    if f.exists():
+    for f in candidates:
+        if not f.exists():
+            continue
         try:
             obj = json.loads(f.read_text(encoding="utf-8", errors="replace"))
             pinned_map = obj.get("pinned", {}) if isinstance(obj, dict) else {}
@@ -208,14 +221,23 @@ def _probe_skill(user_id: str, session_id: str) -> dict:
                 if isinstance(v, dict) and str(v.get("status", "")).lower() == "pinned"
             )
         except Exception:
-            pass
-    # 技能库总量（仅作展示，不参与 active 判定）
+            continue
+        if total:
+            break
+    # 技能库总量（跨 agent 共享）：遍历所有分类，数分类下的子目录总和
     lib = 0
-    if SKILLS_DIR.exists():
-        try:
-            lib = len([d.name for d in SKILLS_DIR.iterdir() if d.is_dir()])
-        except Exception:
-            lib = 0
+    try:
+        sd = paths.skills_dir()
+        if sd.exists():
+            for cat in sd.iterdir():
+                if not cat.is_dir():
+                    continue
+                try:
+                    lib += len([d for d in cat.iterdir() if d.is_dir()])
+                except Exception:
+                    pass
+    except Exception:
+        lib = 0
     return {
         "ok": True,
         "active": pinned > 0,
@@ -227,39 +249,50 @@ def _probe_skill(user_id: str, session_id: str) -> dict:
 
 
 def _probe_mcp() -> dict:
-    """MCP：已连接的 server 数（读 _mcp_client 的落盘状态）"""
-    base = DATA_ROOT / "os" / "mcp_client"
+    """MCP：已连接的 server 数（读 os/_mcp_client 的落盘状态）。
+
+    实际路径：data/os/_mcp_client/{servers.json, state.json}
+    """
+    base = DATA_ROOT / "os" / "_mcp_client"
     servers_file = base / "servers.json"
     state_file = base / "state.json"
     count = 0
     connected = 0
+    enabled_count = 0
     if servers_file.exists():
         try:
             obj = json.loads(servers_file.read_text(encoding="utf-8", errors="replace"))
-            servers = obj if isinstance(obj, list) else obj.get("servers", [])
+            # servers.json 是 {server_name: {url, enabled, ...}}
+            if isinstance(obj, dict) and "servers" in obj:
+                servers = obj.get("servers") or {}
+            else:
+                servers = obj or {}
             if isinstance(servers, dict):
-                servers = list(servers.values())
-            count = len(servers)
+                count = len(servers)
+                for v in servers.values():
+                    if isinstance(v, dict) and v.get("enabled", True):
+                        enabled_count += 1
+            elif isinstance(servers, list):
+                count = len(servers)
+                enabled_count = count
         except Exception:
             count = 0
     if state_file.exists():
         try:
             st = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
-            connected = len(st.get("connected", []) or [])
+            # state.json 是 {server_name: {connected: bool, ...}}
+            if isinstance(st, dict):
+                for v in st.values():
+                    if isinstance(v, dict) and v.get("connected"):
+                        connected += 1
         except Exception:
             connected = 0
-    if not count and not connected:
-        alt = DATA_ROOT / "mcp_client"
-        if alt.exists():
-            try:
-                count = len([f for f in alt.rglob("*.json") if f.is_file()])
-            except Exception:
-                count = 0
     return {
         "ok": True,
-        "active": count > 0 or connected > 0,
+        "active": connected > 0,
         "detail": f"{count} 个 server / {connected} 已连接",
         "count": count,
+        "enabled": enabled_count,
         "connected": connected,
     }
 
@@ -269,7 +302,6 @@ def _probe_mcp() -> dict:
 # ============================================================
 
 async def execute(envelop, agent):
-    params = envelop.payload.get("params", {}) or {}
     action = envelop.payload.get("action", "snapshot")
     user_id = _resolve_user_id(envelop)
     session_id = _resolve_session_id(envelop)
@@ -278,12 +310,28 @@ async def execute(envelop, agent):
         envelop.payload = {"ok": False, "error": f"未知 action: {action}"}
         return envelop
 
+    # ★ 拿 engine.paths（统一路径来源）
+    engine = getattr(agent, "engine", None)
+    paths = getattr(engine, "paths", None) if engine else None
+    if paths is None:
+        envelop.payload = {"ok": False, "error": "engine paths 不可用"}
+        return envelop
+
+    # ★ 解析 agent_id：payload > meta > index.json 反查 > 兜底 main_v2
+    meta = envelop.meta or {}
+    agent_id = (
+        (envelop.payload or {}).get("agent_id")
+        or meta.get("agent_id")
+        or _resolve_agent_id_from_index(paths, user_id, session_id)
+        or "main_v2"
+    )
+
     probes = {
-        "exp": lambda: _probe_exp(user_id),
-        "task": lambda: _probe_task(user_id, session_id),
+        "exp": lambda: _probe_exp(paths, user_id, agent_id),
+        "task": lambda: _probe_task(paths, user_id, agent_id, session_id),
         "cron": _probe_cron,
-        "sub": lambda: _probe_sub(user_id, session_id),
-        "skill": lambda: _probe_skill(user_id, session_id),
+        "sub": lambda: _probe_sub(paths, user_id, agent_id, session_id),
+        "skill": lambda: _probe_skill(paths, user_id, agent_id, session_id),
         "mcp": _probe_mcp,
     }
 
@@ -305,6 +353,7 @@ async def execute(envelop, agent):
             "active": [k for k, v in modules.items() if v.get("active")],
             "scopes": SCOPES,
             "user_id": user_id,
+            "agent_id": agent_id,
             "session_id": session_id,
         },
         "message": f"活动模块: {', '.join(k for k, v in modules.items() if v.get('active')) or '无'}",
@@ -319,6 +368,7 @@ def help():
         "input": {
             "action": "snapshot（默认）",
             "session_id": "可选；不传则从 meta.session_id 取（task / sub / skill 需要）",
+            "agent_id": "可选；不传则从 index.json 反查，兜底 main_v2",
         },
         "output": {
             "ok": "是否成功",
@@ -328,6 +378,8 @@ def help():
             "data.modules.<key>.scope": "作用域 user / session / system（前端据此分组）",
             "data.active": "有活动的模块 key 列表",
             "data.scopes": "模块 → 作用域 的映射表",
+            "data.user_id": "本次探测的用户",
+            "data.agent_id": "本次探测的 agent",
             "data.session_id": "本次探测的会话",
         },
         "scopes": {

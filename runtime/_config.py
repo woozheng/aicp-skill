@@ -17,6 +17,9 @@ DEFAULT_CONFIG = {
     "plugins_dir": "plugins",
     "data_dir": "data",
     "static_dir": None,
+    "mcp": {
+        "port": 9100,
+    },
     "models": {
         "default": "gpt-3.5-turbo",
         "providers": {},

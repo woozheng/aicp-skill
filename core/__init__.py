@@ -484,7 +484,8 @@ async def _execute_async(envelop: Envelop, agent: Agent, callback_receiver: str,
 
     # 透传业务信息（不是异步标记）
     # 注意：只有下列键被透传；其他 meta 键（插件私货）不保证带到回调。
-    for key in ("remote_node", "remote_plugin", "callback_session_id", "user_id", "token"):
+    for key in ("remote_node", "remote_plugin", "callback_session_id", "user_id", "token",
+                "agent_id", "callback_agent_id"):
         if envelop.meta.get(key):
             result.meta[key] = envelop.meta[key]
 
@@ -519,7 +520,22 @@ async def _http_callback(url: str, envelop: Envelop, timeout: float, agent: Agen
         url = f"https://{url}"
     url = url.rstrip("/")
     if "/api/" not in url:
-        url = f"{url}/api/builtins/agents/main_agent"
+        # 老版本无多 agent 概念，回调默认打向 main_agent。
+        # 现在按 envelop 推导默认 agent：优先 meta.agent_id，
+        # 其次 callback_session_id 前缀，最后回落到 engine 入口。
+        _agent_id = (
+            envelop.meta.get("agent_id")
+            or envelop.meta.get("callback_agent_id")
+            or ""
+        )
+        if not _agent_id:
+            _sid = envelop.meta.get("callback_session_id") or envelop.meta.get("session_id") or ""
+            # 会话 id 不直接编码 agent，无法可靠反推；保守回落到 engine
+            _agent_id = ""
+        if _agent_id:
+            url = f"{url}/api/builtins/agents/{_agent_id}"
+        else:
+            url = f"{url}/api/builtins/agents/engine"
 
     # 签名（如果配置了 secret）
     signature = sign_payload(envelop.payload)

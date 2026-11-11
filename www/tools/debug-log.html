@@ -292,6 +292,20 @@ body{
 .dbg-msg.role-system .dbg-msg-body pre{color:#D8CCFF}
 .dbg-msg.role-user .dbg-msg-body pre{color:#CFD6FF}
 .dbg-msg.role-assistant .dbg-msg-body pre{color:#D7F0E1}
+
+/* ---- 主提示词 Tab ---- */
+.pr-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px}
+.pr-path{flex:1;min-width:120px;font-family:var(--font-mono);font-size:10.5px;
+  color:var(--text-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pr-editor{
+  width:100%;min-height:58vh;box-sizing:border-box;
+  background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--radius);
+  padding:12px 14px;font-family:var(--font-mono);font-size:11.5px;
+  line-height:1.6;resize:vertical;outline:none;}
+.pr-editor:focus{border-color:var(--border-strong)}
+.pr-editor[readonly]{color:var(--text-2);cursor:default}
+.pr-hint{font-size:10.5px;color:var(--text-4);margin-bottom:6px}
 </style>
 </head>
 <body>
@@ -311,6 +325,7 @@ body{
 <div class="tabs">
   <button id="tabDebug" class="active" data-i18n="dl.tabDebug">调试日志</button>
   <button id="tabWorkspace" data-i18n="dl.tabWorkspace">工作区</button>
+  <button id="tabPrompt" data-i18n="dl.tabPrompt">主提示词</button>
 </div>
 
 <div class="content" id="content">
@@ -328,6 +343,25 @@ body{
     </div>
     <div id="wsTree"></div>
   </div>
+</div>
+
+<div id="promptPanel" style="display:none">
+  <div class="session-head">
+    <div class="session-title" id="prTitle">—</div>
+    <div class="session-meta">
+      <span id="prAgentId"></span>
+      <span class="cnt" id="prScope"></span>
+      <span id="prChars"></span>
+    </div>
+  </div>
+  <div class="pr-bar">
+    <span class="pr-path" id="prPath">—</span>
+    <button class="ws-mini" id="prCopy" data-i18n="dl.prCopy">复制</button>
+    <button class="ws-mini" id="prReload" data-i18n="dl.prReload">重新载入</button>
+    <button class="ws-mini" id="prSave" data-i18n="dl.prSave">保存</button>
+  </div>
+  <div class="pr-hint" id="prHint"></div>
+  <textarea class="pr-editor" id="prEditor" spellcheck="false"></textarea>
 </div>
 
 <div class="viewer" id="viewer" onclick="if(event.target===this)closeViewer()">
@@ -348,9 +382,11 @@ body{
 </div>
 
 <script>
-var API = '/api/builtins/agents/main_agent';
+var API = '/api/builtins/agents/engine';
 var WS_API = '/api/os/_workspace';
 var SESSION_ID = new URLSearchParams(location.search).get('session_id') || '';
+var AGENT_ID = new URLSearchParams(location.search).get('agent_id') || '';
+try { AGENT_ID = AGENT_ID || localStorage.getItem('aicp_current_agent') || ''; } catch(e) {}
 
 var I18N = {
   zh: {
@@ -367,7 +403,14 @@ var I18N = {
     'dl.wsBinary':'二进制文件，无法预览',
     'dl.wsTruncated':'内容已截断（仅显示前 {n}）',
     'dl.wsReadFail':'读取失败: ',
-    'dl.wsCopied':'已复制'
+    'dl.wsCopied':'已复制',
+    'dl.tabPrompt':'主提示词',
+    'dl.prCopy':'复制','dl.prReload':'重新载入','dl.prSave':'保存',
+    'dl.prHint':'纯文本编辑，保存后立即生效',
+    'dl.prScopeUser':'用户级','dl.prScopeSystem':'系统级',
+    'dl.prSaved':'已保存','dl.prSaveFail':'保存失败: ',
+    'dl.prReadOnly':'只读模式：仅 local 用户可修改系统级主提示词',
+    'dl.prConfirmSave':'确认覆盖该 agent 的主提示词文件？'
   },
   en: {
     'dl.title':'Debug Log','dl.sub':'Last batch of this session',
@@ -383,7 +426,14 @@ var I18N = {
     'dl.wsBinary':'Binary file, cannot preview',
     'dl.wsTruncated':'Content truncated (first {n} shown)',
     'dl.wsReadFail':'Read failed: ',
-    'dl.wsCopied':'Copied'
+    'dl.wsCopied':'Copied',
+    'dl.tabPrompt':'System Prompt',
+    'dl.prCopy':'Copy','dl.prReload':'Reload','dl.prSave':'Save',
+    'dl.prHint':'Plain text editing; takes effect on save',
+    'dl.prScopeUser':'User','dl.prScopeSystem':'System',
+    'dl.prSaved':'Saved','dl.prSaveFail':'Save failed: ',
+    'dl.prReadOnly':'Read-only: only the local user can modify system prompts',
+    'dl.prConfirmSave':'Overwrite this agent prompt file?'
   }
 };
 
@@ -454,6 +504,8 @@ function getToken(){
   try { return localStorage.getItem('aicp_token') || ''; } catch(e) { return ''; }
 }
 function apiFetch(body){
+  body = body || {};
+  body.agent_id = AGENT_ID;
   var headers = {'Content-Type':'application/json'};
   var token = getToken();
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -490,6 +542,76 @@ var WS = {
   loaded: false,
   reqSeq: 0
 };
+
+/* ========== 主提示词 Tab ========== */
+
+var PR = {
+  loaded: false,
+  agentId: '',
+  canEdit: false,
+  scope: ''
+};
+
+async function loadPrompt(){
+  var box = document.getElementById('prEditor');
+  var aid = AGENT_ID;
+  PR.agentId = aid;
+  PR.loaded = false;
+  box.value = '';
+  box.setAttribute('readonly', 'readonly');
+  document.getElementById('prTitle').textContent = t('common.loading');
+  try {
+    var res = await apiFetch({action:'get_agent_prompt', agent_id: aid, target_agent_id: aid});
+    var data = await res.json();
+    if (!data || !data.ok) {
+      document.getElementById('prTitle').textContent = (data && data.error) || t('dl.readFail');
+      document.getElementById('prHint').textContent = '';
+      return;
+    }
+    PR.loaded = true;
+    PR.canEdit = !!data.can_edit;
+    PR.scope = data.scope || '';
+    box.value = data.content || '';
+    if (PR.canEdit) box.removeAttribute('readonly'); else box.setAttribute('readonly', 'readonly');
+    document.getElementById('prTitle').textContent = data.name || aid;
+    document.getElementById('prAgentId').textContent = data.agent_id || '';
+    document.getElementById('prScope').textContent =
+      PR.scope === 'user' ? t('dl.prScopeUser') : t('dl.prScopeSystem');
+    document.getElementById('prChars').textContent = (data.chars || 0) + ' chars';
+    document.getElementById('prPath').textContent = data.path || '';
+    document.getElementById('prHint').textContent = PR.canEdit ? t('dl.prHint') : t('dl.prReadOnly');
+    document.getElementById('prSave').style.display = PR.canEdit ? '' : 'none';
+  } catch(e) {
+    document.getElementById('prTitle').textContent = t('dl.readFail') + e.message;
+  }
+}
+
+async function savePrompt(){
+  var box = document.getElementById('prEditor');
+  if (!PR.canEdit) { toast(t('dl.prReadOnly')); return; }
+  if (!window.confirm(t('dl.prConfirmSave'))) return;
+  try {
+    var res = await apiFetch({
+      action: 'save_agent_prompt',
+      agent_id: PR.agentId || AGENT_ID,
+      target_agent_id: PR.agentId || AGENT_ID,
+      content: box.value
+    });
+    var data = await res.json();
+    if (!data || !data.ok) { toast(t('dl.prSaveFail') + ((data && data.error) || '')); return; }
+    toast(t('dl.prSaved'));
+  } catch(e) {
+    toast(t('dl.prSaveFail') + e.message);
+  }
+}
+
+function copyPrompt(){
+  var text = document.getElementById('prEditor').value || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text);
+    toast(t('dl.copy'));
+  }
+}
 
 function wsFetch(body){
   var headers = {'Content-Type':'application/json'};
@@ -633,12 +755,15 @@ function switchTab(tab){
   WS.tab = tab;
   document.getElementById('tabDebug').classList.toggle('active', tab === 'debug');
   document.getElementById('tabWorkspace').classList.toggle('active', tab === 'ws');
+  document.getElementById('tabPrompt').classList.toggle('active', tab === 'prompt');
   document.getElementById('content').style.display = (tab === 'debug') ? '' : 'none';
   document.getElementById('wsPanel').style.display = (tab === 'ws') ? '' : 'none';
+  document.getElementById('promptPanel').style.display = (tab === 'prompt') ? '' : 'none';
   if (tab === 'ws' && !WS.loaded) {
     WS.curSid = SESSION_ID;
     loadWsTree('', true);
   }
+  if (tab === 'prompt' && !PR.loaded) loadPrompt();
 }
 
 function render(){
@@ -854,6 +979,7 @@ document.getElementById('langToggle').addEventListener('click', function(e){
 });
 document.getElementById('refreshBtn').addEventListener('click', function(){
   if (WS.tab === 'ws') { WS.loaded = false; loadWsTree('', true); }
+  else if (WS.tab === 'prompt') { PR.loaded = false; loadPrompt(); }
   else loadLogs();
 });
 document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeViewer(); });
@@ -861,6 +987,12 @@ document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeV
 /* ---- Tab 切换 ---- */
 document.getElementById('tabDebug').addEventListener('click', function(){ switchTab('debug'); });
 document.getElementById('tabWorkspace').addEventListener('click', function(){ switchTab('ws'); });
+document.getElementById('tabPrompt').addEventListener('click', function(){ switchTab('prompt'); });
+
+/* ---- 主提示词面板事件 ---- */
+document.getElementById('prSave').addEventListener('click', function(){ savePrompt(); });
+document.getElementById('prCopy').addEventListener('click', function(){ copyPrompt(); });
+document.getElementById('prReload').addEventListener('click', function(){ PR.loaded = false; loadPrompt(); });
 
 /* ---- 工作区面板事件 ---- */
 document.getElementById('wsExpandAll').addEventListener('click', function(){

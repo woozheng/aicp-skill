@@ -15,6 +15,8 @@ import hashlib
 import base64
 from pathlib import Path
 
+import core
+
 
 TOKENS_FILE = Path("data/mcp_tokens.json")
 
@@ -77,7 +79,7 @@ def _is_admin(envelop) -> bool:
     if user_id == "local" and source in ("local", "static"):
         return True
 
-    # token 里显式带 admin: true
+    # 管理员必须由显式的 admin: true 授予（静态 token 除外，见上）
     if perms.get("admin") is True:
         return True
 
@@ -134,7 +136,7 @@ async def _check(envelop, agent):
             "ok": True,
             "user_id": info["uid"],
             "source": "hmac",
-            "permissions": info.get("perms", {"*": True}),
+            "permissions": info.get("perms", {}),
             "expires_at": info.get("exp"),
         }
         return envelop
@@ -211,7 +213,7 @@ async def _issue_dynamic(envelop, agent):
         return envelop
 
     if perms is None:
-        perms = {"*": True}
+        perms = {}
     elif not isinstance(perms, dict):
         envelop.payload = {"ok": False, "error": "permissions must be object"}
         return envelop
@@ -262,7 +264,7 @@ async def _issue_hmac(envelop, agent):
         return envelop
 
     if perms is None:
-        perms = {"*": True}
+        perms = {}
     elif not isinstance(perms, dict):
         envelop.payload = {"ok": False, "error": "permissions must be object"}
         return envelop
@@ -396,15 +398,15 @@ async def _set_mode(envelop, agent):
         return envelop
 
     # 调用 _settings 的 set 接口写入配置
-    env = type("E", (), {})()
-    env.sender = "os/_token_manager"
-    env.receiver = "builtins/control/_settings"
-    env.intent = "API_CALL"
-    env.payload = {"action": "set", "key": "auth.mode", "value": mode}
-    env.meta = {}
-    env.status = 200
-    env.channel_id = None
-    env.ttl = 30
+    env = core.Envelop(
+        sender="os/_token_manager",
+        receiver="builtins/control/_settings",
+        intent="API_CALL",
+        payload={"action": "set", "key": "auth.mode", "value": mode},
+        meta={},
+        status="",
+        ttl=30,
+    )
 
     result = await agent.system.call(env)
     if hasattr(result, "payload") and isinstance(result.payload, dict):
@@ -458,7 +460,7 @@ def _secret(agent) -> str:
 
 def _issue_hmac_token(secret: str, user_id: str, ttl_seconds: int, perms=None) -> str:
     body = {"uid": user_id, "exp": int(time.time()) + ttl_seconds}
-    if perms:
+    if perms is not None:
         body["perms"] = perms
     raw = base64.urlsafe_b64encode(
         json.dumps(body, separators=(",", ":")).encode()

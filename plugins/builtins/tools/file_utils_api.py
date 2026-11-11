@@ -110,6 +110,14 @@ MAX_INLINE_SIZE = 100 * 1024  # 100 KiB
 # 内容搜索时单文件大小上限（超过跳过，防 OOM）
 SEARCH_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB
 
+# 结构地图输出上限：大文件的结构图不应自己膨胀成几万字符
+STRUCTURE_MAX_FUNCTIONS = 120
+STRUCTURE_MAX_CLASSES = 80
+STRUCTURE_MAX_INTERFACES = 40
+STRUCTURE_MAX_TYPES = 40
+STRUCTURE_MAX_ELEMENTS = 150
+STRUCTURE_MAX_HANDLERS = 100
+
 
 # ============================================================
 # 路径解析 —— 不限制项目根目录，只拦黑名单
@@ -157,7 +165,7 @@ def _resolve_path(path_str: str) -> Path:
 
 
 # ============================================================
-# 安全写盘辅助 —— 写前备份（改坏可秒回）
+# 安全写盘辅助
 # ============================================================
 
 def _write_with_backup(p: Path, new_text: str, old_text: str) -> None:
@@ -175,11 +183,10 @@ def _write_with_backup(p: Path, new_text: str, old_text: str) -> None:
 
 VALIDATE_MAX_BYTES = 2 * 1024 * 1024  # 2MiB，超过跳过校验
 
-# 扩展名 → 校验类型
 PY_EXTS = {".py", ".pyw"}
 JSON_EXTS = {".json", ".jsonc", ".json5"}
 HTML_EXTS = {".html", ".htm", ".xhtml"}
-HTML_LIKE_EXTS = {".vue", ".svelte"}  # 只做 script/style 内部检查
+HTML_LIKE_EXTS = {".vue", ".svelte"}
 JS_EXTS = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"}
 CSS_EXTS = {".css", ".scss", ".sass", ".less"}
 JAVA_EXTS = {".java"}
@@ -225,7 +232,6 @@ def _validate_written_file(path: Path) -> dict:
     except Exception as e:
         return {"checked": False, "ok": False, "error": f"读取失败: {e}", "kind": ext}
 
-    # ---- Python ----
     if ext in PY_EXTS:
         import ast
         try:
@@ -239,7 +245,6 @@ def _validate_written_file(path: Path) -> dict:
             }
         return {"checked": True, "ok": True, "error": None, "kind": ext}
 
-    # ---- JSON / JSONC / JSON5 ----
     if ext in JSON_EXTS:
         candidate = text
         if ext in (".jsonc", ".json5"):
@@ -251,57 +256,46 @@ def _validate_written_file(path: Path) -> dict:
             return {"checked": True, "ok": False, "error": f"JSON 解析失败: {e}", "kind": ext}
         return {"checked": True, "ok": True, "error": None, "kind": ext}
 
-    # ---- HTML / Vue / Svelte ----
     if ext in HTML_EXTS or ext in HTML_LIKE_EXTS:
         err = _check_html(text, strict=(ext in HTML_EXTS))
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- JS / TS / JSX / TSX ----
     if ext in JS_EXTS:
         err = _check_brackets(text, allow_regex=True)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- CSS / SCSS / LESS ----
     if ext in CSS_EXTS:
         err = _check_css(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- Java / Kotlin / C / C++ / Go / Rust ----
     if ext in JAVA_EXTS or ext in KT_EXTS or ext in C_EXTS or ext in GO_EXTS or ext in RS_EXTS:
         err = _check_c_like(text, ext)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- YAML ----
     if ext in YAML_EXTS:
         err = _check_yaml(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- XML / SVG ----
     if ext in XML_EXTS:
         err = _check_xml(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- SQL ----
     if ext in SQL_EXTS:
         err = _check_sql(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- Shell / PowerShell / Batch ----
     if ext in SH_EXTS:
         err = _check_shell(text, ext)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- Markdown ----
     if ext in MD_EXTS:
         err = _check_markdown(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- TOML ----
     if ext in TOML_EXTS:
         err = _check_toml(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
 
-    # ---- INI / CFG / CONF / properties ----
     if ext in INI_EXTS:
         err = _check_ini(text)
         return {"checked": True, "ok": err is None, "error": err, "kind": ext}
@@ -312,7 +306,6 @@ def _validate_written_file(path: Path) -> dict:
 # ---------------- 各类校验实现 ----------------
 
 def _strip_json_comments(text: str) -> str:
-    """去掉 // 和 /* */ 注释（粗略，够用）"""
     out = []
     i, n = 0, len(text)
     in_str = None
@@ -350,7 +343,6 @@ def _strip_json_comments(text: str) -> str:
 
 
 def _check_brackets(text: str, allow_regex: bool = False) -> str | None:
-    """括号平衡检查（状态机，跳过字符串/注释/regex 字面量）"""
     pairs = {"{": "}", "(": ")", "[": "]"}
     closers = {v: k for k, v in pairs.items()}
     stack = []
@@ -360,7 +352,6 @@ def _check_brackets(text: str, allow_regex: bool = False) -> str | None:
     in_block_comment = False
     in_regex = False
 
-    # regex 起始判定：前一个非空白 token 是这些符号或关键字时
     regex_prev_chars = set("=(,[{!&|?:;")
     regex_prev_words = {"return", "typeof", "instanceof", "in", "of",
                         "case", "delete", "void", "throw", "new"}
@@ -398,7 +389,6 @@ def _check_brackets(text: str, allow_regex: bool = False) -> str | None:
             i += 1
             continue
 
-        # 不在字符串/注释/regex 里
         if c == "/" and nxt == "/":
             in_line_comment = True
             i += 2
@@ -408,14 +398,12 @@ def _check_brackets(text: str, allow_regex: bool = False) -> str | None:
             i += 2
             continue
 
-        # JS/TS 的 regex 字面量：/xxx/flags
         if allow_regex and c == "/":
             j = i - 1
             while j >= 0 and text[j] in " \t\n\r":
                 j -= 1
             prev_ch = text[j] if j >= 0 else ""
 
-            # 找前一个完整 token（字母/数字/下划线）
             k = j
             while k >= 0 and (text[k].isalnum() or text[k] == "_"):
                 k -= 1
@@ -428,7 +416,6 @@ def _check_brackets(text: str, allow_regex: bool = False) -> str | None:
             )
 
             if is_regex_start:
-                # 确认后面有结束的 /（同一行内）
                 m = i + 1
                 found_end = False
                 while m < n and text[m] != "\n":
@@ -472,12 +459,6 @@ def _line_of(text: str, idx: int) -> int:
 
 
 def _check_html(text: str, strict: bool = True) -> str | None:
-    """HTML 结构检查。
-
-    strict=True（.html/.htm/.xhtml）：检查 html/body/div 配对
-    strict=False（.vue/.svelte）：只检查 script/style 内部
-    """
-    # 1. <script> 内 JS
     for m in re.finditer(r"<script[^>]*>(.*?)</script>", text, re.DOTALL | re.IGNORECASE):
         js = m.group(1)
         if js.strip():
@@ -485,7 +466,6 @@ def _check_html(text: str, strict: bool = True) -> str | None:
             if err:
                 return f"<script> 内 JS {err}"
 
-    # 2. <style> 内 CSS
     for m in re.finditer(r"<style[^>]*>(.*?)</style>", text, re.DOTALL | re.IGNORECASE):
         css = m.group(1)
         if css.strip():
@@ -493,7 +473,6 @@ def _check_html(text: str, strict: bool = True) -> str | None:
             if err:
                 return f"<style> 内 CSS {err}"
 
-    # 3. script/style 标签配对（两类文件都查）
     for tag in ("script", "style"):
         open_n = len(re.findall(rf"<{tag}\b", text, re.IGNORECASE))
         close_n = len(re.findall(rf"</{tag}\s*>", text, re.IGNORECASE))
@@ -509,7 +488,6 @@ def _check_html(text: str, strict: bool = True) -> str | None:
     if "<body" in lower and "</body>" not in lower:
         return "缺少 </body> 闭合标签"
 
-    # div 粗检：排除自闭合 <div ... />
     div_open = len(re.findall(r"<div\b(?![^>]*/>)", text, re.IGNORECASE))
     div_close = len(re.findall(r"</div\s*>", text, re.IGNORECASE))
     if div_open != div_close:
@@ -540,7 +518,6 @@ def _check_c_like(text: str, ext: str) -> str | None:
 
 
 def _check_yaml(text: str) -> str | None:
-    """YAML 结构检查：Tab 缩进 + 段首缩进不能为奇数突变 + 冒号格式（不依赖 pyyaml）"""
     lines = text.split("\n")
     prev_indent = 0
     prev_was_content = False
@@ -555,13 +532,6 @@ def _check_yaml(text: str) -> str | None:
 
         indent = len(line) - len(line.lstrip(" "))
 
-        # 列表项或键值对
-        is_list_item = stripped.startswith("- ")
-        if not is_list_item and ":" not in stripped and not stripped.startswith(("|", ">", "{", "[")):
-            # 可能是多行字符串内容或纯值，宽松放行
-            pass
-
-        # 缩进突变：从上一层进入更深的层，缩进差通常 2/4，不宜为奇数
         if prev_was_content and indent > prev_indent:
             delta = indent - prev_indent
             if delta % 2 != 0:
@@ -577,7 +547,6 @@ def _check_yaml(text: str) -> str | None:
 
 
 def _check_xml(text: str) -> str | None:
-    """XML 结构检查：标签配对（简化版，不用 xml.etree 避免命名空间问题）"""
     text_clean = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     text_clean = re.sub(r"<!\[CDATA\[.*?\]\]>", "", text_clean, flags=re.DOTALL)
     text_clean = re.sub(r"<\?.*?\?>", "", text_clean, flags=re.DOTALL)
@@ -601,12 +570,10 @@ def _check_xml(text: str) -> str | None:
 
 
 def _check_sql(text: str) -> str | None:
-    """SQL 检查：括号平衡 + 单引号状态机"""
     err = _check_brackets(text)
     if err:
         return f"SQL {err}"
 
-    # 单引号状态机：'' 是转义，'...' 是字符串
     i, n = 0, len(text)
     in_str = False
     in_line_comment = False
@@ -628,7 +595,7 @@ def _check_sql(text: str) -> str | None:
             continue
         if in_str:
             if c == "'" and nxt == "'":
-                i += 2  # 转义单引号
+                i += 2
                 continue
             if c == "'":
                 in_str = False
@@ -652,12 +619,10 @@ def _check_sql(text: str) -> str | None:
 
 
 def _check_shell(text: str, ext: str) -> str | None:
-    """Shell 检查：括号 + 引号状态机（含转义与 heredoc 粗检）"""
     err = _check_brackets(text)
     if err:
         return f"Shell {err}"
 
-    # 双引号状态机（忽略 \" 与 $(...) 内部的 "" 简化处理）
     i, n = 0, len(text)
     in_single = False
     in_double = False
@@ -688,7 +653,6 @@ def _check_shell(text: str, ext: str) -> str | None:
             i += 1
             continue
         if c == "#":
-            # 注释到行尾
             while i < n and text[i] != "\n":
                 i += 1
             continue
@@ -749,12 +713,10 @@ def _read_file_sync(path_str):
 
     file_size = p.stat().st_size
 
-    # ★ 大文件：超过阈值直接返回 code_structure（结构地图），不返回尾部预览
     if READ_FILE_STRUCTURE_THRESHOLD > 0 and file_size > READ_FILE_STRUCTURE_THRESHOLD:
         try:
             structure = _parse_code_structure_sync(path_str)
         except Exception as e:
-            # 结构解析失败（语法错误等），降级返回尾部预览
             structure = {
                 "error": f"结构解析失败: {e}",
                 "hint": "用 read_file_lines(path, start_line, end_line) 读指定范围",
@@ -773,7 +735,6 @@ def _read_file_sync(path_str):
             ),
         }
 
-
     if file_size <= MAX_INLINE_SIZE:
         content = p.read_text(encoding="utf-8")
         return {
@@ -783,17 +744,14 @@ def _read_file_sync(path_str):
             "truncated": False,
         }
 
-    # 大文件：二进制 seek/read 尾部，再 decode（避免文本模式 seek 崩）
     read_size = min(file_size, MAX_INLINE_SIZE + 1024)
     with open(p, "rb") as f:
         f.seek(file_size - read_size)
         tail_bytes = f.read()
 
-    # 从字节中间截断时，丢弃首个不完整行
     try:
         tail_text = tail_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        # 丢弃第一行（可能被截断在多字节字符中间）
         first_nl = tail_bytes.find(b"\n")
         if first_nl == -1:
             tail_text = tail_bytes.decode("utf-8", errors="ignore")
@@ -811,7 +769,6 @@ def _read_file_sync(path_str):
         preview_lines.insert(0, line)
         preview_size += line_size
 
-    # 统计总行数（流式，避免全量读入）
     total_lines = 0
     with open(p, "rb") as f:
         for _ in f:
@@ -849,7 +806,6 @@ def _read_file_lines_sync(path_str, start_line=None, end_line=None, with_line_nu
     lines = p.read_text(encoding="utf-8").splitlines()
     total_lines = len(lines)
 
-    # 先校验用户输入，再截断，避免提示误导
     start = start_line if start_line is not None else 1
     end = end_line if end_line is not None else total_lines
 
@@ -886,6 +842,7 @@ def _read_file_lines_sync(path_str, start_line=None, end_line=None, with_line_nu
         "end": end,
         "returned": len(selected),
         "with_line_num": with_line_num,
+        "remaining_after": max(0, total_lines - end),
     }
 
 
@@ -933,7 +890,6 @@ def _edit_file_sync(path_str, find, replace):
 
 
 def _delete_lines_sync(path_str, start_line, end_line):
-    """按行号区间删除行。改代码优先用 edit_file(find/replace)，删整段可用本入口。"""
     p = _resolve_path(path_str)
     if not p.exists():
         raise FileNotFoundError(f"文件不存在: {path_str}")
@@ -1035,10 +991,6 @@ def _file_stat_sync(path_str):
 # ============================================================
 
 def _parse_code_structure_sync(path_str: str) -> dict:
-    """按扩展名解析结构，返回关键定义的行号地图。
-
-    支持：.py / .html / .js/.ts/.jsx/.tsx / .java/.kt/.c/.cpp/.go/.rs / .md
-    """
     p = _resolve_path(path_str)
     if not p.exists():
         raise FileNotFoundError(f"文件不存在: {path_str}")
@@ -1058,7 +1010,6 @@ def _parse_code_structure_sync(path_str: str) -> dict:
         "ext": ext,
         "hint": "用 read_file_lines(path, start_line, end_line) 读关键定义，不要读全文",
     }
-    # ★ 小于 100K 直接返回全文，不走结构解析（省一轮 read_file）
     if size <= MAX_INLINE_SIZE:
         return {
             **base,
@@ -1140,11 +1091,20 @@ def _parse_python_structure(text: str) -> dict:
             seen_imp.add(key)
             uniq_imp.append(imp)
 
+    _fn = sorted(functions, key=lambda x: x["start"])
+    _cls = sorted(classes, key=lambda x: x["start"])
+    _truncated = len(_fn) > STRUCTURE_MAX_FUNCTIONS or len(_cls) > STRUCTURE_MAX_CLASSES
     return {
-        "classes": sorted(classes, key=lambda x: x["start"]),
-        "functions": sorted(functions, key=lambda x: x["start"]),
+        "classes": _cls[:STRUCTURE_MAX_CLASSES],
+        "functions": _fn[:STRUCTURE_MAX_FUNCTIONS],
         "imports": uniq_imp[:50],
         "globals": globals_[:30],
+        "truncated": _truncated,
+        "note": (
+            f"functions {len(_fn)} 个只列前 {STRUCTURE_MAX_FUNCTIONS}，"
+            f"classes {len(_cls)} 个只列前 {STRUCTURE_MAX_CLASSES}；"
+            f"需要完整列表用 read_file_lines 读全文，或按名字 search"
+        ) if _truncated else "",
     }
 
 
@@ -1190,7 +1150,7 @@ def _parse_html_structure(text: str) -> dict:
         if f["name"] not in seen_fn:
             seen_fn.add(f["name"])
             uniq_fn.append(f)
-    structure["functions"] = sorted(uniq_fn, key=lambda x: x["start"])
+    structure["functions"] = sorted(uniq_fn, key=lambda x: x["start"])[:STRUCTURE_MAX_FUNCTIONS]
 
     elements = []
     for m in re.finditer(r"<(\w+)([^>]*?\bid=\"([^\"]+)\"[^>]*)>", text, re.IGNORECASE):
@@ -1199,7 +1159,7 @@ def _parse_html_structure(text: str) -> dict:
             "tag": m.group(1),
             "line": text[:m.start()].count("\n") + 1,
         })
-    structure["elements"] = elements
+    structure["elements"] = elements[:STRUCTURE_MAX_ELEMENTS]
 
     handlers = []
     for m in re.finditer(r"on(click|change|submit|input|keydown|keyup|load)\s*=\s*\"([^\"]+)\"", text, re.IGNORECASE):
@@ -1208,7 +1168,7 @@ def _parse_html_structure(text: str) -> dict:
             "handler": m.group(2).strip(),
             "line": text[:m.start()].count("\n") + 1,
         })
-    structure["event_handlers"] = handlers
+    structure["event_handlers"] = handlers[:STRUCTURE_MAX_HANDLERS]
     return structure
 
 
@@ -1265,12 +1225,29 @@ def _parse_js_structure(text: str) -> dict:
                 out.append(x)
         return sorted(out, key=lambda x: x["start"])
 
+    _fn = _uniq(functions)
+    _cls = _uniq(classes)
+    _if = _uniq(interfaces)
+    _tp = _uniq(types)
+    _truncated = (
+        len(_fn) > STRUCTURE_MAX_FUNCTIONS
+        or len(_cls) > STRUCTURE_MAX_CLASSES
+        or len(_if) > STRUCTURE_MAX_INTERFACES
+        or len(_tp) > STRUCTURE_MAX_TYPES
+    )
     return {
-        "functions": _uniq(functions),
-        "classes": _uniq(classes),
-        "interfaces": _uniq(interfaces),
-        "types": _uniq(types),
+        "functions": _fn[:STRUCTURE_MAX_FUNCTIONS],
+        "classes": _cls[:STRUCTURE_MAX_CLASSES],
+        "interfaces": _if[:STRUCTURE_MAX_INTERFACES],
+        "types": _tp[:STRUCTURE_MAX_TYPES],
         "imports": imports[:50],
+        "truncated": _truncated,
+        "note": (
+            "结构列表已截断（functions/classes/interfaces/types 上限 "
+            f"{STRUCTURE_MAX_FUNCTIONS}/{STRUCTURE_MAX_CLASSES}/"
+            f"{STRUCTURE_MAX_INTERFACES}/{STRUCTURE_MAX_TYPES}）；"
+            "需要完整列表用 read_file_lines 读全文，或按名字 search"
+        ) if _truncated else "",
     }
 
 
@@ -1314,10 +1291,17 @@ def _parse_c_structure(text: str) -> dict:
                 out.append(x)
         return sorted(out, key=lambda x: x["start"])
 
+    _fn = _uniq(functions)
+    _cls = _uniq(classes)
+    _truncated = len(_fn) > STRUCTURE_MAX_FUNCTIONS or len(_cls) > STRUCTURE_MAX_CLASSES
     return {
-        "classes": _uniq(classes),
-        "functions": _uniq(functions),
+        "classes": _cls[:STRUCTURE_MAX_CLASSES],
+        "functions": _fn[:STRUCTURE_MAX_FUNCTIONS],
         "imports": imports[:50],
+        "truncated": _truncated,
+        "note": (
+            "结构列表已截断；需要完整列表用 read_file_lines 读全文，或按名字 search"
+        ) if _truncated else "",
     }
 
 
@@ -1356,12 +1340,10 @@ def _parse_md_structure(text: str) -> dict:
 
 # ---------- 配置（JSON/YAML/TOML/INI）----------
 def _parse_config_structure(text: str, ext: str) -> dict:
-    """配置文件的“结构”是顶层键（或段）的行号。"""
     keys = []
     lines = text.split("\n")
 
     if ext in (".json", ".jsonc", ".json5"):
-        # 顶层 key：缩进为 0 或 2 的 "key":
         depth = 0
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -1378,7 +1360,6 @@ def _parse_config_structure(text: str, ext: str) -> dict:
                 m = re.match(r"^([\w.-]+)\s*:", line)
                 if m:
                     keys.append({"key": m.group(1), "line": i})
-            # 也记二级 key（缩进 2）
             elif line.startswith("  ") and not line.startswith("    "):
                 m = re.match(r"^\s+([\w.-]+)\s*:", line)
                 if m:
@@ -1404,8 +1385,9 @@ def _parse_config_structure(text: str, ext: str) -> dict:
 
     return {"keys": keys[:100]}
 
+
 def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
-                       max_results=50, context=0, content_regex=False,
+                       max_results=10, context=0, content_regex=False,
                        count_only=False):
     """按文件名 glob + 内容匹配搜索文件。
 
@@ -1435,7 +1417,6 @@ def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
     ctx = max(0, min(ctx_raw, 10))
     context_applied = ctx if ctx != ctx_raw else None
 
-    # 编译内容模式
     content_re = None
     if content_pattern:
         if content_regex:
@@ -1444,7 +1425,7 @@ def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
             except re.error as e:
                 raise ValueError(f"content_pattern 正则无效: {e}")
         else:
-            content_re = None  # 子串模式
+            content_re = None
 
     skip_dirs = {"__pycache__", ".git", "node_modules", ".venv", "dist", "build"}
     MAX_SCAN_FILES = 5000
@@ -1470,14 +1451,12 @@ def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
         except OSError:
             continue
 
-        # ---- 只列文件：不读内容 ----
         if not content_pattern:
             matches.append({"path": _rel_path(f), "size": fsize})
             if len(matches) >= max_results:
                 break
             continue
 
-        # ---- 搜内容：先做二进制/超大检查 ----
         if fsize > SEARCH_MAX_FILE_BYTES:
             large_skipped += 1
             continue
@@ -1509,7 +1488,6 @@ def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
                 break
             continue
 
-        # 每一处命中都返回；ctx>0 时带前后文
         for ln in hit_lines:
             item = {"path": _rel_path(f), "size": fsize, "line": ln,
                     "text": lines[ln - 1]}
@@ -1542,6 +1520,12 @@ def _search_files_sync(path_str, file_pattern="*", content_pattern=None,
     if context_applied is not None:
         result["context_applied"] = context_applied
         result["context_note"] = f"context 上限 10，已从 {ctx_raw} 钳到 {ctx}"
+    if ctx > 0 and len(matches) >= max_results // 2:
+        result["context_advice"] = (
+            f"context={ctx} 让每条命中带 {ctx*2+1} 行上下文，"
+            f"{len(matches)} 条命中共约 {len(matches)*(ctx*2+1)} 行。"
+            f"如果只是定位、不需要上下文，下次传 context=0 能大幅减少返回体积。"
+        )
     return result
 
 # ============================================================
@@ -1552,7 +1536,6 @@ async def execute(envelop, agent):
     action = envelop.payload.get("action", "")
     path_str = envelop.payload.get("path", "")
 
-    # 所有操作（含未知 action）都要求 path，统一校验
     if not isinstance(path_str, str) or path_str == "":
         envelop.payload = {"ok": False, "error": "缺少 path 参数"}
         return envelop
@@ -1595,7 +1578,6 @@ async def execute(envelop, agent):
                 envelop.payload = {"ok": False, "error": "content 必须是字符串"}
                 return envelop
 
-            # ★ 写前拒空：.html / .js / .py 等"有内容才有意义"的文件
             ext = Path(path_str).suffix.lower()
             if content == "" and ext in (
                 ".html", ".js", ".py", ".css", ".json", ".md",
@@ -1606,9 +1588,7 @@ async def execute(envelop, agent):
                     "error": f"content 为空，拒绝写入 {ext} 文件（可能是模型漏传或输出被截断）"
                 }
                 return envelop
-            # ★ 写前记录原大小，供上层判断"是否把有内容的文件写空了"
-            #   必须用 _resolve_path 解析，与 _write_file_sync 内部规则完全一致
-            #   （黑名单逃逸检查、前导 "/" 处理、相对根目录都靠它）
+
             old_size = 0
             try:
                 target = _resolve_path(path_str)
@@ -1617,7 +1597,6 @@ async def execute(envelop, agent):
             except Exception:
                 old_size = 0
 
-            # ★ 空内容：允许（用户可能想清空），但记 warning 方便排查
             if content == "":
                 try:
                     agent.log.warning(
@@ -1634,8 +1613,8 @@ async def execute(envelop, agent):
                 "path": _rel_path(p),
                 "path_kind": _path_kind(p),
                 "size": actual_size,
-                "old_size": old_size,          # ★ 新增
-                "new_size": actual_size,       # ★ 新增
+                "old_size": old_size,
+                "new_size": actual_size,
                 "validation": validation,
             }
             if validation.get("checked") and not validation.get("ok"):
@@ -1681,7 +1660,6 @@ async def execute(envelop, agent):
             if validation.get("checked") and not validation.get("ok"):
                 result["validation_failed"] = True
                 result["warning"] = f"编辑后校验失败：{validation['error']}"
-            # ★ 校验依赖绝对路径，转相对必须放在校验之后
             abs_path = result["path"]
             result["path"] = _rel_path(abs_path)
             result["path_kind"] = _path_kind(abs_path)
@@ -1753,7 +1731,6 @@ async def execute(envelop, agent):
             return envelop
 
         elif action == "search":
-            # ★ 新参数名；旧名 pattern/content 仍兼容
             file_pattern = envelop.payload.get(
                 "file_pattern",
                 envelop.payload.get("pattern", "*"),
@@ -1762,10 +1739,19 @@ async def execute(envelop, agent):
                 "content_pattern",
                 envelop.payload.get("content"),
             )
-            max_results = int(envelop.payload.get("max_results", 50))
+            max_results = int(envelop.payload.get("max_results", 10))
             context = int(envelop.payload.get("context", 0) or 0)
             content_regex = bool(envelop.payload.get("content_regex", False))
             count_only = bool(envelop.payload.get("count_only", False))
+
+            # ★ 自动修正：content_pattern 含 '|' 但没设 content_regex 时，
+            #   模型意图明确（多关键词），直接按正则执行，不返回错误。
+            #   拦截会让模型反复撞（实测 23 次），自动修让它一次拿结果。
+            _auto_regex = False
+            if (isinstance(content_pattern, str) and "|" in content_pattern
+                    and not content_regex):
+                content_regex = True
+                _auto_regex = True
 
             result = await loop.run_in_executor(
                 None,
@@ -1774,6 +1760,26 @@ async def execute(envelop, agent):
                     max_results, context, content_regex, count_only,
                 ),
             )
+            if _auto_regex:
+                result["auto_regex"] = (
+                    "content_pattern 含 '|'，已自动按 content_regex=true 执行。"
+                    "下次多关键词搜索时直接传 content_regex=true，可省一次修正。"
+                )
+            if result.get("mode") == "content" and result.get("total") == 0:
+                result["hint"] = (
+                    "0 命中。不要用同样参数重搜，按顺序排查：\n"
+                    "1) 关键词是否拼错 / 需要正则：多关键词设 content_regex=true；\n"
+                    "2) 文件范围是否太窄：放宽 file_pattern，或 path 指到更上层目录；\n"
+                    "3) 换同义词再搜一次（如 handler↔处理、read↔读取）；\n"
+                    "4) 仍 0 命中：用 list_dir 看目录里有哪些文件，"
+                    "或 read_file_lines 读指定范围——不要 read_file 通读全文。"
+                )
+            if result.get("truncated") and result.get("mode") == "content":
+                result["truncated_hint"] = (
+                    f"只返回前 {max_results} 条命中（已达 max_results 上限）。"
+                    f"如需要更多，传 max_results=50，或缩小 content_pattern / "
+                    f"file_pattern 范围。不要因为看不到全部就重搜同样的参数。"
+                )
             envelop.payload = {"ok": True, "data": result}
             return envelop
 
@@ -1801,4 +1807,4 @@ async def execute(envelop, agent):
     except Exception as e:
         envelop.payload = {"ok": False, "error": f"操作失败: {str(e)}"}
         return envelop
-# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,delete_lines,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys,start_line,end_line,mode,old_lines,new_lines,matches,total,scanned,scan_truncated,binary_skipped,large_skipped,context,context_applied,context_note,count,text | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,file_pattern,content_pattern,content_regex,count_only,max_results,context,pattern | type_values=directory,file
+# @AICP_ALIGN: actions=read_file,read_file_lines,write_file,append_file,edit_file,delete_lines,file_exists,list_dir,mkdir,delete_file,file_stat,search,code_structure | output_fields=full_content,preview,size,size_kb,total_lines,preview_start_line,preview_lines,preview_bytes,preview_kb,truncated,hint,lines,start,end,returned,with_line_num,remaining_after,path,exists,items,deleted,stat,name,type,modified_at,created_at,replaced,old_size,new_size,validation,checked,ok,error,kind,warning,language,ext,structure,classes,functions,imports,globals,elements,event_handlers,headings,code_blocks,keys,start_line,end_line,mode,old_lines,new_lines,matches,total,scanned,scan_truncated,binary_skipped,large_skipped,context,context_applied,context_note,context_advice,count,text,truncated_hint,note | input_fields=action,path,content,find,replace,start_line,end_line,with_line_num,file_pattern,content_pattern,content_regex,count_only,max_results,context,pattern | type_values=directory,file

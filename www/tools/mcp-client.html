@@ -430,6 +430,24 @@ body {
 .form-input:focus {
   border-color: rgba(139,92,246,0.5);
 }
+.json-editor {
+  width: 100%;
+  min-height: 240px;
+  padding: 10px 12px;
+  background: #0a0a0f;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 7px;
+  color: #e5e7eb;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.55;
+  resize: vertical;
+  outline: none;
+  tab-size: 2;
+}
+.json-editor:focus {
+  border-color: rgba(139,92,246,0.5);
+}
 .form-hint {
   font-size: 11px;
   color: #6b7280;
@@ -582,7 +600,7 @@ body {
       <input type="text" class="form-input" id="inputName" placeholder="my-server">
     </div>
 
-    <div class="form-group">
+    <div class="form-group" id="urlGroup">
       <label class="form-label" data-i18n="mc.urlLabel">URL</label>
       <input type="text" class="form-input" id="inputUrl" placeholder="https://example.com/mcp">
     </div>
@@ -594,12 +612,13 @@ body {
       <div class="auth-option active" data-protocol="http" onclick="selectProtocol('http')">HTTP</div>
       <div class="auth-option" data-protocol="streamable" onclick="selectProtocol('streamable')" data-i18n="mc.protoStreamable">Streamable</div>
       <div class="auth-option" data-protocol="sse" onclick="selectProtocol('sse')">SSE</div>
+      <div class="auth-option" data-protocol="stdio" onclick="selectProtocol('stdio')">STDIO</div>
     </div>
 
-    <div class="form-group">
+    <div class="form-group" id="authLabelGroup">
       <label class="form-label" data-i18n="mc.authLabel">Auth Type</label>
     </div>
-    <div class="auth-select" id="authSelect">
+    <div class="auth-select" id="authSelect" style="display:flex;">
       <div class="auth-option active" data-auth="none" onclick="selectAuth('none')" data-i18n="mc.authNone">None</div>
       <div class="auth-option" data-auth="bearer" onclick="selectAuth('bearer')">Bearer</div>
       <div class="auth-option" data-auth="apikey" onclick="selectAuth('apikey')" data-i18n="mc.authApiKey">API Key</div>
@@ -620,11 +639,40 @@ body {
       <div class="form-hint"><a class="mini-link" target="_blank" rel="noopener" href="/api/os/mcp_oauth?action=list&format=html" data-i18n="mc.oauthManage">OAuth authorization</a></div>
     </div>
 
+    <div class="form-group" id="launchGroup">
+      <label class="form-label" data-i18n="mc.launchLabel">Launch command (optional)</label>
+      <input type="text" class="form-input" id="inputLaunchCmd" placeholder="node C:/path/rea.mjs mcp --http">
+      <label class="form-label" id="launchPortLabel" data-i18n="mc.launchPortLabel">Port</label>
+      <input type="text" class="form-input" id="inputLaunchPort" placeholder="64030">
+      <div class="form-hint" data-i18n="mc.launchHint">If set, AICP starts this command before connecting. Use {port} / {host} placeholders in the command and URL.</div>
+    </div>
+
     <div class="modal-error" id="modalError"></div>
 
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeAddModal()" data-i18n="mc.cancel">Cancel</button>
       <button class="btn-primary" onclick="addServer()" data-i18n="mc.add">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑 Modal -->
+<div class="modal" id="editModal">
+  <div class="modal-card" style="max-width:560px;">
+    <div class="modal-title" data-i18n="mc.editTitle">Edit MCP Server</div>
+    <div class="modal-desc" data-i18n="mc.editDesc">Modify the server configuration as JSON, then save.</div>
+
+    <div class="form-group">
+      <label class="form-label" data-i18n="mc.editConfigLabel">Configuration (JSON)</label>
+      <textarea class="json-editor" id="editJson" spellcheck="false"></textarea>
+      <div class="form-hint" data-i18n="mc.editHint">A null value removes that field. The server name cannot be renamed.</div>
+    </div>
+
+    <div class="modal-error" id="editError"></div>
+
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeEditModal()" data-i18n="mc.cancel">Cancel</button>
+      <button class="btn-primary" onclick="saveEdit()" data-i18n="mc.save">Save</button>
     </div>
   </div>
 </div>
@@ -642,6 +690,7 @@ const i18n = {
     'mc.urlLabel': 'URL',
     'mc.protocolLabel': 'Protocol',
     'mc.protoStreamable': 'Streamable',
+    'mc.protoStdio': 'STDIO',
     'mc.authLabel': 'Auth Type',
     'mc.authNone': 'None',
     'mc.authApiKey': 'API Key',
@@ -670,7 +719,22 @@ const i18n = {
     'mc.emptyDesc': 'Add your first MCP server to extend AICP with external tools.',
     'mc.errorName': 'Please enter a server name',
     'mc.errorUrl': 'Please enter a valid URL',
+    'mc.errorCmd': 'Please enter a launch command',
     'mc.deleteConfirm': 'Remove this MCP server?',
+    'mc.launchLabel': 'Launch command (optional)',
+    'mc.launchLabelStdio': 'Launch command (required)',
+    'mc.launchPortLabel': 'Port',
+    'mc.launchHint': 'If set, AICP starts this command before connecting. Use {port} / {host} placeholders in the command and URL.',
+    'mc.launch': 'Start',
+    'mc.stop': 'Stop',
+    'mc.edit': 'Edit',
+    'mc.editTitle': 'Edit MCP Server',
+    'mc.editDesc': 'Modify the server configuration as JSON, then save.',
+    'mc.editConfigLabel': 'Configuration (JSON)',
+    'mc.editHint': 'A null value removes that field. The server name cannot be renamed.',
+    'mc.save': 'Save',
+    'mc.errorJson': 'Invalid JSON',
+    'mc.editFailed': 'Save failed',
   },
   zh: {
     'mc.title': 'MCP 客户端',
@@ -682,6 +746,7 @@ const i18n = {
     'mc.urlLabel': '地址',
     'mc.protocolLabel': '协议',
     'mc.protoStreamable': 'Streamable',
+    'mc.protoStdio': 'STDIO',
     'mc.authLabel': '认证方式',
     'mc.authNone': '无',
     'mc.authApiKey': 'API Key',
@@ -710,7 +775,22 @@ const i18n = {
     'mc.emptyDesc': '添加第一个 MCP 服务，为 AICP 接入外部工具能力。',
     'mc.errorName': '请输入服务名称',
     'mc.errorUrl': '请输入有效地址',
+    'mc.errorCmd': '请输入启动命令',
     'mc.deleteConfirm': '确认移除这个 MCP 服务？',
+    'mc.launchLabel': '启动命令（可选）',
+    'mc.launchLabelStdio': '启动命令（必填）',
+    'mc.launchPortLabel': '端口',
+    'mc.launchHint': '填写后，AICP 会在连接前自动拉起该进程。命令和地址中可用 {port} / {host} 占位。',
+    'mc.launch': '启动',
+    'mc.stop': '停止',
+    'mc.edit': '编辑',
+    'mc.editTitle': '编辑 MCP Server',
+    'mc.editDesc': '以 JSON 形式修改该服务的配置，然后保存。',
+    'mc.editConfigLabel': '配置（JSON）',
+    'mc.editHint': '值为 null 表示删除该字段。服务名不可修改。',
+    'mc.save': '保存',
+    'mc.errorJson': 'JSON 格式错误',
+    'mc.editFailed': '保存失败',
   }
 };
 
@@ -739,6 +819,14 @@ function toggleLang() {
 }
 
 // 通知父页（console iframe）本页语种，实现与外层双向同步
+function notifyParentMcpChanged() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'aicp_mcp_changed' }, '*');
+    }
+  } catch (e) {}
+}
+
 function notifyParentLang(lang) {
   try {
     if (window.parent && window.parent !== window) {
@@ -885,6 +973,9 @@ async function loadServers() {
     toolCount: s.tool_count || 0,
     enabled: s.enabled !== false,
     lastError: s.last_error || '',
+    launch: !!s.launch,
+    launchCommand: s.launch_command || '',
+    launchRunning: !!s.launch_running,
     expanded: false
   }));
   renderServerList();
@@ -940,6 +1031,12 @@ function renderServerList() {
           ${s.lastError ? `<div class="server-error" title="${s.lastError}">${s.lastError}</div>` : ''}
         </div>
         <div class="server-actions">
+          ${s.launch ? `<button class="refresh-btn" onclick="event.stopPropagation(); ${s.launchRunning ? 'stopLaunch' : 'startLaunch'}('${s.id}')" title="${s.launchRunning ? t('mc.stop') : t('mc.launch')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${s.launchRunning ? '<rect x="6" y="6" width="12" height="12" rx="2"/>' : '<polygon points="6 4 20 12 6 20 6 4"/>'}</svg>
+          </button>` : ''}
+          <button class="refresh-btn" onclick="event.stopPropagation(); openEditModal('${s.id}')" title="${t('mc.edit')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
           <button class="refresh-btn" onclick="event.stopPropagation(); refreshServer('${s.id}')" title="Refresh">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           </button>
@@ -990,6 +1087,7 @@ async function toggleServer(id) {
       s.status = 'off';
       s.toolCount = 0;
       delete toolsCache[s.name];
+      notifyParentMcpChanged();
     } else {
       s.status = 'on';
     }
@@ -1000,6 +1098,7 @@ async function toggleServer(id) {
     if (res.ok) {
       s.status = 'on';
       s.toolCount = res.tool_count || 0;
+      notifyParentMcpChanged();
     } else {
       s.status = 'off';
       s.lastError = res.error || 'connect failed';
@@ -1024,6 +1123,43 @@ async function refreshServer(id) {
   } else {
     s.lastError = res.error || 'refresh failed';
     s.status = 'off';
+  }
+  renderServerList();
+}
+
+async function startLaunch(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  s.status = 'connecting';
+  renderServerList();
+  const res = await api('launch', { server: s.name });
+  if (res.ok) {
+    s.launchRunning = true;
+    const c2 = await api('connect', { server: s.name });
+    s.status = c2.ok ? 'on' : 'off';
+    s.toolCount = c2.tool_count || 0;
+    if (!c2.ok) s.lastError = c2.error || 'connect failed';
+    else s.lastError = '';
+    notifyParentMcpChanged();
+  } else {
+    s.status = 'off';
+    s.lastError = res.error || 'launch failed';
+  }
+  renderServerList();
+}
+
+async function stopLaunch(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  const res = await api('stop', { server: s.name });
+  if (res.ok) {
+    s.launchRunning = false;
+    const c2 = await api('disconnect', { server: s.name });
+    s.status = 'off';
+    s.toolCount = 0;
+    delete toolsCache[s.name];
+  } else {
+    s.lastError = res.error || 'stop failed';
   }
   renderServerList();
 }
@@ -1053,6 +1189,8 @@ function openAddModal() {
   document.getElementById('inputToken').value = '';
   document.getElementById('inputScope').value = '';
   document.getElementById('inputIssuer').value = '';
+  document.getElementById('inputLaunchCmd').value = '';
+  document.getElementById('inputLaunchPort').value = '';
   document.getElementById('modalError').classList.remove('show');
   selectProtocol('http');
   selectAuth('none');
@@ -1067,6 +1205,22 @@ function selectProtocol(type) {
   document.querySelectorAll('#protocolSelect .auth-option').forEach(el => {
     el.classList.toggle('active', el.dataset.protocol === type);
   });
+  const isStdio = type === 'stdio';
+  const urlGroup = document.getElementById('urlGroup');
+  const authLabelGroup = document.getElementById('authLabelGroup');
+  const authSelect = document.getElementById('authSelect');
+  const launchPortLabel = document.getElementById('launchPortLabel');
+  const launchPortInput = document.getElementById('inputLaunchPort');
+  if (urlGroup) urlGroup.style.display = isStdio ? 'none' : 'flex';
+  if (authLabelGroup) authLabelGroup.style.display = isStdio ? 'none' : 'flex';
+  if (authSelect) authSelect.style.display = isStdio ? 'none' : 'flex';
+  if (launchPortLabel) launchPortLabel.style.display = isStdio ? 'none' : 'flex';
+  if (launchPortInput) launchPortInput.style.display = isStdio ? 'none' : 'flex';
+  const cmdLabel = document.querySelector('#launchGroup .form-label');
+  if (cmdLabel) {
+    cmdLabel.setAttribute('data-i18n', isStdio ? 'mc.launchLabelStdio' : 'mc.launchLabel');
+    cmdLabel.textContent = isStdio ? t('mc.launchLabelStdio') : t('mc.launchLabel');
+  }
 }
 
 function selectAuth(type) {
@@ -1083,6 +1237,8 @@ async function addServer() {
   const name = document.getElementById('inputName').value.trim();
   const url = document.getElementById('inputUrl').value.trim();
   const token = document.getElementById('inputToken').value.trim();
+  const launchCmd = document.getElementById('inputLaunchCmd').value.trim();
+  const launchPort = document.getElementById('inputLaunchPort').value.trim();
   const err = document.getElementById('modalError');
 
   if (!name) {
@@ -1090,7 +1246,14 @@ async function addServer() {
     err.classList.add('show');
     return;
   }
-  if (!url || !url.startsWith('http')) {
+  const isStdio = currentProtocol === 'stdio';
+  if (isStdio) {
+    if (!launchCmd) {
+      err.textContent = t('mc.errorCmd');
+      err.classList.add('show');
+      return;
+    }
+  } else if (!url || !url.startsWith('http')) {
     err.textContent = t('mc.errorUrl');
     err.classList.add('show');
     return;
@@ -1139,8 +1302,22 @@ async function addServer() {
     await loadOAuthState();
   }
 
-  const payload = { server: name, url };
-  if (currentAuth !== 'none' && currentAuth !== 'oauth' && token) payload.token = token;
+  const payload = { server: name, url, protocol: currentProtocol };
+  if (isStdio) {
+    payload.command = launchCmd;
+  } else {
+    if (currentAuth !== 'none' && currentAuth !== 'oauth' && token) payload.token = token;
+    if (launchCmd) {
+      payload.launch = {
+        command: launchCmd,
+        port: launchPort ? parseInt(launchPort, 10) : undefined,
+        host: '127.0.0.1',
+        port_env: 'MCP_PORT',
+        host_env: 'MCP_HOST',
+        url: launchPort ? 'http://127.0.0.1:' + launchPort + '/mcp' : undefined
+      };
+    }
+  }
   const res = await api('connect', payload);
   if (res.ok) {
     newServer.status = 'on';
@@ -1153,9 +1330,65 @@ async function addServer() {
   renderServerList();
 }
 
+// ===== 编辑 Modal =====
+let editingServerId = null;
+
+async function openEditModal(id) {
+  const s = servers.find(x => x.id === id);
+  if (!s) return;
+  editingServerId = s.name;
+  const err = document.getElementById('editError');
+  err.classList.remove('show');
+  const ta = document.getElementById('editJson');
+  ta.value = '';
+  document.getElementById('editModal').classList.add('show');
+  const res = await api('get_config', { server: s.name });
+  if (!res || !res.ok) {
+    err.textContent = (res && res.error) || t('mc.editFailed');
+    err.classList.add('show');
+    return;
+  }
+  ta.value = JSON.stringify(res.config || {}, null, 2);
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').classList.remove('show');
+  editingServerId = null;
+}
+
+async function saveEdit() {
+  const err = document.getElementById('editError');
+  err.classList.remove('show');
+  let cfg;
+  try {
+    cfg = JSON.parse(document.getElementById('editJson').value);
+  } catch (e) {
+    err.textContent = t('mc.errorJson') + ': ' + String((e && e.message) || e);
+    err.classList.add('show');
+    return;
+  }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+    err.textContent = t('mc.errorJson');
+    err.classList.add('show');
+    return;
+  }
+  const res = await api('update_server', { server: editingServerId, config: cfg });
+  if (!res || !res.ok) {
+    err.textContent = (res && res.error) || t('mc.editFailed');
+    err.classList.add('show');
+    return;
+  }
+  closeEditModal();
+  await loadServers();
+}
+
 // 点击遮罩关闭
 document.getElementById('addModal').addEventListener('click', (e) => {
   if (e.target.id === 'addModal') closeAddModal();
+});
+
+document.getElementById('editModal').addEventListener('click', (e) => {
+  if (e.target.id === 'editModal') closeEditModal();
 });
 
 // ===== 初始化 =====

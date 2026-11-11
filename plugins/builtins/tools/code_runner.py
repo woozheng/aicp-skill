@@ -12,6 +12,8 @@
 稳定性加固（本次）：
     - 专用线程池 _CODE_EXECUTOR（max_workers=2），卡住的执行不占默认池
     - 超时/完成/排队都打日志，方便排查「卡住」是执行慢还是排队
+    - _failure_env 不再触发网络探测，防阻塞主事件循环
+    - 运行时异常堆栈截到 15 层，防单条 error 撑爆上限
     - 不改 AST 检查、沙箱能力、execute 签名、返回值结构
 
 接收：
@@ -67,6 +69,10 @@ BLOCKED_FETCH_HOSTS = [
     "169.254.169.254", "metadata.google.internal",
 ]
 
+# 运行时异常堆栈最多保留层数：模型需要的是"我写的代码哪行炸了"，
+# 不是 asyncio/requests 内部 20 层
+MAX_TRACEBACK_LINES = 15
+
 # ============================================================
 # 环境摘要（模块级缓存，首次算，后续复用）
 # ============================================================
@@ -81,6 +87,9 @@ def _get_env_summary() -> Dict[str, Any]:
 
     缓存 5 分钟：磁盘/网络速度可能变，但 CPU/GPU/库可用性基本不变。
     模型每次跑代码都看到 env，不需要专门「探测环境」这一步。
+
+    ★ 只在专用线程池里被调用（_execute_code 的成功/失败路径），
+      不在主事件循环里调。原因是里面同步 requests.head 会阻塞。
     """
     global _ENV_CACHE, _ENV_CACHE_AT
 
@@ -168,8 +177,9 @@ def _get_env_summary() -> Dict[str, Any]:
     res["libs_available"] = available
     res["libs_missing"] = missing
 
-    # --- 网络速度探测（轻量，HEAD 请求，2s 超时）---
+    # --- 网络速度探测（轻量，HEAD 请求，1s 超时）---
     # 只探「大文件下载源」，用于模型判断「能不能下模型」
+    # ★ 这里 3 个源 × 1s 超时 = 最多 3s；只在专用线程池里调用，不阻塞主循环
     net_sources = {
         "pypi": "https://pypi.org",
         "hf-mirror": "https://hf-mirror.com",
@@ -181,7 +191,7 @@ def _get_env_summary() -> Dict[str, Any]:
         for name, url in net_sources.items():
             try:
                 t0 = time.time()
-                _rq.head(url, timeout=2, allow_redirects=True)
+                _rq.head(url, timeout=1, allow_redirects=True)
                 ms = int((time.time() - t0) * 1000)
                 net[name] = f"ok {ms}ms"
             except Exception as e:
@@ -210,8 +220,21 @@ def _failure_env() -> Dict[str, Any]:
 
     校验失败（timeout_s 越界/格式错）时本次没有生效的超时，
     因此不写 exec_timeout_s，避免和上一次调用的残留混淆。
+
+    ★ 不触发网络探测：_get_env_summary 首次调用会同步 HEAD 3 个源（最多 3s），
+      而 _failure_env 在 execute 入口同步调，会阻塞主事件循环。
+      这里只在缓存已存在时复用，不存在就返回最小 env。
     """
-    env = _get_env_summary()
+    global _ENV_CACHE
+    if _ENV_CACHE is not None:
+        env = dict(_ENV_CACHE)
+    else:
+        env = {
+            "cpu_count": "unknown",
+            "disk_free_gb": "unknown",
+            "gpu": "unknown",
+            "note": "env 尚未探测（首次执行成功后才会有完整环境摘要）",
+        }
     env.pop("exec_timeout_s", None)
     env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
     return env
@@ -377,8 +400,13 @@ def _build_safe_globals(agent) -> Dict[str, Any]:
     from pathlib import Path as _Path
 
     # 基础 builtins 全放行（open / print / 等都不禁）
-    # 仅把 __import__ 换成"受限 import"：拦截危险命令模块的同步用法，但不拦能力
-    g = {k: v for k, v in _builtins.__dict__.items() if not k.startswith("_")}
+    # ★ eval/exec/compile/__import__ 与 AST 预检对齐，从沙箱全局里去掉，
+    #   防 AST 检查有漏时被绕过
+    _FORBIDDEN_BUILTINS = ("eval", "exec", "compile", "__import__")
+    g = {
+        k: v for k, v in _builtins.__dict__.items()
+        if not k.startswith("_") and k not in _FORBIDDEN_BUILTINS
+    }
 
     _original_get = _requests.get
     _original_post = _requests.post
@@ -727,6 +755,19 @@ async def _execute_code(code: str, agent, timeout_s: int = DEFAULT_TIMEOUT_SECON
             execute_fn, envelop, agent, timeout_s
         )
         logger.info(f"[code_runner] 执行完成 耗时={time.time()-_t0:.1f}s")
+    except asyncio.CancelledError:
+        logger.warning(
+            f"[code_runner] 执行被取消（子调用抛 CancelledError）耗时={time.time()-_t0:.1f}s"
+        )
+        _env = _get_env_summary()
+        _env["exec_timeout_s"] = timeout_s
+        _env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
+        return {
+            "ok": False,
+            "error": "【错误分类】SANDBOX_BLOCK\n【一句话】用户代码被取消\n【原因】await 的子调用抛了 CancelledError，已兜住",
+            "error_category": "SANDBOX_BLOCK",
+            "env": _env,
+        }
     except SandboxBlockError as e:
         logger.warning(
             f"[code_runner] 沙箱拦截/超时 耗时={time.time()-_t0:.1f}s 原因={e}"
@@ -741,7 +782,14 @@ async def _execute_code(code: str, agent, timeout_s: int = DEFAULT_TIMEOUT_SECON
             "env": _env,
         }
     except Exception as e:
-        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        # ★ 堆栈只保留最后 MAX_TRACEBACK_LINES 层：
+        #   模型需要的是"我写的代码哪行炸了"，不是 asyncio/requests 内部 20 层。
+        #   全量堆栈会撑爆单条 error 上限。
+        _tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
+        if len(_tb_lines) > MAX_TRACEBACK_LINES:
+            _omitted = len(_tb_lines) - MAX_TRACEBACK_LINES
+            _tb_lines = [f"…（前面省略 {_omitted} 层）\n"] + _tb_lines[-MAX_TRACEBACK_LINES:]
+        tb = "".join(_tb_lines)
         _env = _get_env_summary()
         _env["exec_timeout_s"] = timeout_s
         _env["exec_timeout_default"] = DEFAULT_TIMEOUT_SECONDS
@@ -851,7 +899,17 @@ async def execute(envelop, agent):
             }
             return envelop
 
-    result = await _execute_code(code, agent, timeout_s)
+    try:
+        result = await _execute_code(code, agent, timeout_s)
+    except asyncio.CancelledError:
+        logger.warning("[code_runner] execute 被取消")
+        envelop.payload = {
+            "ok": False,
+            "error": "【错误分类】SANDBOX_BLOCK\n【一句话】execute 被取消\n【原因】子调用抛出 CancelledError，已兜住并返回",
+            "error_category": "SANDBOX_BLOCK",
+            "env": _failure_env(),
+        }
+        return envelop
     if 'agent.llm' in code and not getattr(agent, 'llm', None):
         result['llm_notice'] = ('引擎未配置模型：aicp.yaml 缺 models.providers，agent.llm 为 None，'
                                 'LLM 调用不会生效，请提示用户先配置模型')

@@ -146,8 +146,22 @@ async def _check_auth(request, agent) -> tuple[bool, str, str]:
     """返回 (ok, user_id, error_msg)。"""
     token = _extract_token(request)
 
-    # 本机 / 同源：跳过鉴权，user_id=local
-    if _is_local_request(request) or _is_same_origin(request):
+    # ★ 鉴权裁决统一交给 os/_auth.requires_auth：
+    #   mode=token  → 一律要 token，本机/同源不再短路
+    #   mode=hybrid → 本机/同源放行，带 XFF 时同源判定失效
+    #   mode=local  → 交给 _verify 的 local 护栏
+    from plugins.os._auth import requires_auth, _resolve_mode
+    # local 模式：本机或同站直连直接放行，无需 token。
+    # 9000 网关 -> 9002 接收器属跨端口同站，用只比主机名的 _is_same_origin 判定。
+    if _resolve_mode(agent) == "local" and (_is_local_request(request) or _is_same_origin(request)):
+        return True, "local", ""
+    if not requires_auth(
+        agent,
+        remote=request.remote or "",
+        forwarded_for=request.headers.get("X-Forwarded-For", ""),
+        origin=request.headers.get("Origin", ""),
+        host=request.host,
+    ):
         # 带了 token 也尊重它（便于本机模拟多用户）
         if token:
             auth_env = core.Envelop(

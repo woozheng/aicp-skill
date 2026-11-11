@@ -105,6 +105,15 @@ body{
 }
 .collapse-btn:hover{background:var(--surface-2);color:var(--text)}
 
+.sidebar-agent{padding:12px 12px 0;flex-shrink:0}
+.sidebar-agent select{
+  width:100%;background:var(--surface-2);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:7px 11px;color:var(--text);font-size:12px;
+  outline:none;font-family:inherit;transition:.15s;cursor:pointer;
+}
+.sidebar-agent select:focus{border-color:var(--brand);background:var(--bg)}
+
 .sidebar-search{padding:12px 12px 8px;flex-shrink:0}
 .sidebar-search input{
   width:100%;background:var(--surface-2);
@@ -891,6 +900,16 @@ body{
 .app-card .icon{font-size:22px;margin-bottom:6px}
 .app-card .name{font-size:12px;color:var(--text);font-weight:500}
 .app-card .app-id{font-size:10px;color:var(--text-3);margin-top:2px;font-family:var(--font-mono);word-break:break-all}
+.app-card{position:relative}
+.app-card .app-del{
+  position:absolute;top:6px;right:6px;width:20px;height:20px;
+  border-radius:50%;border:1px solid var(--border);
+  background:var(--surface-2);color:var(--text-3);
+  font-size:11px;line-height:1;cursor:pointer;
+  opacity:0;transition:.15s;display:flex;align-items:center;justify-content:center;
+}
+.app-card:hover .app-del{opacity:1}
+.app-card .app-del:hover{border-color:var(--err);color:var(--err)}
 .app-search-bar{width:100%;max-width:var(--chat-width);margin-bottom:10px}
 .app-search-bar input{width:100%;box-sizing:border-box;padding:7px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-size:12px;outline:none}
 .app-search-bar input:focus{border-color:var(--brand)}
@@ -1028,6 +1047,11 @@ body{
     </div>
     <button class="collapse-btn" onclick="toggleSidebarDesktop()" title="Collapse">☰</button>
   </div>
+
+  <div class="sidebar-agent">
+    <select id="agentSelect" onchange="switchAgent(this.value)"></select>
+  </div>
+
 
   <div class="sidebar-search">
     <input type="text" id="convSearchInput" data-i18n-ph="sidebar.search" placeholder="Search conversations..." autocomplete="off" oninput="filterConversations(this.value)" onchange="filterConversations(this.value)">
@@ -1174,6 +1198,8 @@ body{
         <button class="footer-btn icon-only letter" data-activity="mcp" onclick="openMcpPage()" data-i18n-title="footer.mcpTitle" title="MCP Client">M</button>
       </span>
       <span id="sourceDisplay" data-i18n="footer.local">Local</span>
+      <span class="stat-sep">|</span>
+      <span id="userDisplay" data-i18n="footer.user" title="Your identity">User: -</span>
     </span>
     <span class="fb-div"></span>
     <span class="fb-group" data-scope="session">
@@ -1361,8 +1387,8 @@ var I18N = {
     'sidebar.chat':'对话','sidebar.apps':'应用','sidebar.system':'系统',
     'chat.new':'新对话','chat.emptyDesc':'描述你的需求，或点左上角 ☰ 切换对话',
     'chat.placeholder':'输入需求...','chat.scrollBottom':'回到底部',
-    'apps.title':'我的应用',
-    'footer.session':'会话: -','footer.local':'本地',
+    'apps.title':'我的应用','apps.protected':'系统示例应用不可删除','apps.protectedTitle':'系统示例应用受保护，不可删除',
+    'footer.session':'会话: -','footer.local':'本地','footer.user':'用户',
     'footer.exp':'经验','footer.board':'看板','footer.cron':'心跳','footer.skill':'技能','footer.sub':'分身',
     'footer.expTitle':'经验背包','footer.boardTitle':'任务看板','footer.cronTitle':'心跳任务','footer.subTitle':'分身任务','footer.skillTitle':'技能管理','footer.mcpTitle':'MCP 客户端',
     'footer.usage':'用量','footer.usageTitle':'Token 用量统计',
@@ -1384,6 +1410,7 @@ var I18N = {
     'msg.confirmRestart':'确认重启？','msg.confirmClearSkill':'确定清空当前技能？',
     'msg.restarting':'系统正在重启...','msg.noConversations':'暂无对话',
     'msg.noApps':'暂无应用','msg.noSystemApps':'暂无系统应用',
+    'msg.delete':'删除','msg.deleteAppConfirm':'确定删除应用',
     'msg.noCron':'暂无心跳任务','msg.noModels':'未找到可用模型','msg.noSubTasks':'暂无分身任务',
     'msg.loadFail':'加载失败: ','msg.loadFailShort':'加载失败',
     'msg.untitled':'(无标题)','msg.selectConv':'先选择对话',
@@ -1396,8 +1423,8 @@ var I18N = {
     'sidebar.chat':'Chat','sidebar.apps':'Apps','sidebar.system':'System',
     'chat.new':'New chat','chat.emptyDesc':'Describe what you need, or click ☰ to switch conversations.',
     'chat.placeholder':'Type your request...','chat.scrollBottom':'Back to bottom',
-    'apps.title':'My Apps',
-    'footer.session':'Session: -','footer.local':'Local',
+    'apps.title':'My Apps','apps.protected':'The system example app cannot be deleted','apps.protectedTitle':'The system example app is protected and cannot be deleted',
+    'footer.session':'Session: -','footer.local':'Local','footer.user':'User',
     'footer.exp':'Exp','footer.board':'Board','footer.cron':'Cron','footer.skill':'Skill','footer.sub':'Sub',
     'footer.expTitle':'Experience','footer.boardTitle':'Task Board','footer.cronTitle':'Heartbeat Tasks','footer.subTitle':'Sub Tasks','footer.skillTitle':'Skills','footer.mcpTitle':'MCP Client',
     'footer.usage':'Usage','footer.usageTitle':'Token Usage',
@@ -1419,6 +1446,7 @@ var I18N = {
     'msg.confirmRestart':'Confirm restart?','msg.confirmClearSkill':'Clear current skill?',
     'msg.restarting':'System restarting...','msg.noConversations':'No conversations',
     'msg.noApps':'No apps','msg.noSystemApps':'No system apps',
+    'msg.delete':'Delete','msg.deleteAppConfirm':'Delete app',
     'msg.noCron':'No heartbeat tasks','msg.noModels':'No models available','msg.noSubTasks':'No sub tasks',
     'msg.loadFail':'Load failed: ','msg.loadFailShort':'Load failed',
     'msg.untitled':'(Untitled)','msg.selectConv':'Select a conversation first',
@@ -1492,7 +1520,20 @@ function refreshWebviewTitle(){
 }
 // 接收 iframe 内页面（如 settings.html）自己的语言切换，反向同步到外层
 window.addEventListener('message', function(e){
-  if (!e.data || e.data.type !== 'aicp_lang') return;
+  if (!e.data) return;
+  if (e.data.type === 'aicp_skill_pinned') {
+    refreshSessionActivity();   // ★ 子页钉住/取消钉住技能后刷新 S 高亮
+    return;
+  }
+  if (e.data.type === 'aicp_mcp_changed') {
+    refreshGlobalActivity();   // ★ 子页 MCP 连接状态变化后刷新 M 高亮
+    return;
+  }
+  if (e.data.type === 'aicp_goto_home') {
+    location.href = '/';   // ★ 子页(如 settings.html)认证模式切换成功后，整个 console 回到首页
+    return;
+  }
+  if (e.data.type !== 'aicp_lang') return;
   var lang = e.data.lang;
   if (lang !== 'zh' && lang !== 'en') return;
   if (lang === _lang) return;
@@ -1558,6 +1599,49 @@ var _currentModel = '';
 var _switching = false;
 var _subTasks = {};
 var _selectedSubTask = null;
+var _currentAgent = '';
+var AGENT_ENGINE_ROUTE = '/api/builtins/agents/engine';
+
+function agentApi(body) {
+    body = body || {};
+    body.agent_id = _currentAgent;
+    return apiFetch(AGENT_ENGINE_ROUTE, body);
+}
+
+function switchAgent(id) {
+    if (!id || id === _currentAgent) return;
+    localStorage.setItem('aicp_current_agent', id);
+    location.reload();
+}
+
+async function loadAgents() {
+    var sel = document.getElementById('agentSelect');
+    if (!sel) return;
+    try {
+        var res = await apiFetch(AGENT_ENGINE_ROUTE, {action: 'list_agents'});
+        var data = await res.json();
+        var agents = (data && data.agents) ? data.agents : [];
+        var saved = localStorage.getItem('aicp_current_agent');
+        var dflt = (data && data.default) ? data.default : (agents.length ? agents[0].id : '');
+        var ids = agents.map(function(a){ return a.id; });
+        sel.innerHTML = '';
+        agents.forEach(function(a) {
+            var opt = document.createElement('option');
+            opt.value = a.id;
+            opt.textContent = a.name || a.id;
+            if (a.description) opt.title = a.description;
+            sel.appendChild(opt);
+        });
+        var target = (saved && ids.indexOf(saved) !== -1) ? saved : dflt;
+        if (!target) return;
+        sel.value = target;
+        _currentAgent = target;
+        localStorage.setItem('aicp_current_agent', target);
+    } catch(e) {
+        sel.innerHTML = '';
+        sel.disabled = true;
+    }
+}
 var subSessions = {};
 var subSessionBuffers = {};
 var _userId = 'local';
@@ -1566,14 +1650,50 @@ var _webviewOpenedSidebarCollapsed = false;
 // 记录「webview 最大化」这一动作是否是我们主动收起的侧栏（退出全屏时才恢复）
 var _webviewMaxCollapsedSidebar = false;
 
+var _isAdmin = false;
+
 async function initUser() {
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action: 'whoami'});
+        var res = await agentApi({action: 'whoami'});
         var data = await res.json();
         if (data.ok) _userId = data.user_id || 'local';
     } catch(e) {}
+    // 身份显示：footer 显示当前用户名（local/remote 只是接入方式，不代表身份）
+    var ud = document.getElementById('userDisplay');
+    if (ud) {
+        ud.removeAttribute('data-i18n');
+        ud.textContent = (t('footer.user') || 'User') + ': ' + _userId;
+    }
+    var sd2 = document.getElementById('sourceDisplay');
+    if (sd2) sd2.textContent = getSource() === 'local' ? t('footer.local') : (t('footer.local') === '本地' ? '远程' : 'Remote');
+    // 与 index.html 的 updateNavAuth() 共用同一份登录状态（aicp_user）
+    try {
+        var nu = JSON.parse(localStorage.getItem('aicp_user') || 'null');
+        if (nu && nu.uid) _userId = nu.uid;
+    } catch(e) {}
+    await loadAgents();
     connectWS();
     loadConversations();
+}
+
+/* 取当前身份与 admin 标记；失败返回 null */
+async function fetchIdentity() {
+    try {
+        var res = await apiFetch('/api/os/_token_manager', {action:'mode'});
+        if (res.status === 401 || res.status === 403) return {status: res.status};
+        var j = await res.json();
+        var d = j.payload || j.data || j;
+        return {mode: d.mode, is_admin: !!d.is_admin, user_id: d.user_id, source: d.source};
+    } catch(e) {
+        return {error: e.message};
+    }
+}
+
+/* 无 admin 权限时隐藏重启按钮 */
+function applyAdminUI(isAdmin) {
+    _isAdmin = !!isAdmin;
+    var btn = document.querySelector('button[onclick="restartSystem()"]');
+    if (btn) btn.style.display = isAdmin ? '' : 'none';
 }
 
 // ============ 工具函数 ============
@@ -1743,11 +1863,15 @@ function toggleWebviewFromCorner() {
 function closeWebview() {
     var panel = document.getElementById('webviewPanel');
     if (!panel) return;
+    var lastUrl = panel.dataset.url || '';
     panel.classList.remove('show');
     setWebviewMax(false);   // 统一复位全屏状态（含最大化按钮图标/标题）
 
     document.getElementById('webviewFrame').src = 'about:blank';
     panel.dataset.url = '';
+    if (lastUrl.indexOf('mcp-client.html') >= 0) {
+        refreshGlobalActivity();   // ★ 关 MCP 页后刷新 M 高亮
+    }
     if (_webviewOpenedSidebarCollapsed) {
         var sb = document.getElementById('sidebar');
         if (sb) sb.classList.remove('collapsed');
@@ -1770,7 +1894,9 @@ function refreshSkillsWebview() {
     var frame = document.getElementById('webviewFrame');
     if (!frame) return;
     var base = url.split('?')[0];
-    var cleanUrl = base + '?session_id=' + encodeURIComponent(currentConversationId || '');
+    var q = ['session_id=' + encodeURIComponent(currentConversationId || '')];
+    if (_currentAgent) q.push('agent_id=' + encodeURIComponent(_currentAgent));
+    var cleanUrl = base + '?' + q.join('&');
     panel.dataset.url = cleanUrl;
     frame.src = cleanUrl + '&_t=' + Date.now();
 }
@@ -1813,7 +1939,7 @@ async function loadConversations() {
 async function refreshConversations(silent) {
     var box = document.getElementById('convList');
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'list_conversations', include_archived: true});
+        var res = await agentApi({action:'list_conversations', include_archived: true});
         var data = await res.json();
         if (!data.ok) {
             if (box) box.innerHTML = '<div class="empty-state">' + t('msg.loadFail') + escapeHtml(data.error || '?') + '</div>';
@@ -1863,7 +1989,14 @@ function orderConversations(list) {
     var isSub = function(c){ return c && c.id && c.id.indexOf('sub_') === 0; };
     var normals = arr.filter(function(c){ return !isSub(c); });
     var subs = arr.filter(function(c){ return isSub(c); });
-    normals.sort(function(a, b){ return (b.updated_at || '').localeCompare(a.updated_at || ''); });
+    // 刚新建、还没发过消息的对话置顶：localStorage 里记下的那个 id
+    var newId = localStorage.getItem('aicp_new_conv_id') || '';
+    var isNew = function(c){ return !!(newId && c && c.id === newId && !(c.updated_at || '')); };
+    normals.sort(function(a, b){
+        var na = isNew(a) ? 1 : 0, nb = isNew(b) ? 1 : 0;
+        if (na !== nb) return nb - na;
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
     var byParent = {};
     subs.forEach(function(s){
         var p = s.parent_session || '';
@@ -1977,10 +2110,12 @@ function _clearChatAreaForEmptySearch() {
 
 async function createNewConversation() {
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'new_conversation'});
+        var res = await agentApi({action:'new_conversation'});
         var data = await res.json();
         if (data.ok) {
             currentConversationId = data.conversation_id;
+            // 记住刚建的对话 id：排序时把它置顶（发过消息后 updated_at 有值，自动回落）
+            try { localStorage.setItem('aicp_new_conv_id', data.conversation_id || ''); } catch(e) {}
             // 静默刷新：refreshConversations(false) 会按 localStorage 里的旧 id 重新选中旧对话，把新对话顶掉
             await refreshConversations(true);
             selectConversation(currentConversationId);
@@ -2058,7 +2193,7 @@ async function loadConversationFlow(id, beforeTs) {
     try {
         var body = { action: 'get_session', session_id: id, limit: 10 };
         if (beforeTs) body.before_ts = beforeTs;
-        var res = await apiFetch('/api/builtins/agents/main_agent', body);
+        var res = await agentApi(body);
         var data = await res.json();
         if (!data.ok || !data.flow) {
             if (!isLoadMore) {
@@ -2141,7 +2276,7 @@ function buildTurnNode(turnData) {
                     '<span class="tool-name">' + escapeHtml(shortTarget(d.target)) + '</span>' +
                     '<span class="dur"></span>' +
                 '</div>' +
-                (d.action ? '<div class="tool-action">[' + escapeHtml(d.action) + ']</div>' : '');
+                (d.action || toolPathSuffix(params) ? '<div class="tool-action">[' + escapeHtml(d.action || '') + ']' + toolPathSuffix(params) + '</div>' : '');
             toolMap[d.call_id] = node;
             lastThink = '';
             if (chain.children.length > 0) {
@@ -2174,7 +2309,7 @@ function buildTurnNode(turnData) {
 async function refreshConversationFlow(id, silent) {
     var msgs = document.getElementById('chatMessages');
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id:id});
+        var res = await agentApi({action:'get_session', session_id:id});
         var data = await res.json();
         if (data.ok && data.flow) {
             if (data.flow.length > 0) sessionCache[id] = { flow: data.flow, ts: Date.now() };
@@ -2198,7 +2333,7 @@ async function refreshConversationFlow(id, silent) {
 async function deleteConversation(id) {
     if (!confirm(t('msg.confirmDelete'))) return;
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'delete_conversation', conversation_id:id});
+        var res = await agentApi({action:'delete_conversation', conversation_id:id});
         var data = await res.json();
         if (data.ok) {
             if (currentConversationId === id) currentConversationId = null;
@@ -2224,7 +2359,7 @@ async function confirmRename() {
     var tt = document.getElementById('renameInput').value.trim();
     if (!tt) { showToast(t('msg.titleRequired')); return; }
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'rename_conversation', conversation_id:currentConversationId, title:tt});
+        var res = await agentApi({action:'rename_conversation', conversation_id:currentConversationId, title:tt});
         var data = await res.json();
         if (data.ok) {
             closeRenameModal();
@@ -2522,7 +2657,7 @@ function scrollToBottom(force) {
 async function resyncCurrentConversation() {
     if (!currentConversationId) return;
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id: currentConversationId, limit: 50});
+        var res = await agentApi({action:'get_session', session_id: currentConversationId, limit: 50});
         var data = await res.json();
         if (!data.ok || !data.flow) return;
         var flow = data.flow || [];
@@ -2625,6 +2760,19 @@ function fmtArgsLines(params) {
     } catch(e) {}
     return out.join('');
 }
+// 工具调用行里的 path 参数：跟在 action 后面（同行空格分隔）；没有 path 则保持现状
+function toolPathSuffix(params) {
+    var p = '';
+    try {
+        if (params && typeof params === 'object') {
+            var v = params.path;
+            if (typeof v === 'string') p = v.trim();
+            else if (v && typeof v === 'object') p = String(v.path || '').trim();
+        }
+    } catch(e) {}
+    return p ? ' ' + escapeHtml(p) : '';
+}
+
 function toolTitle(target, action, argsJson, think) {
     var lines = [];
     if (think) lines.push(think);
@@ -2674,7 +2822,7 @@ function handleToolStart(data) {
             '<span class="tool-name">' + escapeHtml(shortTarget(target)) + '</span>' +
             '<span class="dur"></span>' +
         '</div>' +
-        (action ? '<div class="tool-action">[' + escapeHtml(action) + ']</div>' : '');
+        (action || toolPathSuffix(params) ? '<div class="tool-action">[' + escapeHtml(action || '') + ']' + toolPathSuffix(params) + '</div>' : '');
     node.dataset.tool = target;
     node.dataset.action = action;
     node.dataset.args = argsJson;
@@ -2819,7 +2967,7 @@ async function showCallDetail(callId) {
     var body = document.getElementById('callDetailBody');
     body.innerHTML = '<div class="loading">' + t('common.loading') + '</div>';
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', { action: 'get_call_detail', session_id: currentConversationId, call_id: callId });
+        var res = await agentApi({ action: 'get_call_detail', session_id: currentConversationId, call_id: callId });
         var data = await res.json();
         if (!data.ok) { body.innerHTML = '<div class="empty-state">' + escapeHtml(data.error || '?') + '</div>'; return; }
         var entries = data.entries || [];
@@ -2970,6 +3118,7 @@ function handleWsData(data) {
         _convListCache.ts = 0;
         if (typeof reloadSubTasks === 'function') { try { reloadSubTasks(); } catch (e) {} }
         refreshConversations(true).then(function(){ renderConversationList(conversations); }).catch(function(){});
+        refreshSessionActivity();   // ★ 分身变化后刷新 A 高亮
         return;
     }
     if (sid && sid !== currentConversationId) return;
@@ -3220,7 +3369,7 @@ async function syncTurnState() {
     var qid = currentConversationId;
     var ep = _turnEpoch;
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', { action: 'get_turn_state', session_id: qid });
+        var res = await agentApi({ action: 'get_turn_state', session_id: qid });
         var resp = await res.json();
         var d = resp.payload || resp.data || resp;
         // 异步返回：期间用户可能已切会话 / 已发了新消息 / 已结束回合 → 结果作废
@@ -3250,7 +3399,7 @@ async function stopCurrentTurn() {
     if (st) { st.disabled = true; st.style.display = 'inline-flex'; }
     var sid = currentConversationId;
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', { action: 'interrupt', session_id: sid, content: '' });
+        var res = await agentApi({ action: 'interrupt', session_id: sid, content: '' });
         var resp = await res.json();
         var d = resp.payload || resp.data || resp;
         if (currentConversationId !== sid) return;
@@ -3296,7 +3445,7 @@ async function sendMessage() {
     input.style.height = 'auto';
     beginTurn();   // 拉高 epoch + 锁定按钮，后续任何旧快照都作废
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', { content: text, session_id: currentConversationId, source: getSource() });
+        var res = await agentApi({ content: text, session_id: currentConversationId, source: getSource() });
         var data = await res.json();
         if (data.status === 'processing' || data.call === 'processing') {
             // 异步回合：保持锁定，等 WS 的 reply_end / interrupted 事件来 endTurn()
@@ -3326,15 +3475,37 @@ async function loadApps() {
         var html = '';
         window._appListCache = apps;
         apps.forEach(function(a){
-            html += '<div class="app-card" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.id) + '" onclick="openAppCard(this)"><div class="icon">📁</div><div class="name">' + escapeHtml(a.name || a.id) + '</div><div class="app-id">' + escapeHtml(a.id) + '</div></div>';
+            html += appCardHtml(a);
         });
         grid.innerHTML = html;
     } catch(e) { document.getElementById('appGrid').innerHTML = '<div class="empty-state">' + t('msg.loadFailShort') + '</div>'; }
+}
+function appCardHtml(a) {
+    var prot = a.protected ? 'true' : 'false';
+    var title = escapeHtml(a.protected ? t('apps.protectedTitle') : t('msg.delete'));
+    return '<div class="app-card" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.id) + '" onclick="openAppCard(this)">' +
+        '<button class="app-del" title="' + title + '" onclick="event.stopPropagation();deleteApp(\'' + escapeHtml(a.id) + '\',' + prot + ')">✕</button>' +
+        '<div class="icon">📁</div><div class="name">' + escapeHtml(a.name || a.id) + '</div><div class="app-id">' + escapeHtml(a.id) + '</div></div>';
 }
 function openAppCard(el) {
     var url = el.getAttribute('data-url');
     var name = el.getAttribute('data-name');
     if (url) openWebview(url, name);
+}
+async function deleteApp(appId, isProtected) {
+    if (isProtected) { showToast(t('apps.protected')); return; }
+    if (!confirm(t('msg.deleteAppConfirm') + ' ' + appId + '?')) return;
+    try {
+        var res = await apiFetch('/api/builtins/control/apps', {action:'uninstall', app_id: appId});
+        var resp = await res.json();
+        var data = resp.payload || resp.data || resp;
+        if (data && data.error) {
+            if (data.code === 'PROTECTED_APP' || data.code === 'SYSTEM_APP') { showToast(t('apps.protected')); return; }
+            throw new Error(data.error);
+        }
+        showToast(t('msg.deleted'));
+        loadApps();
+    } catch(e) { showToast(t('msg.deleteFail') + e.message); }
 }
 function filterApps(keyword) {
     var grid = document.getElementById('appGrid');
@@ -3347,7 +3518,7 @@ function filterApps(keyword) {
     if (filtered.length === 0) { grid.innerHTML = '<div class="empty-state">' + t('msg.noApps') + '</div>'; return; }
     var html = '';
     filtered.forEach(function(a){
-        html += '<div class="app-card" data-url="' + escapeHtml(a.url) + '" data-name="' + escapeHtml(a.id) + '" onclick="openAppCard(this)"><div class="icon">📁</div><div class="name">' + escapeHtml(a.name || a.id) + '</div><div class="app-id">' + escapeHtml(a.id) + '</div></div>';
+        html += appCardHtml(a);
     });
     grid.innerHTML = html;
 }
@@ -3421,7 +3592,10 @@ function openTokenUsagePage() {
 var DEBUG_LOG_PAGE_URL = '/tools/debug-log.html';
 function openDebugLogPage() {
     var url = DEBUG_LOG_PAGE_URL;
-    if (currentConversationId) url += '?session_id=' + encodeURIComponent(currentConversationId);
+    var q = [];
+    if (currentConversationId) q.push('session_id=' + encodeURIComponent(currentConversationId));
+    if (_currentAgent) q.push('agent_id=' + encodeURIComponent(_currentAgent));
+    if (q.length) url += '?' + q.join('&');
     openWebview(url, _lang === 'zh' ? '调试日志' : 'Debug Log');
 }
 // ============ 经验/看板 ============
@@ -3455,7 +3629,7 @@ async function reloadState() {
     editor.readOnly = (currentStateType === 'exp');
     if (currentStateType === 'exp') expList.innerHTML = '<div class="exp-empty">' + escapeHtml(t('common.loading')) + '</div>';
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'get_state', session_id:currentConversationId, type:currentStateType});
+        var res = await agentApi({action:'get_state', session_id:currentConversationId, type:currentStateType});
         var data = await res.json();
         if (data.ok && data.data) {
             if (currentStateType === 'exp') {
@@ -3548,7 +3722,7 @@ async function saveState() {
     }
     var content = document.getElementById('stateEditor').value;
     try {
-        var res = await apiFetch('/api/builtins/agents/main_agent', {action:'save_state', session_id:currentConversationId, type:currentStateType, content:content});
+        var res = await agentApi({action:'save_state', session_id:currentConversationId, type:currentStateType, content:content});
         var data = await res.json();
         if (data.ok) {
             showToast(t('msg.saved'));
@@ -3580,7 +3754,7 @@ async function clearState() {
             return;
         }
         // 任务看板：保持原样 save_state
-        res = await apiFetch('/api/builtins/agents/main_agent', {action:'save_state', session_id:currentConversationId, type:currentStateType, content:''});
+        res = await agentApi({action:'save_state', session_id:currentConversationId, type:currentStateType, content:''});
         data = await res.json();
         if (data.ok) {
             document.getElementById('stateEditor').value = '';
@@ -3592,7 +3766,10 @@ async function clearState() {
 }
 // ============ 心跳 ============
 function openCronModal() { document.getElementById('cronModalOverlay').classList.add('show'); reloadCron(); }
-function closeCronModal() { document.getElementById('cronModalOverlay').classList.remove('show'); }
+function closeCronModal() {
+    document.getElementById('cronModalOverlay').classList.remove('show');
+    refreshGlobalActivity();   // ★ 关窗后刷新 H 高亮
+}
 async function reloadCron() {
     var box = document.getElementById('cronList');
     box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
@@ -3620,7 +3797,11 @@ async function deleteCron(tid) {
     try {
         var res = await apiFetch('/api/os/_cron', {action:'cancel', task_id:tid});
         var data = await res.json();
-        if (data.ok) { showToast(t('msg.deleted')); reloadCron(); }
+        if (data.ok) {
+            showToast(t('msg.deleted'));
+            reloadCron();
+            refreshGlobalActivity();   // ★ 删心跳后立即刷新 H 高亮
+        }
     } catch(e) { showToast('❌ ' + e.message); }
 }
 // ============ 当前技能 ============
@@ -3654,7 +3835,11 @@ async function saveSkill() {
         });
         var data = await res.json();
         var payload = data.data || data;
-        if (payload.ok) { showToast(t('msg.saved')); updateSkillBadge(!!content); }
+        if (payload.ok) {
+            showToast(t('msg.saved'));
+            updateSkillBadge(!!content);
+            refreshSessionActivity();   // ★ 保存技能后刷新 S 高亮
+        }
         else { showToast('❌ ' + t('msg.saveFail') + (payload.error || '?')); }
     } catch(e) { showToast('❌ ' + t('msg.saveFail') + e.message); }
 }
@@ -3671,6 +3856,7 @@ async function clearSkill() {
             showToast(t('msg.cleared'));
             document.getElementById('skillEditor').value = '';
             updateSkillBadge(false);
+            refreshSessionActivity();   // ★ 清空技能后刷新 S 高亮
         } else { showToast('❌ ' + t('msg.clearFail') + (payload.error || '?')); }
     } catch(e) { showToast('❌ ' + t('msg.clearFail') + e.message); }
 }
@@ -4210,7 +4396,10 @@ async function loadCurrentModel() {
 
 // ============ 分身任务 ============
 function openSubTaskModal() { document.getElementById('subTaskModalOverlay').classList.add('show'); reloadSubTasks(); }
-function closeSubTaskModal() { document.getElementById('subTaskModalOverlay').classList.remove('show'); }
+function closeSubTaskModal() {
+    document.getElementById('subTaskModalOverlay').classList.remove('show');
+    refreshSessionActivity();   // ★ 关窗后刷新 A 高亮
+}
 async function reloadSubTasks() {
     var box = document.getElementById('subTaskList');
     box.innerHTML = '<option>' + escapeHtml(t('common.loading')) + '</option>';
@@ -4261,7 +4450,7 @@ async function selectSubTask(taskId) {
         var task = payload1 || {};
         var flow = [];
         try {
-            var res2 = await apiFetch('/api/builtins/agents/main_agent', {action:'get_session', session_id:taskId});
+            var res2 = await agentApi({action:'get_session', session_id:taskId});
             var raw2 = await res2.json();
             if (raw2.ok && raw2.flow) flow = raw2.flow;
         } catch(e) {}
@@ -4292,12 +4481,83 @@ async function selectSubTask(taskId) {
 
 // ============ 其他 ============
 function restartSystem() {
+    if (!_isAdmin) { showToast(t('msg.needAdmin') || '需要管理员权限'); return; }
     if (!confirm(t('msg.confirmRestart'))) return;
     apiFetch('/api/os/restart', {action:'restart'}).then(function(){ showToast(t('msg.restarting')); });
 }
+/* ============ Token 门禁 ============ */
+var _tokenGateShown = false;
+
+function showTokenGate(status) {
+    if (_tokenGateShown) return;
+    _tokenGateShown = true;
+    var msg = (_lang === 'zh')
+        ? (status ? ('需要 Token 登录（HTTP ' + status + '）') : '需要 Token 登录')
+        : (status ? ('Token required (HTTP ' + status + ')') : 'Token required');
+    var ph = (_lang === 'zh') ? '粘贴 token' : 'Paste your token';
+    var btn = (_lang === 'zh') ? '登录' : 'Sign in';
+    var back = (_lang === 'zh') ? '返回首页' : 'Back to home';
+    var ov = document.createElement('div');
+    ov.id = 'tokenGateOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(10,10,14,0.92);display:flex;align-items:center;justify-content:center;padding:24px';
+    ov.innerHTML = '<div style="max-width:460px;width:100%;text-align:center;padding:40px 28px;background:#17171f;border:1px solid #2a2a35;border-radius:12px;box-sizing:border-box">' +
+        '<div style="font-size:36px;margin-bottom:12px">🔑</div>' +
+        '<div style="font-weight:700;color:#f3f4f6;font-size:17px;margin-bottom:8px">' + msg + '</div>' +
+        '<div style="font-size:12px;color:#9ca3af;line-height:1.7;margin-bottom:18px">' +
+            (_lang === 'zh' ? '当前处于 Token 认证模式。请输入管理员 token（权限需含 {"admin": true}）。' : 'Token auth mode is on. Enter a token with {"admin": true}.') +
+        '</div>' +
+        '<input id="tokenGateInput" type="password" placeholder="' + ph + '" style="width:100%;padding:10px 12px;margin-bottom:12px;background:#17171f;border:1px solid #2a2a35;border-radius:8px;color:#f3f4f6;font-size:13px;font-family:\'SF Mono\',monospace">' +
+        '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+            '<button onclick="submitTokenGate()" style="padding:10px 22px;font-size:13px;font-weight:600;font-family:inherit;background:#6366f1;color:#fff;border:1px solid #6366f1;border-radius:8px;cursor:pointer;transition:opacity .15s">' + btn + '</button>' +
+            '<a href="/" style="display:inline-block;padding:10px 22px;font-size:13px;font-weight:600;font-family:inherit;background:transparent;color:#9ca3af;border:1px solid #2a2a35;border-radius:8px;text-decoration:none">' + back + '</a>' +
+        '</div>' +
+        '<div id="tokenGateMsg" style="margin-top:12px;font-size:12px;color:#f43f5e"></div>' +
+    '</div>';
+    document.body.appendChild(ov);
+    var inp = document.getElementById('tokenGateInput');
+    if (inp) inp.focus();
+}
+
+function submitTokenGate() {
+    var v = (document.getElementById('tokenGateInput') || {}).value || '';
+    v = v.trim();
+    if (!v) return;
+    var msgEl = document.getElementById('tokenGateMsg');
+    // 与 index.html 的 saveToken() 走同一套校验与存储格式
+    fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + v}
+    }).then(function(r){ return r.json(); }).then(function(data) {
+        if (data && data.ok) {
+            localStorage.setItem('aicp_token', v);
+            localStorage.setItem('aicp_user', JSON.stringify({uid: data.user_id, perms: data.permissions || {}}));
+            document.cookie = 'aicp_token=' + encodeURIComponent(v) + '; Path=/; Max-Age=2592000; SameSite=Lax';
+            location.reload();
+        } else {
+            if (msgEl) msgEl.textContent = (data && data.error) || 'Invalid token';
+        }
+    }).catch(function(e) {
+        if (msgEl) msgEl.textContent = (e && e.message) || 'Network error';
+    });
+}
+
+/* 启动门禁：token 模式下无有效 token 时弹登录层，不再继续走 LLM 配置弹窗 */
+async function requireTokenGate() {
+    var id = await fetchIdentity();
+    if (!id) return true;              // 后端不可达，交由原有错误处理
+    if (id.status === 401 || id.status === 403) { showTokenGate(id.status); return false; }
+    applyAdminUI(id.is_admin);
+    return true;
+}
+
 function logout() {
     document.cookie = 'aicp_token=; path=/; max-age=0';
     localStorage.removeItem('aicp_token');
+    localStorage.removeItem('aicp_user');
+    try {
+        var tokenBtn = document.getElementById('navToken');
+        if (tokenBtn) tokenBtn.textContent = 'Token';
+    } catch(e) {}
     location.href = '/';
 }
 
@@ -4509,9 +4769,12 @@ document.addEventListener('DOMContentLoaded', function() {
     bindBubbleLinks();
     initTitleFloat();
     initAutoScroll();
-    initUser();
-    loadCurrentModel();
-    checkLLMConfigured();
+    requireTokenGate().then(function(ok){
+        if (!ok) return;
+        initUser();
+        loadCurrentModel();
+        checkLLMConfigured();
+    });
     refreshSkillBadge();
     refreshActivity();
     // 全局区（E/H/M/model）低频轮询；会话区（T/A/S）由 selectConversation / 回复结束事件驱动

@@ -236,7 +236,7 @@ var I18N = {
     'viz.legend':'图例','viz.lgGateway':'HTTP 网关（入口）','viz.lgWs':'WS 网关（出口）','viz.lgPlugin':'插件（动态）','viz.lgSession':'会话 Agent（按 session 拆分）',
     'viz.lgGwEdge':'网关转发（出）','viz.lgSync':'同步调用（出）','viz.lgAsync':'异步 / 回调（出）','viz.lgReturn':'返回（入）',
     'viz.total':'总节点','viz.active':'活跃节点','viz.maxflow':'最大流量','viz.top':'Top 节点','viz.recent':'最近事件',
-    'viz.type':'类型','viz.sessionName':'会话名','viz.sessionId':'会话 ID','viz.count':'事件数','viz.lastActive':'最近活跃','viz.sAgo':'秒前','viz.noData':'暂无数据','viz.noEvents':'暂无事件'
+    'viz.type':'类型','viz.agentId':'Agent ID','viz.sessionName':'会话名','viz.sessionId':'会话 ID','viz.count':'事件数','viz.lastActive':'最近活跃','viz.sAgo':'秒前','viz.noData':'暂无数据','viz.noEvents':'暂无事件'
   },
   en: {
     'viz.title':'Envelop Flow','viz.pause':'Pause','viz.resume':'Resume','viz.clear':'Clear','viz.labels':'Labels',
@@ -247,7 +247,7 @@ var I18N = {
     'viz.legend':'Legend','viz.lgGateway':'HTTP Gateway (in)','viz.lgWs':'WS Gateway (out)','viz.lgPlugin':'Plugin (dynamic)','viz.lgSession':'Session agent (split by session)',
     'viz.lgGwEdge':'Gateway forward (out)','viz.lgSync':'Sync call (out)','viz.lgAsync':'Async / callback (out)','viz.lgReturn':'Return (in)',
     'viz.total':'Total','viz.active':'Active','viz.maxflow':'Max flow','viz.top':'Top Nodes','viz.recent':'Recent Events',
-    'viz.type':'Type','viz.sessionName':'Session','viz.sessionId':'Session ID','viz.count':'Events','viz.lastActive':'Last active','viz.sAgo':'s ago','viz.noData':'No data','viz.noEvents':'No events'
+    'viz.type':'Type','viz.agentId':'Agent ID','viz.sessionName':'Session','viz.sessionId':'Session ID','viz.count':'Events','viz.lastActive':'Last active','viz.sAgo':'s ago','viz.noData':'No data','viz.noEvents':'No events'
   }
 };
 var lang = localStorage.getItem('aicp_lang') || 'en';
@@ -285,12 +285,73 @@ var paused = false, showLabels = true, currentView = 'all';
 var eventRate = { count:0, lastReset:Date.now(), rate:0 };
 var recentEvents = [], hotNodes = {};
 var CHANNEL_PLUGINS = ['os/_websocket','builtins/notify/ws','os/_visualizer'];
+var POS_KEY = 'aicp_viz_positions';
+var dragNode = null, dragOffX = 0, dragOffY = 0, dragMoved = false;
+function loadPositions(){
+  try { return JSON.parse(localStorage.getItem(POS_KEY) || '{}') || {}; }
+  catch(e){ return {}; }
+}
+function savePositions(){
+  var out = {};
+  for (var id in nodes){
+    var n = nodes[id];
+    if (n.pinned) continue;
+    out[id] = { x: Math.round(n.x), y: Math.round(n.y) };
+  }
+  try { localStorage.setItem(POS_KEY, JSON.stringify(out)); } catch(e){}
+}
+function applySavedPosition(id){
+  var n = nodes[id];
+  if (!n || n.pinned) return;
+  var saved = loadPositions();
+  var p = saved[id];
+  if (p && typeof p.x === 'number' && typeof p.y === 'number'){
+    n.x = p.x; n.y = p.y; n.vx = 0; n.vy = 0;
+    n.pinned = true; n.userPinned = true;
+  }
+}
 var COLORS = { gateway:'#3B82F6', wsgateway:'#A855F7', plugin:'#5E6AD2', sync:'#5E6AD2', async:'#D9A441', return:'#4CB782', session:'#F59E0B' };
 
-/* ★ session 级插件：同一路由可能对应多个会话，渲染时按 session_id 拆成多个节点 */
-var SESSION_AWARE = ['builtins/agents/main_agent'];
+/* ★ agent 维度：agent_id 来自 envelop.meta，节点身份 = agent_id@session_id */
 function baseId(id){ return String(id||'').split('@')[0]; }
-function isSessionAware(id){ return SESSION_AWARE.indexOf(baseId(id)) !== -1; }
+function isSessionAware(id){ return !!String(id||'').indexOf('@'); }
+
+/* ★ 节点粒度三档：agent / agent@session / session */
+var GRANULARITY = localStorage.getItem('aicp_viz_granularity') || 'agent@session';
+function nodeKey(agentId, sessionId, base){
+  if (GRANULARITY === 'session'){
+    return sessionId ? ('@' + sessionId) : (base || 'unknown');
+  }
+  if (GRANULARITY === 'agent'){
+    return agentId || (base || 'unknown');
+  }
+  if (agentId && sessionId) return agentId + '@' + sessionId;
+  return agentId || sessionId || (base || 'unknown');
+}
+function setGranularity(g){
+  GRANULARITY = g;
+  localStorage.setItem('aicp_viz_granularity', g);
+  rebuildForGranularity();
+}
+function rebuildForGranularity(){
+  var oldNodes = nodes;
+  nodes = {}; links = {}; particles = [];
+  Object.keys(oldNodes).forEach(function(id){
+    var n = oldNodes[id];
+    var k = nodeKey(n.agentId, n.sessionId, n.base || baseId(id));
+    var ex = nodes[k];
+    if (!ex){
+      nodes[k] = { id:k, x:n.x, y:n.y, vx:n.vx, vy:n.vy, count:n.count||0,
+                   lastActive:n.lastActive||Date.now(), type:n.type||'plugin',
+                   alpha:1, pinned:!!n.pinned, label:n.label||k,
+                   base:baseId(k), agentId:n.agentId||'', sessionId:n.sessionId||'', sessionTitle:n.sessionTitle||'' };
+    } else {
+      ex.count += (n.count||0);
+      if ((n.lastActive||0) > (ex.lastActive||0)) ex.lastActive = n.lastActive;
+    }
+  });
+  updateStats();
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
 
 var canvas = document.getElementById('flowCanvas');
@@ -325,10 +386,12 @@ function ensureNode(id, type, info){
     var t = type || (isSessionAware(id) ? 'session' : classifyNode(id));
     nodes[id] = { id:id, x:W/2+Math.cos(angle)*radius, y:H/2+Math.sin(angle)*radius, vx:0, vy:0,
       count:0, lastActive:Date.now(), type:t, alpha:1, pinned:false,
-      label:id, base:baseId(id), sessionId:'', sessionTitle:'' };
+      label:id, base:baseId(id), agentId:'', sessionId:'', sessionTitle:'' };
+    applySavedPosition(id);
   }
   var n = nodes[id];
   if (info){
+    if (info.agentId) n.agentId = info.agentId;
     if (info.sessionId) n.sessionId = info.sessionId;
     if (info.sessionTitle) n.sessionTitle = info.sessionTitle;
     if (info.label) n.label = info.label;
@@ -360,21 +423,22 @@ function handleEnvelop(evt){
   var fromBase = evt.sender || 'unknown', toBase = evt.receiver || 'unknown';
   var intent = evt.intent || '', direction = evt.direction || 'out';
   if (fromBase === 'os/_visualizer') return;
-  /* ★ session 维度：main_agent 是 session 级插件，同一路由按 session 拆成多个节点 */
+  /* ★ agent 维度：agent_id 来自 envelop.meta，节点身份 = agent_id@session_id */
   var fromSid = evt.from_session_id || '', fromTitle = evt.from_session_title || '';
   var toSid = evt.to_session_id || '', toTitle = evt.to_session_title || '';
+  var fromAid = evt.from_agent_id || '', toAid = evt.to_agent_id || '';
   if (fromSid || toSid){
     var se = document.getElementById('sideSession');
     if (se) se.textContent = fromSid || toSid;
   }
-  var fromSess = !!(fromSid && isSessionAware(fromBase));
-  var toSess = !!(toSid && isSessionAware(toBase));
-  var from = fromSess ? (fromBase + '@' + fromSid) : fromBase;
-  var to = toSess ? (toBase + '@' + toSid) : toBase;
+  var fromSess = !!(fromAid && fromSid);
+  var toSess = !!(toAid && toSid);
+  var from = fromSess ? (fromAid + '@' + fromSid) : fromBase;
+  var to = toSess ? (toAid + '@' + toSid) : toBase;
   var pFrom = direction === 'in' ? to : from;
   var pTo   = direction === 'in' ? from : to;
-  var fn = ensureNode(from, null, fromSess ? {sessionId:fromSid, sessionTitle:fromTitle, label:(fromTitle||fromSid)} : null);
-  var tn = ensureNode(to, null, toSess ? {sessionId:toSid, sessionTitle:toTitle, label:(toTitle||toSid)} : null);
+  var fn = ensureNode(from, null, fromSess ? {agentId:fromAid, sessionId:fromSid, sessionTitle:fromTitle, label:(fromTitle||fromAid+'@'+fromSid)} : null);
+  var tn = ensureNode(to, null, toSess ? {agentId:toAid, sessionId:toSid, sessionTitle:toTitle, label:(toTitle||toAid+'@'+toSid)} : null);
   fn.count++; fn.lastActive = Date.now(); tn.lastActive = Date.now();
 
   var key = from + '|' + to;
@@ -663,9 +727,12 @@ canvas.addEventListener('mousemove', function(e){
   if (hovered){
     var age = ((Date.now()-hovered.lastActive)/1000).toFixed(1);
     var sessRows = '';
+    if (hovered.agentId){
+      sessRows = '<div class="nd-row"><span>' + t('viz.agentId') + '</span><b>' + esc(hovered.agentId) + '</b></div>';
+    }
     if (hovered.sessionId){
-      sessRows = '<div class="nd-row"><span>' + t('viz.sessionName') + '</span><b>' + esc(hovered.sessionTitle || '-') + '</b></div>' +
-                 '<div class="nd-row"><span>' + t('viz.sessionId') + '</span><b>' + esc(hovered.sessionId) + '</b></div>';
+      sessRows += '<div class="nd-row"><span>' + t('viz.sessionName') + '</span><b>' + esc(hovered.sessionTitle || '-') + '</b></div>' +
+                  '<div class="nd-row"><span>' + t('viz.sessionId') + '</span><b>' + esc(hovered.sessionId) + '</b></div>';
     }
     detail.innerHTML =
       '<div class="nd-id">' + esc(hovered.label || hovered.id) + '</div>' +
@@ -678,6 +745,68 @@ canvas.addEventListener('mousemove', function(e){
   } else { detail.classList.remove('show'); }
 });
 canvas.addEventListener('mouseleave', function(){ document.getElementById('nodeDetail').classList.remove('show'); });
+
+/* ================= 节点拖拽 ================= */
+function nodeRadius(n){
+  return (n.type==='gateway'||n.type==='wsgateway') ? 13 : (n.type==='session' ? 10 : 9);
+}
+function pickNode(mx, my){
+  var hit = null, best = Infinity;
+  var ids = Object.keys(nodes);
+  for (var i=0;i<ids.length;i++){
+    var id = ids[i], n = nodes[id];
+    if (shouldSkipNode(id)) continue;
+    var dx = mx-n.x, dy = my-n.y;
+    var d2 = dx*dx+dy*dy, r = nodeRadius(n)+6;
+    if (d2 <= r*r && d2 < best){ hit = n; best = d2; }
+  }
+  return hit;
+}
+canvas.addEventListener('mousedown', function(e){
+  if (e.button !== 0) return;
+  var rect = canvas.getBoundingClientRect();
+  var mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  var n = pickNode(mx, my);
+  if (!n) return;
+  if (n.pinned && !n.userPinned) return;   /* 两个固定端点不可拖 */
+  dragNode = n;
+  dragOffX = mx - n.x; dragOffY = my - n.y;
+  dragMoved = false;
+  n.vx = 0; n.vy = 0;
+  canvas.style.cursor = 'grabbing';
+  e.preventDefault();
+});
+window.addEventListener('mousemove', function(e){
+  if (!dragNode) return;
+  var rect = canvas.getBoundingClientRect();
+  var mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  dragNode.x = mx - dragOffX;
+  dragNode.y = my - dragOffY;
+  dragNode.vx = 0; dragNode.vy = 0;
+  dragMoved = true;
+});
+window.addEventListener('mouseup', function(){
+  if (!dragNode) return;
+  canvas.style.cursor = '';
+  if (dragMoved){
+    dragNode.userPinned = true;
+    dragNode.pinned = true;
+    savePositions();
+  }
+  dragNode = null;
+});
+canvas.addEventListener('dblclick', function(e){
+  var rect = canvas.getBoundingClientRect();
+  var mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  var n = pickNode(mx, my);
+  if (!n) return;
+  if (n.userPinned){
+    n.userPinned = false; n.pinned = false;   /* 解锁 */
+    var saved = loadPositions();
+    delete saved[n.id];
+    try { localStorage.setItem(POS_KEY, JSON.stringify(saved)); } catch(e){}
+  }
+});
 
 /* ================= 启动 ================= */
 applyI18n();

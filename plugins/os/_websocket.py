@@ -17,6 +17,7 @@ import time
 import uuid
 import aiohttp
 from aiohttp import web
+from typing import Any, Dict
 import core
 
 import importlib
@@ -53,6 +54,17 @@ class WebSocketGateway:
         self._ws_to_channels[ws].add(channel_id)
         if ws not in self._ws_id:
             self._ws_id[ws] = f"ws_{uuid.uuid4().hex[:6]}"
+
+    def get_connections_by_role(self, role):
+        return [ws for ws in self._ws_to_channels.keys()
+                if not ws.closed and getattr(ws, "_role", "client") == role]
+
+    def get_screen_devices(self):
+        out = {}
+        for ws in self.get_connections_by_role("screen"):
+            dev = getattr(ws, "_device_id", "") or self._ws_id.get(ws, "?")
+            out.setdefault(dev, []).append(ws)
+        return out
 
     def unregister(self, ws, channel_id=None):
         if channel_id:
@@ -120,13 +132,52 @@ class WebSocketGateway:
         for cid, ws_set in self._channels.items():
             channels_info[cid] = {
                 "connections": len(ws_set),
-                "ws_ids": [self._ws_id.get(ws, "?") for ws in ws_set if not ws.closed],
+                "ws_ids": [
+                    {
+                        "ws_id": self._ws_id.get(ws, "?"),
+                        "role": getattr(ws, "_role", "client"),
+                        "device_id": getattr(ws, "_device_id", ""),
+                    }
+                    for ws in ws_set if not ws.closed
+                ],
             }
         return {
             "total_channels": len(self._channels),
             "total_connections": len(self._ws_to_channels),
             "channels": channels_info,
         }
+
+
+def _identity(envelop):
+    """从 envelop 提取身份字段：session_id / agent_id / user_id。
+
+    meta 优先，其次 payload 顶层 / payload.data。
+    """
+    meta = getattr(envelop, "meta", None) or {}
+    payload = getattr(envelop, "payload", None) or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    inner = payload.get("data")
+    if not isinstance(inner, dict):
+        inner = {}
+
+    def _pick(key):
+        val = meta.get(key) or ""
+        if val:
+            return val
+        val = payload.get(key) or ""
+        if val:
+            return val
+        return inner.get(key) or ""
+
+    out = {}
+    for key in ("session_id", "agent_id", "user_id"):
+        val = _pick(key)
+        if val:
+            out[key] = val
+    return out
 
 
 def extract_token_from_request(request):
@@ -228,6 +279,7 @@ async def execute(envelop, agent):
             "intent": envelop.intent,
             "trace_id": envelop.trace_id,
             "timestamp": time.time(),
+            **_identity(envelop),
         }
         if gateway:
             sent = await gateway.push(channel_id, data)
@@ -242,9 +294,52 @@ async def execute(envelop, agent):
             "sender": envelop.sender,
             "trace_id": envelop.trace_id,
             "timestamp": time.time(),
+            **_identity(envelop),
         }
         sent = await gateway.broadcast(data) if gateway else 0
         envelop.payload = {"ok": True, "sent": sent}
+        return envelop
+
+    elif action == "push_screen":
+        device_id = envelop.payload.get("device_id", "")
+        sml = envelop.payload.get("sml", "")
+        seq = envelop.payload.get("seq", 0)
+        data_extra = envelop.payload.get("data", {}) or {}
+        if not isinstance(data_extra, dict):
+            data_extra = {}
+
+        if not sml:
+            envelop.payload = {"error": "sml required"}
+            return envelop
+        if not gateway:
+            envelop.payload = {"error": "ws_gateway not ready"}
+            return envelop
+
+        frame = {
+            "type": "sml",
+            "seq": seq,
+            "sml": sml,
+            "data": data_extra,
+            "timestamp": time.time(),
+            **_identity(envelop),
+        }
+
+        # device_id 为空或 "all" 表示推给全部 role=screen 设备
+        if device_id and device_id != "all":
+            targets = gateway.get_screen_devices().get(device_id, [])
+        else:
+            targets = gateway.get_connections_by_role("screen")
+
+        if not targets:
+            envelop.payload = {"ok": True, "sent": 0, "reason": "no screen device"}
+            return envelop
+
+        results = await asyncio.gather(
+            *[gateway._push_one(ws, device_id or "screen", frame) for ws in targets],
+            return_exceptions=True,
+        )
+        sent = sum(1 for r in results if r is True)
+        envelop.payload = {"ok": True, "sent": sent, "device_id": device_id or "all"}
         return envelop
 
     elif action == "push_to_ws":
@@ -257,6 +352,7 @@ async def execute(envelop, agent):
             "sender": envelop.sender,
             "trace_id": envelop.trace_id,
             "timestamp": time.time(),
+            **_identity(envelop),
         }
         if gateway:
             sent = 0
@@ -339,11 +435,22 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
     async def ws_handler(request):
         token = extract_token_from_request(request)
         channel_id = request.query.get("channel", f"default_{uuid.uuid4().hex[:6]}")
+        role = request.query.get("role", "client")
+        device_id = request.query.get("device_id", "")
 
         origin = request.headers.get("Origin", "")
-        is_same_orig = is_same_origin(request)
-        is_local = is_local_request(request)
-        should_skip_auth = is_local or is_same_orig
+        # ★ 鉴权裁决统一交给 os/_auth.requires_auth：
+        #   mode=token  → 一律要 token，本机/同源不再短路
+        #   mode=hybrid → 本机/同源放行，带 XFF 时同源判定失效
+        #   mode=local  → 交给 _verify 的 local 护栏
+        from plugins.os._auth import requires_auth
+        should_skip_auth = not requires_auth(
+            agent,
+            remote=request.remote or "",
+            forwarded_for=request.headers.get("X-Forwarded-For", ""),
+            origin=origin,
+            host=request.headers.get("X-Forwarded-Host", "") or request.host,
+        )
 
         # ---- 鉴权 ----
         user_id = "local"
@@ -378,12 +485,15 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
         )
         await ws.prepare(request)
         ws._user_id = user_id  # 挂到 ws 对象，后续按用户隔离可用
+        ws._role = role
+        ws._device_id = device_id
 
         gateway.register(ws, channel_id)
 
         ws_id = gateway._ws_id.get(ws, "?")
         agent.log.info(
             f"[WS] Connected: {ws_id} → channel={channel_id}, "
+            f"role={role}, device={device_id or '-'}, "
             f"user={user_id}, from={request.remote}, origin={origin}"
         )
 
@@ -392,6 +502,8 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
             "ws_id": ws_id,
             "channel_id": channel_id,
             "user_id": user_id,
+            "role": role,
+            "device_id": device_id,
             "timestamp": time.time(),
         })
 
@@ -404,18 +516,27 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
 
                         if data.get("type") == "envelop":
                             body = data.get("payload", data)
+                            _inner = body.get("payload", body)
+                            _meta = {
+                                **body.get("meta", {}),
+                                "ws_id": ws_id,
+                                "channel_id": channel_id,
+                                "user_id": user_id,
+                                "source": "websocket",
+                            }
+                            # payload → meta 提升：session_id / agent_id 常落在 payload 顶层
+                            for _k in ("session_id", "agent_id"):
+                                if not _meta.get(_k):
+                                    for _src in (_inner, body):
+                                        if isinstance(_src, dict) and _src.get(_k):
+                                            _meta[_k] = _src[_k]
+                                            break
                             envelop = core.Envelop(
                                 sender="os/_websocket",
                                 receiver=data.get("receiver", ""),
                                 intent=body.get("intent", "API_CALL"),
-                                payload=body.get("payload", body),
-                                meta={
-                                    **body.get("meta", {}),
-                                    "ws_id": ws_id,
-                                    "channel_id": channel_id,
-                                    "user_id": user_id,
-                                    "source": "websocket",
-                                },
+                                payload=_inner,
+                                meta=_meta,
                             )
 
                             result = await agent.system.call(envelop)
@@ -427,6 +548,33 @@ async def start_websocket_server(agent, host="0.0.0.0", port=9001, skip_auth_for
                                 "payload": result.payload if result else {},
                                 "timestamp": time.time(),
                             })
+
+                        elif data.get("type") in ("event", "callback", "audio", "image"):
+                            receiver = data.get("receiver", "mytools/pushscreen")
+                            inner = {k: v for k, v in data.items() if k != "receiver"}
+                            meta = {
+                                "ws_id": ws_id,
+                                "channel_id": channel_id,
+                                "user_id": user_id,
+                                "device_id": getattr(ws, "_device_id", ""),
+                                "role": getattr(ws, "_role", "client"),
+                                "source": "websocket",
+                            }
+                            envelop = core.Envelop(
+                                sender="os/_websocket",
+                                receiver=receiver,
+                                intent="SCREEN_EVENT",
+                                payload=inner,
+                                meta=meta,
+                            )
+                            result = await agent.system.call(envelop)
+                            if data.get("type") == "callback":
+                                await ws.send_json({
+                                    "type": "callback_ack",
+                                    "ok": True,
+                                    "payload": result.payload if result else {},
+                                    "timestamp": time.time(),
+                                })
 
                         elif data.get("type") == "subscribe":
                             new_channel = data.get("channel", channel_id)

@@ -187,14 +187,25 @@ input::placeholder,textarea::placeholder{color:#6b7280}
     </div>
 </div>
 
+<!-- 页面级权限封锁横幅（无 admin 权限时隐藏整个页面） -->
+<div id="pageBlocked" style="display:none;flex:1;align-items:center;justify-content:center;padding:60px 24px;overflow:auto">
+    <div class="card" style="max-width:520px;width:100%;text-align:center;padding:44px 32px">
+        <div style="font-size:40px;margin-bottom:14px">🔒</div>
+        <div style="font-weight:700;color:#f3f4f6;font-size:17px;margin-bottom:8px" data-i18n="page.noAdminTitle">无管理员权限</div>
+        <div style="font-size:13px;color:#9ca3af;line-height:1.7" data-i18n="page.noAdminDesc">系统设置页需要管理员权限。请使用携带 <code>{"admin": true}</code> 的 token 登录，或在本机（local 模式）访问。</div>
+        <div style="margin-top:20px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+            <a href="/" class="btn" data-i18n="page.backHome">返回首页</a>
+            <button class="btn btn-primary" onclick="location.reload()" data-i18n="page.retry">重试</button>
+        </div>
+        <div style="margin-top:16px;font-size:11px;color:#6b7280" id="pageBlockedWho"></div>
+    </div>
+</div>
+
 <div class="layout">
     <!-- 左侧 -->
     <aside class="sidebar">
         <div class="nav-group-label" data-i18n="nav.group">面板</div>
-        <div class="sidebar-item active" data-panel="apps">
-            <span class="icon">📦</span><span class="label" data-i18n="nav.apps">应用</span>
-        </div>
-        <div class="sidebar-item" data-panel="settings">
+        <div class="sidebar-item active" data-panel="settings">
             <span class="icon">⚙️</span><span class="label" data-i18n="nav.settings">配置</span>
         </div>
         <div class="sidebar-item" data-panel="mcp">
@@ -208,20 +219,8 @@ input::placeholder,textarea::placeholder{color:#6b7280}
     <!-- 主区 -->
     <main class="main">
 
-        <!-- ============ 应用 ============ -->
-        <div id="apps" class="panel active">
-            <h2><span data-i18n="apps.title">📦 应用列表</span></h2>
-            <div class="app-toolbar">
-                <input id="appSearch" class="app-search" type="search" autocomplete="off" data-i18n-ph="apps.searchPh" placeholder="搜索应用（英文名 / 描述）..." oninput="filterApps(this.value)">
-                <span class="app-search-count" id="appSearchCount"></span>
-            </div>
-            <div class="app-grid" id="appGrid">
-                <div class="empty" data-i18n="common.loading">加载中...</div>
-            </div>
-        </div>
-
         <!-- ============ 配置 ============ -->
-        <div id="settings" class="panel">
+        <div id="settings" class="panel active">
             <h2><span data-i18n="settings.title">⚙️ 系统设置</span></h2>
             <div id="engineTab" class="tab-content active">
                 <div class="card">
@@ -229,13 +228,15 @@ input::placeholder,textarea::placeholder{color:#6b7280}
                     <div class="form-grid">
                         <div class="fg-item"><label>host</label><input id="cfgHost" placeholder="0.0.0.0"></div>
                         <div class="fg-item"><label>port</label><input id="cfgPort" type="number" placeholder="9000"></div>
+                        <div class="fg-item"><label>mcp port</label><input id="cfgMcpPort" type="number" placeholder="9100"></div>
                     </div>
                 </div>
                 <div class="card">
-                    <div class="card-title"><span class="left" data-i18n="engine.ws">🔌 WebSocket / 📤 上传</span></div>
+                    <div class="card-title"><span class="left" data-i18n="engine.ws">🔌 WebSocket / 📤 上传 / 🧩 MCP</span></div>
                     <div class="form-grid">
-                        <div class="fg-item"><label>websocket</label><input id="cfgWsUrl" placeholder="ws://host:9001/ws"></div>
-                        <div class="fg-item"><label>upload</label><input id="cfgUploadUrl" placeholder="http://host:9002/upload"></div>
+                        <div class="fg-item"><label>websocket</label><input id="cfgWsUrl" placeholder=""></div>
+                        <div class="fg-item"><label>upload</label><input id="cfgUploadUrl" placeholder=""></div>
+                        <div class="fg-item"><label>mcp</label><input id="cfgMcpUrl" placeholder=""></div>
                     </div>
                 </div>
                 <div class="card">
@@ -325,7 +326,19 @@ input::placeholder,textarea::placeholder{color:#6b7280}
                     </div>
                     <div class="form-row" id="issuePermsRow" style="display:none">
                         <label data-i18n="tokens.permsJson">权限 JSON</label>
-                        <textarea id="issuePermsJson" rows="3" style="flex:1;font-family:'SF Mono',Monaco,monospace;font-size:11px" placeholder='{"*": true}'></textarea>
+                        <textarea id="issuePermsJson" rows="3" style="flex:1;font-family:'SF Mono',Monaco,monospace;font-size:11px" placeholder='{"admin": true}'></textarea>
+                    </div>
+                    <div class="notice" id="issuePermsHint" style="display:block">
+                        <span class="ico">🔑</span>
+                        <div>
+                            <strong data-i18n="tokens.permsJsonTitle">权限 JSON 怎么写</strong>
+                            <div style="margin-top:6px;line-height:1.7">
+                                <div><code style="font-family:'SF Mono',monospace">{"admin": true}</code> — <span data-i18n="tokens.permAdmin">管理员：可进入 Token 管理、签发/吊销 token、切换认证模式、重启系统</span></div>
+                                <div><code style="font-family:'SF Mono',monospace">{"*": true}</code> — <span data-i18n="tokens.permStar">全量业务权限（<b>不等于</b>管理员，无法管理 token）</span></div>
+                                <div><code style="font-family:'SF Mono',monospace">{}</code> — <span data-i18n="tokens.permEmpty">空权限：仅能登录使用，普通用户</span></div>
+                            </div>
+                            <div style="margin-top:6px" data-i18n="tokens.permAdminNote">⚠️ 只有 <code>{"admin": true}</code> 才能管理 Token。<code>"*"</code> 是业务通配符，不是管理员标记。</div>
+                        </div>
                     </div>
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
                         <button class="btn btn-primary" onclick="issueToken()" data-i18n="tokens.issueBtn">签发</button>
@@ -361,14 +374,40 @@ input::placeholder,textarea::placeholder{color:#6b7280}
                 <!-- 左：端点配置 -->
                 <div class="mcp-box">
                     <div class="card-title"><span class="left" data-i18n="mcp.endpoint">📡 端点配置</span></div>
+                    <div class="fg-item" style="margin-bottom:10px;">
+                        <label data-i18n="mcp.authMode">认证方式</label>
+                        <select id="mcpAuthMode">
+                            <option value="none" data-i18n="mcp.authNone">不认证（Local 默认）</option>
+                            <option value="token" data-i18n="mcp.authToken">Bearer Token（Token / Hybrid）</option>
+                        </select>
+                    </div>
+                    <div class="fg-item" id="mcpTokenRow" style="display:none;margin-bottom:10px;">
+                        <label data-i18n="mcp.tokenLabel">token</label>
+                        <div class="input-row">
+                            <input id="cfgMcpToken" type="password" placeholder="从「Token 管理」页签复制">
+                            <button type="button" class="btn btn-sm" id="btnPasteMcpToken" data-i18n="mcp.paste">粘贴</button>
+                            <button type="button" class="btn btn-sm" id="btnToggleMcpToken" data-i18n="mcp.show">显示</button>
+                        </div>
+                    </div>
+                    <div class="fg-item" style="margin-bottom:10px;">
+                        <label data-i18n="mcp.clientLabel">客户端</label>
+                        <select id="mcpClient">
+                            <option value="claudeDesktop">Claude Desktop（.mcp.json）</option>
+                            <option value="claudeCode">Claude Code（.mcp.json）</option>
+                            <option value="cursor">Cursor（mcp.json）</option>
+                            <option value="generic">通用（VSCode / Cline 等）</option>
+                        </select>
+                    </div>
                     <pre id="mcpConfigJson"></pre>
                     <div class="mcp-actions">
                         <button class="btn btn-primary" onclick="copyMcp()" data-i18n="mcp.copy">📋 复制配置</button>
                         <button class="btn btn-success" id="testBtn" onclick="testMcp()" data-i18n="mcp.test">⚡ 测试连接</button>
+                        <button class="btn btn-sm" id="btnMcpHealth" onclick="checkMcpHealth()" data-i18n="mcp.health">🩺 服务状态</button>
                         <span id="mcpStatus" style="font-size:11px;color:#9ca3af;"></span>
                     </div>
+                    <div id="mcpHealth" style="margin-top:8px;font-size:11px;color:#9ca3af;"></div>
                     <p class="help-text" style="margin-top:12px" data-i18n="mcp.hint">
-                        加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。
+                        加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。默认不认证；如需加 key，在 Token 管理页签签发后切换到 Bearer Token 模式。
                     </p>
                 </div>
 
@@ -420,6 +459,10 @@ const I18N = {
   zh: {
     'page.title':'AICP · 系统设置',    'brand.sub':'自举、自进化的 AI-Agent 运行时',
     'badge.local':'本地版',
+    'page.noAdminTitle':'无管理员权限',
+    'page.noAdminDesc':'系统设置页需要管理员权限。请使用携带 {"admin": true} 的 token 登录，或在本机（local 模式）访问。',
+    'page.backHome':'返回首页',
+    'page.retry':'重试',
     'nav.group':'面板','nav.apps':'应用','nav.settings':'配置','nav.mcp':'MCP','nav.tokens':'Token 管理',
     'apps.title':'📦 应用列表',
     'apps.searchPh':'搜索应用（英文名 / 描述）...','apps.searchCount':'显示 {n} / {m} 个应用','apps.noMatch':'没有匹配的应用',
@@ -433,7 +476,11 @@ const I18N = {
     'engine.viz':'📊 可视化','engine.vizHint':'本页所有更改保存后均需重启生效。channel 为固定通道，不可修改。',
     'engine.save':'💾 保存引擎配置',
     'mcp.title':'🔌 MCP 配置','mcp.endpoint':'📡 端点配置','mcp.tools':'🛠 工具列表','mcp.copy':'📋 复制配置','mcp.test':'⚡ 测试连接',
-    'mcp.hint':'加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。',
+    'mcp.hint':'加到 Cline / Cursor / Claude Desktop 的 MCP 配置里。默认不认证；如需加 key，在 Token 管理页签签发后切换到 Bearer Token 模式。',
+    'mcp.authMode':'认证方式','mcp.authNone':'不认证（Local 默认）','mcp.authToken':'Bearer Token（Token / Hybrid）',
+    'mcp.tokenLabel':'token','mcp.paste':'粘贴','mcp.show':'显示',
+    'mcp.health':'🩺 服务状态','mcp.healthHint':'请确认 MCP 服务已启动（若配置变更可能需重启引擎）',
+    'mcp.clientLabel':'客户端',
     'mcp.toolDesc':'统一调用入口，通过 receiver / action / params 派发。',
     'mcp.core':'核心','mcp.testPlugin':'🧪 测试工具','mcp.run':'▶ 运行','mcp.reset':'重置','mcp.tool':'工具','mcp.args':'参数','mcp.fillTest':'填入示例','mcp.offline':'⚠ MCP 端点未连通，以下为引擎内定义的工具','mcp.resultPlaceholder':'// 结果会显示在这里',
     'modal.providerAdd':'新增 Provider','modal.providerEdit':'编辑 Provider','modal.modelEdit':'编辑模型',
@@ -458,7 +505,12 @@ const I18N = {
     'tokens.userId':'用户ID','tokens.userIdPh':'u_friend','tokens.prefixHint':'快捷前缀',
     'tokens.prefixAdmin':'管理员','tokens.prefixCollab':'合作者','tokens.prefixGuest':'访客','tokens.prefixMcp':'MCP集成',
     'tokens.days':'有效期','tokens.dayUnit':'天',
-    'tokens.perms':'权限','tokens.permsFull':'全权限','tokens.permsRead':'只读','tokens.permsCustom':'自定义 JSON','tokens.permsJson':'权限 JSON',
+    'tokens.perms':'权限','tokens.permsFull':'全量业务权限','tokens.permsRead':'只读','tokens.permsCustom':'自定义 JSON','tokens.permsJson':'权限 JSON',
+    'tokens.permsJsonTitle':'权限 JSON 怎么写',
+    'tokens.permAdmin':'管理员：可进入 Token 管理、签发/吊销 token、切换认证模式、重启系统',
+    'tokens.permStar':'全量业务权限（不等于管理员，无法管理 token）',
+    'tokens.permEmpty':'空权限：仅能登录使用，普通用户',
+    'tokens.permAdminNote':'⚠️ 只有 {"admin": true} 才能管理 Token。"*" 是业务通配符，不是管理员标记。',
     'tokens.issueBtn':'签发','tokens.issued':'✅ 签发成功（请复制保存，关闭后无法再次查看）','tokens.copy':'📋 复制',
     'tokens.list':'📋 已签发动态 Token','tokens.hmacNote':'注：HMAC token 无存储，无法在此列表中查看和吊销。',
     'tokens.statusActive':'有效','tokens.statusRevoked':'已吊销','tokens.statusExpired':'已过期',
@@ -473,6 +525,10 @@ const I18N = {
   en: {
     'page.title':'AICP · System Settings',    'brand.sub':'Self-bootstrapping, self-evolving AI-Agent runtime',
     'badge.local':'Local',
+    'page.noAdminTitle':'Administrator permission required',
+    'page.noAdminDesc':'System Settings requires administrator permission. Sign in with a token carrying {"admin": true}, or access from the local machine (local mode).',
+    'page.backHome':'Back to home',
+    'page.retry':'Retry',
     'nav.group':'Panels','nav.apps':'Apps','nav.settings':'Settings','nav.mcp':'MCP','nav.tokens':'Token Manager',
     'apps.title':'📦 Applications',
     'apps.searchPh':'Search apps (English name / description)...','apps.searchCount':'Showing {n} of {m} apps','apps.noMatch':'No matching apps',
@@ -486,7 +542,11 @@ const I18N = {
     'engine.viz':'📊 Visualization','engine.vizHint':'All changes on this page take effect after restart. channel is fixed and cannot be modified.',
     'engine.save':'💾 Save Engine Config',
     'mcp.title':'🔌 MCP Configuration','mcp.endpoint':'📡 Endpoint','mcp.tools':'🛠 Tools','mcp.copy':'📋 Copy Config','mcp.test':'⚡ Test Connection',
-    'mcp.hint':'Add to the MCP config of Cline / Cursor / Claude Desktop.',
+    'mcp.hint':'Add to the MCP config of Cline / Cursor / Claude Desktop. No auth by default; to add a key, issue a token in the Token Management tab and switch to Bearer Token mode.',
+    'mcp.authMode':'Auth Mode','mcp.authNone':'No auth (Local default)','mcp.authToken':'Bearer Token (Token / Hybrid)',
+    'mcp.tokenLabel':'token','mcp.paste':'Paste','mcp.show':'Show',
+    'mcp.health':'🩺 Service Status','mcp.healthHint':'Make sure the MCP service is running (a config change may require an engine restart)',
+    'mcp.clientLabel':'Client',
     'mcp.toolDesc':'Unified call entry dispatched via receiver / action / params.',
     'mcp.core':'Core','mcp.testPlugin':'🧪 Test Tool','mcp.run':'▶ Run','mcp.reset':'Reset','mcp.tool':'Tool','mcp.args':'Arguments','mcp.fillTest':'Fill sample','mcp.offline':'⚠ MCP endpoint unreachable — engine-side definitions shown','mcp.resultPlaceholder':'// Results will appear here',
     'modal.providerAdd':'Add Provider','modal.providerEdit':'Edit Provider','modal.modelEdit':'Edit Model',
@@ -511,7 +571,12 @@ const I18N = {
     'tokens.userId':'User ID','tokens.userIdPh':'u_friend','tokens.prefixHint':'Quick prefix',
     'tokens.prefixAdmin':'Admin','tokens.prefixCollab':'Collaborator','tokens.prefixGuest':'Guest','tokens.prefixMcp':'MCP Integration',
     'tokens.days':'Validity','tokens.dayUnit':'days',
-    'tokens.perms':'Permissions','tokens.permsFull':'Full access','tokens.permsRead':'Read-only','tokens.permsCustom':'Custom JSON','tokens.permsJson':'Permissions JSON',
+    'tokens.perms':'Permissions','tokens.permsFull':'Full business access','tokens.permsRead':'Read-only','tokens.permsCustom':'Custom JSON','tokens.permsJson':'Permissions JSON',
+    'tokens.permsJsonTitle':'How to write the permissions JSON',
+    'tokens.permAdmin':'Administrator: can open Token Manager, issue/revoke tokens, switch auth mode, restart the system',
+    'tokens.permStar':'Full business access (<b>not</b> an administrator — cannot manage tokens)',
+    'tokens.permEmpty':'Empty: sign-in only, a regular user',
+    'tokens.permAdminNote':'⚠️ Only {"admin": true} grants token management. "*" is a business wildcard, not an admin flag.',
     'tokens.issueBtn':'Issue','tokens.issued':'✅ Issued (copy now — not shown again)','tokens.copy':'📋 Copy',
     'tokens.list':'📋 Dynamic Tokens','tokens.hmacNote':'Note: HMAC tokens are stateless and not listed here.',
     'tokens.statusActive':'Active','tokens.statusRevoked':'Revoked','tokens.statusExpired':'Expired',
@@ -553,7 +618,6 @@ function applyLang(lang){
   if (lt) lt.textContent = lang === 'zh' ? 'EN' : '中';
   document.documentElement.lang = lang;
   document.title = I18N[lang]['page.title'] || document.title;
-  loadApps();
   // 反向同步：把本页当前语种通知外层控制台（iframe 内点语言按钮时，外层也要跟着变）
   notifyParentLang(lang);
 }
@@ -597,88 +661,11 @@ function switchPanel(name) {
     if (panel) panel.classList.add('active');
     const item = document.querySelector(`.sidebar-item[data-panel="${name}"]`);
     if (item) item.classList.add('active');
-    if (name === 'apps') loadApps();
     if (name === 'settings') { loadEngineConfig(); loadModels(); }
     if (name === 'mcp') { renderMcpConfig(); loadMcpTools().then(renderMcpConfig); }
     if (name === 'tokens') checkTokenAdmin();
 }
 
-
-/* ============ 应用 ============ */
-const API_APPS = '/api/builtins/control/apps';
-
-let _allApps = [];
-
-async function loadApps(){
-    const grid = document.getElementById('appGrid');
-    if (!grid) return;
-    try {
-        const res = await fetch(API_APPS, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({action:'list_frontend'})
-        });
-        const resp = await res.json();
-        const data = resp.payload || resp.data || resp;
-        _allApps = (data.apps || []).filter(a => a.id !== 'BK');
-        renderApps(appSearchValue());
-    } catch(e) { grid.innerHTML = `<div class="empty">${t('common.fail')}</div>`; }
-}
-
-function appSearchValue(){
-    const el = document.getElementById('appSearch');
-    return el ? String(el.value || '').trim().toLowerCase() : '';
-}
-
-function filterApps(q){
-    const el = document.getElementById('appSearch');
-    if (el && typeof q === 'string' && el.value !== q) el.value = q;
-    renderApps(appSearchValue());
-}
-
-function renderApps(q){
-    const grid = document.getElementById('appGrid');
-    if (!grid) return;
-    q = String(q || '').toLowerCase();
-    const all = _allApps || [];
-    const apps = all.filter(a => {
-        if (!q) return true;
-        return [a.id, a.name, a.description, a.description_en].some(v => String(v || '').toLowerCase().indexOf(q) >= 0);
-    });
-    const cnt = document.getElementById('appSearchCount');
-    if (cnt) cnt.textContent = all.length ? t('apps.searchCount').replace('{n}', apps.length).replace('{m}', all.length) : '';
-    if (!apps.length) {
-        grid.innerHTML = `<div class="empty">${escapeHtml(all.length ? t('apps.noMatch') : t('common.empty'))}</div>`;
-        return;
-    }
-    grid.innerHTML = apps.map(a => `
-        <div class="app-card" onclick="window.open('${escapeHtml(a.url)}','_blank')">
-            <div class="app-name"><span class="app-id">${escapeHtml(a.id)}</span><span class="app-dot">·</span>${escapeHtml(a.name || a.id)}</div>
-            <div class="app-desc">${escapeHtml(a.description || '')}</div>
-            <div class="app-meta"><span>/apps/${escapeHtml(a.id)}/</span></div>
-            <div class="app-actions">
-                <button class="btn btn-danger btn-sm${a.protected ? ' btn-protected' : ''}" title="${escapeHtml(a.protected ? t('apps.protectedTitle') : t('msg.delete'))}" onclick="event.stopPropagation();deleteApp('${escapeHtml(a.id)}', ${a.protected ? 'true' : 'false'})">${t('msg.delete')}</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function deleteApp(appId, isProtected) {
-    if (isProtected) { alert(t('apps.protected')); return; }
-    if (!confirm(`${t('msg.deleteAppConfirm')} ${appId}?`)) return;
-    try {
-        const res = await fetch(API_APPS, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({action:'uninstall', app_id: appId})
-        });
-        const resp = await res.json();
-        const data = resp.payload || resp.data || resp;
-        if (data && data.error) {
-            if (data.code === 'PROTECTED_APP') { alert(t('apps.protected')); return; }
-            throw new Error(data.error);
-        }
-        loadApps();
-    } catch(e) { alert(t('msg.deleteFail') + e.message); }
-}
 
 /* ============ 引擎配置 ============ */
 async function loadEngineConfig(){
@@ -688,8 +675,22 @@ async function loadEngineConfig(){
         const config = resp.payload || resp.data || resp || {};
         document.getElementById('cfgHost').value = config.host || '0.0.0.0';
         document.getElementById('cfgPort').value = config.port || 9000;
-        document.getElementById('cfgWsUrl').value = (config.websocket || {}).external_url || ('ws://' + location.hostname + ':9001/ws');
-        document.getElementById('cfgUploadUrl').value = (config.upload || {}).external_url || ('http://' + location.hostname + ':9002/upload');
+        document.getElementById('cfgWsUrl').value = (config.websocket || {}).external_url || '';
+        document.getElementById('cfgUploadUrl').value = (config.upload || {}).external_url || '';
+        const mcpCfg = config.mcp || {};
+        document.getElementById('cfgMcpPort').value = mcpCfg.port || 9100;
+        document.getElementById('cfgMcpUrl').value = mcpCfg.external_url || '';
+        /* MCP 连接地址：external_url 优先，否则用 host+port 推导。
+           服务端 host 可能是 0.0.0.0（绑定通配地址），不能作为客户端目标，
+           此处回退到浏览器当前主机名：本机即 127.0.0.1，局域网即实际 IP。 */
+        MCP_HOST = (function(){
+            const h = (document.getElementById('cfgHost').value || '').trim();
+            if(h && h !== '0.0.0.0' && h !== '::' && h !== '[::]') return h;
+            return window.location.hostname || '127.0.0.1';
+        })();
+        MCP_PORT = mcpCfg.port || 9100;
+        MCP_URL = (mcpCfg.external_url || ('http://' + MCP_HOST + ':' + MCP_PORT + '/mcp'));
+        renderMcpConfig();
         const viz = config.visualization || {};
         document.getElementById('cfgVizEnabled').value = viz.enabled ? 'true' : 'false';
         document.getElementById('cfgVizQueue').value = viz.queue_size || 1000;
@@ -703,6 +704,8 @@ async function saveEngineConfig(){
         port: parseInt(document.getElementById('cfgPort').value)||9000,
         websocket: {external_url: document.getElementById('cfgWsUrl').value},
         upload: { external_url: document.getElementById('cfgUploadUrl').value },
+        'mcp.port': parseInt(document.getElementById('cfgMcpPort').value) || 9100,
+        'mcp.external_url': document.getElementById('cfgMcpUrl').value || '',
         'visualization.enabled': document.getElementById('cfgVizEnabled').value === 'true',
         'visualization.queue_size': parseInt(document.getElementById('cfgVizQueue').value) || 1000
     };
@@ -719,9 +722,30 @@ async function saveEngineConfig(){
 const API_TOKEN_MGR = '/api/os/_token_manager';
 let _tokenAdmin = false;
 
+/* 读取当前 token：优先 cookie，其次 localStorage（与 console.html 一致） */
+function getToken() {
+    const m = document.cookie.match(/aicp_token=([^;]+)/);
+    if (m) return m[1];
+    return localStorage.getItem('aicp_token') || '';
+}
+
+/* 所有 token 管理请求统一走这里，自动带 Authorization 头 */
+async function apiPost(url, body) {
+    const headers = {'Content-Type':'application/json'};
+    const token = getToken();
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(url, {method:'POST',headers:headers,body:JSON.stringify(body)});
+}
+
 async function checkTokenAdmin() {
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'mode'})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'mode'});
+        if (res.status === 401 || res.status === 403) {
+            _tokenAdmin = false;
+            document.getElementById('tokensContent').style.display = 'none';
+            document.getElementById('tokensNoAccess').style.display = 'block';
+            return;
+        }
         const d = await res.json();
         const data = d.payload || d.data || d;
         _tokenAdmin = !!data.is_admin;
@@ -751,12 +775,26 @@ async function onTokenModeChange() {
     const mode = document.getElementById('tokenModeSel').value;
     if (!confirm(t('msg.modeConfirm').replace('{mode}', mode))) return;
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'set_mode', mode})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'set_mode', mode});
         const d = await res.json();
         const data = d.payload || d.data || d;
         if (!data.ok) throw new Error(data.error || 'switch failed');
         alert(t('msg.modeSwitched'));
         checkTokenAdmin();
+        // 认证模式已切换，旧会话凭证失效：清除 token / user / cookie
+        try {
+            localStorage.removeItem('aicp_token');
+            localStorage.removeItem('aicp_user');
+            document.cookie = 'aicp_token=; Path=/; Max-Age=0; SameSite=Lax';
+        } catch(_e) {}
+        // 认证模式切换后整页回到首页（若在 console iframe 内，通知外层跳转）
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'aicp_goto_home' }, '*');
+            } else {
+                location.href = '/';
+            }
+        } catch(_e) { location.href = '/'; }
     } catch(e) { alert(t('msg.modeSwitchFail') + e.message); checkTokenAdmin(); }
 }
 
@@ -777,6 +815,7 @@ function applyUserPrefix(prefix) {
 function onIssuePermsChange() {
     const v = document.getElementById('issuePerms').value;
     document.getElementById('issuePermsRow').style.display = v === 'custom' ? 'flex' : 'none';
+    document.getElementById('issuePermsHint').style.display = 'block';
 }
 
 function _getIssuePerms() {
@@ -797,7 +836,7 @@ async function issueToken() {
 
     const action = type === 'hmac' ? 'issue_hmac' : 'issue_dynamic';
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action, user_id: userId, days, permissions: perms})});
+        const res = await apiPost(API_TOKEN_MGR, {action, user_id: userId, days, permissions: perms});
         const d = await res.json();
         const data = d.payload || d.data || d;
         if (!data.ok) throw new Error(data.error || 'issue failed');
@@ -832,7 +871,7 @@ async function loadTokenList() {
     if (!box) return;
     box.innerHTML = `<div class="empty">${t('common.loading')}</div>`;
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'list'})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'list'});
         const d = await res.json();
         const data = d.payload || d.data || d;
         const tokens = data.tokens || [];
@@ -882,7 +921,7 @@ async function loadTokenList() {
 async function revokeToken(hash) {
     if (!confirm(t('msg.revokeConfirm'))) return;
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'revoke', token_hash: hash})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'revoke', token_hash: hash});
         const d = await res.json();
         const data = d.payload || d.data || d;
         if (!data.ok) throw new Error(data.error || 'revoke failed');
@@ -893,7 +932,7 @@ async function revokeToken(hash) {
 async function deleteToken(hash) {
     if (!confirm(t('msg.deleteConfirm'))) return;
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete', token_hash: hash})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'delete', token_hash: hash});
         const d = await res.json();
         const data = d.payload || d.data || d;
         if (!data.ok) throw new Error(data.error || 'delete failed');
@@ -903,7 +942,7 @@ async function deleteToken(hash) {
 
 async function extendToken(hash) {
     try {
-        const res = await fetch(API_TOKEN_MGR, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'extend', token_hash: hash, days: 7})});
+        const res = await apiPost(API_TOKEN_MGR, {action:'extend', token_hash: hash, days: 7});
         const d = await res.json();
         const data = d.payload || d.data || d;
         if (!data.ok) throw new Error(data.error || 'extend failed');
@@ -914,18 +953,23 @@ async function extendToken(hash) {
 /* ============ MCP ============ */
 let _mcpTools = [];
 const API_MCP = '/api/os/_mcp_server';
-const MCP_HOST = window.location.hostname || 'localhost';
-const MCP_PORT = 9100;
-const MCP_URL = 'http://' + MCP_HOST + ':' + MCP_PORT + '/mcp';
-const MCP_TOKEN = 'testtoken';
+let MCP_HOST = window.location.hostname || 'localhost';
+let MCP_PORT = 9100;
+let MCP_URL = 'http://' + MCP_HOST + ':' + MCP_PORT + '/mcp';
+/* MCP 认证 token：本地 local 模式无需 token；hybrid/token 模式请用「Token 管理」页签签发的 token 填入 */
+let MCP_TOKEN = '';
+let MCP_AUTH_MODE = 'none';
+let MCP_CLIENT = 'claudeDesktop';
 let _mcpSessionId = '';
 
 async function mcpRpc(method, params){
     const headers = {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'Authorization': 'Bearer ' + MCP_TOKEN
+        'Accept': 'application/json, text/event-stream'
     };
+    if(MCP_AUTH_MODE === 'token' && MCP_TOKEN){
+        headers['Authorization'] = 'Bearer ' + MCP_TOKEN;
+    }
     if(_mcpSessionId) headers['Mcp-Session-Id'] = _mcpSessionId;
     const res = await fetch(MCP_URL, {
         method: 'POST', headers: headers,
@@ -952,6 +996,39 @@ async function mcpInit(){
         capabilities: {},
         clientInfo: { name: 'aicp-skill-panel', version: '1.0.0' }
     });
+}
+
+async function checkMcpHealth(){
+    const box = document.getElementById('mcpHealth');
+    if(!box) return;
+    box.textContent = t('msg.testing');
+    box.style.color = '#9ca3af';
+    let detail = '';
+    try{
+        const res = await apiPost(API_MCP, {action:'metrics'});
+        const d = await res.json();
+        const data = (d && (d.payload || d.data)) || {};
+        if(data && data.ok !== false){
+            const m = data.data || data;
+            detail = ' · sessions ' + ((m && m.total) || 0) + '/' + ((m && m.active) || 0);
+        }
+    }catch(e){
+        detail = ' · ' + (e && e.message ? e.message : String(e));
+    }
+    try{
+        const init = await mcpInit();
+        const r = await mcpRpc('tools/list', {});
+        const n = (r && r.tools && r.tools.length) || 0;
+        const name = (init && init.serverInfo && init.serverInfo.name) || 'mcp';
+        const ver = (init && init.serverInfo && init.serverInfo.version) || '';
+        box.textContent = '🟢 ' + name + (ver ? ' v' + ver : '') + ' · ' + n + ' tools' + detail;
+        box.style.color = '#34d399';
+    }catch(e){
+        const msg = (e && e.message) ? e.message : String(e);
+        box.textContent = '🔴 ' + t('msg.connFail') + ' ' + msg + ' — ' + t('mcp.healthHint');
+        box.style.color = '#f43f5e';
+        box.title = box.textContent;
+    }
 }
 
 function renderMcpTools(offline){
@@ -1065,11 +1142,14 @@ async function testMcp() {
             status.style.color = '#f43f5e';
         }
     } catch (e) {
-        status.textContent = t('msg.connFail');
+        status.textContent = t('msg.connFail') + ' ' + (e && e.message ? e.message : String(e));
         status.style.color = '#f43f5e';
+        status.title = status.textContent;
     } finally {
         btn.disabled = false;
-        setTimeout(() => { status.textContent = ''; }, 3000);
+        if (status.style.color !== '#f43f5e') {
+            setTimeout(() => { status.textContent = ''; }, 3000);
+        }
     }
 }
 
@@ -1107,27 +1187,102 @@ async function runTest() {
     setTimeout(() => { status.textContent = ''; }, 3000);
 }
 
+function buildMcpConfig(){
+    const server = { url: MCP_URL };
+    if(MCP_AUTH_MODE === 'token' && MCP_TOKEN){
+        server.headers = { Authorization: 'Bearer ' + MCP_TOKEN };
+    }
+    const obj = { mcpServers: { aicp: server } };
+    if(MCP_CLIENT === 'claudeDesktop' || MCP_CLIENT === 'claudeCode'){
+        obj.mcpServers.aicp.type = 'http';
+    }
+    return JSON.stringify(obj, null, 2);
+}
+
 function renderMcpConfig(){
     const el = document.getElementById('mcpConfigJson');
     if(!el) return;
-    el.textContent = JSON.stringify({
-        mcpServers: {
-            aicp: {
-                url: MCP_URL,
-                headers: { Authorization: 'Bearer ' + MCP_TOKEN }
-            }
+    el.textContent = buildMcpConfig();
+}
+
+/* ============ 页面级权限校验 ============ */
+async function checkPageAdmin() {
+    const layout = document.querySelector('.layout');
+    const blocked = document.getElementById('pageBlocked');
+    const who = document.getElementById('pageBlockedWho');
+    try {
+        const res = await apiPost(API_TOKEN_MGR, {action:'mode'});
+        if (res.status === 401 || res.status === 403) {
+            if (layout) layout.style.display = 'none';
+            if (blocked) blocked.style.display = 'flex';
+            if (who) who.textContent = (_lang === 'zh' ? 'HTTP ' + res.status + ' · 未认证或无权限' : 'HTTP ' + res.status + ' · unauthenticated or not permitted');
+            return false;
         }
-    }, null, 2);
+        const d = await res.json();
+        const data = d.payload || d.data || d;
+        if (!data.is_admin) {
+            if (layout) layout.style.display = 'none';
+            if (blocked) blocked.style.display = 'flex';
+            if (who) who.textContent = (data.user_id || 'unknown') + ' · ' + (data.source || 'unknown');
+            return false;
+        }
+        if (layout) layout.style.display = '';
+        if (blocked) blocked.style.display = 'none';
+        return true;
+    } catch(e) {
+        if (layout) layout.style.display = 'none';
+        if (blocked) blocked.style.display = 'flex';
+        if (who) who.textContent = (_lang === 'zh' ? '无法连接后端：' : 'backend unreachable: ') + e.message;
+        return false;
+    }
 }
 
 /* ============ 初始化 ============ */
 applyLang(_lang);
 renderMcpConfig();
-loadApps();
-loadEngineConfig();
-loadModels();
-document.getElementById('cfgWsUrl').placeholder = 'ws://' + location.hostname + ':9001/ws';
-document.getElementById('cfgUploadUrl').placeholder = 'http://' + location.hostname + ':9002/upload';
+checkPageAdmin().then(function(ok){
+    if (ok) { loadEngineConfig(); loadModels(); }
+});
+document.getElementById('cfgWsUrl').placeholder = '';
+document.getElementById('cfgUploadUrl').placeholder = '';
+document.getElementById('cfgMcpPort').placeholder = '9100';
+document.getElementById('cfgMcpUrl').placeholder = '';
+
+/* MCP token：仅存于页面内存，不落盘。
+   本地 local 模式无需 token；hybrid/token 模式请从「Token 管理」页签签发后粘贴到上方输入框。 */
+document.getElementById('btnPasteMcpToken').addEventListener('click', async function(){
+    try{
+        const txt = await navigator.clipboard.readText();
+        const val = (txt || '').trim();
+        if(!val){ alert('剪贴板为空'); return; }
+        document.getElementById('cfgMcpToken').value = val;
+        MCP_TOKEN = val;
+        renderMcpConfig();
+    }catch(e){ alert('读取剪贴板失败：' + e.message); }
+});
+document.getElementById('btnToggleMcpToken').addEventListener('click', function(){
+    const inp = document.getElementById('cfgMcpToken');
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    this.textContent = show ? '隐藏' : '显示';
+});
+document.getElementById('cfgMcpToken').addEventListener('input', function(){
+    MCP_TOKEN = this.value.trim();
+    renderMcpConfig();
+});
+
+/* 认证方式切换：none = 默认不认证；token = 附带 Bearer <token> */
+document.getElementById('mcpAuthMode').addEventListener('change', function(){
+    MCP_AUTH_MODE = this.value;
+    document.getElementById('mcpTokenRow').style.display = (MCP_AUTH_MODE === 'token') ? '' : 'none';
+    renderMcpConfig();
+});
+
+/* 客户端类型切换：不同客户端的 mcpServers 片段字段略有差异 */
+document.getElementById('mcpClient').addEventListener('change', function(){
+    MCP_CLIENT = this.value;
+    renderMcpConfig();
+});
 </script>
 </body>
 </html>

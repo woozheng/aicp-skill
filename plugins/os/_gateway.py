@@ -52,7 +52,12 @@ APP_ASSET_PREFIXES = ('apps/',)
 # ★ 对外隐藏的应用（模板/内置 demo），API 层与静态页都拦截。
 #   原先定义在 START 闭包里 → 属于 handler 的局部变量，热重载永远改不动。
 #   提到模块级，再由使用点走 _live() 读取，才能热生效。
-HIDDEN_APP_PREFIXES = ("applications/_demo/",)
+# ★ 对外隐藏的应用（模板/内置 demo），API 层与静态页都拦截。
+#   原先定义在 START 闭包里 → 属于 handler 的局部变量，热重载永远改不动。
+#   提到模块级，再由使用点走 _live() 读取，才能热生效。
+#   2026-11-09：_demo 取消隐藏（本地实例需要能直接访问调试）。
+#   如需恢复隐藏，改回 ("applications/_demo/",) 即可。
+HIDDEN_APP_PREFIXES = ()
 
 # ============================================================
 # 请求体大小上限
@@ -198,6 +203,13 @@ async def execute(envelop, agent):
             server_host = request.host
             return origin == f"http://{server_host}" or origin == f"https://{server_host}"
 
+        def _is_lan(request):
+            """局域网直连（手机/平板访问盒子）。有反向代理头时一律不算。"""
+            if request.headers.get("X-Forwarded-For", ""):
+                return False
+            from plugins.os._auth import is_private_network
+            return is_private_network(request.remote or "")
+
         async def _verify_auth(request, agent, route, envelop_meta=None):
             token = _extract_token(request)
 
@@ -292,7 +304,13 @@ async def execute(envelop, agent):
                     url = ws_external_url
                 else:
                     protocol = "wss" if is_secure else "ws"
-                    url = f"{protocol}://{hostname}/ws"
+                    # ★ 用请求方 Host 的主机名 + 配置的 ws 端口推导 ws 地址，
+                    #   局域网/手机访问才能连上（HTTP 端口与 WS 端口不同，不能直接用 Host 的端口）。
+                    #   Host 缺失时保持原样不替换（云端部署走 external_url 覆盖）。
+                    if hostname:
+                        url = f"{protocol}://{hostname}:{ws_port}/ws"
+                    else:
+                        url = f"{protocol}://:{ws_port}/ws"
 
                 return web.json_response({
                     "url": url,
@@ -363,7 +381,18 @@ async def execute(envelop, agent):
                 if k not in ("user_id", "auth_result", "token", "permissions")
             }
 
-            need_auth = not (_is_local(request) or _is_same_origin(request))
+            # ★ 鉴权裁决统一交给 os/_auth.requires_auth：
+            #   mode=token  → 一律要 token，本机/同源不再短路（反代同机回源也无法绕过）
+            #   mode=hybrid → 本机/同源放行，带 XFF 时同源判定失效
+            #   mode=local  → 交给 _verify 的 local 护栏
+            from plugins.os._auth import requires_auth
+            need_auth = requires_auth(
+                agent,
+                remote=request.remote or "",
+                forwarded_for=request.headers.get("X-Forwarded-For", ""),
+                origin=request.headers.get("Origin", ""),
+                host=request.host,
+            )
 
             auth_payload = None
 
@@ -488,7 +517,13 @@ async def execute(envelop, agent):
                     url = ws_external_url
                 else:
                     protocol = "wss" if is_secure else "ws"
-                    url = f"{protocol}://{hostname}/ws"
+                    # ★ 用请求方 Host 的主机名 + 配置的 ws 端口推导 ws 地址，
+                    #   局域网/手机访问才能连上（HTTP 端口与 WS 端口不同，不能直接用 Host 的端口）。
+                    #   Host 缺失时保持原样不替换（云端部署走 external_url 覆盖）。
+                    if hostname:
+                        url = f"{protocol}://{hostname}:{ws_port}/ws"
+                    else:
+                        url = f"{protocol}://:{ws_port}/ws"
 
                 return web.json_response({
                     "url": url,
@@ -552,14 +587,28 @@ async def execute(envelop, agent):
             is_app_asset = any(file_path.startswith(p) for p in app_prefix)
 
             if (file_path.endswith('.html') and not is_public_page) or is_app_asset:
-                ok, _ = await _verify_auth(request, agent, "__static__")
-                if not ok:
-                    if file_path.endswith('.html'):
-                        return web.Response(
-                            text='<script>location.href="/"</script>',
-                            content_type='text/html',
-                        )
-                    return web.Response(text="Forbidden", status=403)
+                # ★ 与 handle_api 的 need_auth 口径一致：本机 / 同源浏览器直接放行，
+                #   不走 _verify_auth。否则手机等局域网浏览器打开应用页面时，
+                #   页面引用的 .js/.css 会被 os/_auth 在 local 模式下拒绝，返回 403。
+                # ★ 与 handle_api 同一裁决口径（os/_auth.requires_auth）：
+                #   mode=token  → 一律要 token；静态页不再因本机/同源/局域网而放行
+                #   mode=hybrid → 本机/同源/局域网直连放行，带 XFF 时同源失效
+                from plugins.os._auth import requires_auth
+                if requires_auth(
+                    agent,
+                    remote=request.remote or "",
+                    forwarded_for=request.headers.get("X-Forwarded-For", ""),
+                    origin=request.headers.get("Origin", ""),
+                    host=request.host,
+                ):
+                    ok, _ = await _verify_auth(request, agent, "__static__")
+                    if not ok:
+                        if file_path.endswith('.html'):
+                            return web.Response(
+                                text='<script>location.href="/"</script>',
+                                content_type='text/html',
+                            )
+                        return web.Response(text="Forbidden", status=403)
 
                 return await _route_get(
                         "os/_static", request,

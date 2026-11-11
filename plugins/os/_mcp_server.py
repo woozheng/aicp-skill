@@ -60,6 +60,33 @@ SESSION_CLEANUP_INTERVAL = 300
 DEFAULT_MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB
 
 
+def _resolve_mcp_host(agent) -> str:
+    """MCP 监听地址：复用全局 host（aicp.yaml host），缺省 127.0.0.1。
+
+    MCP 不单独配 host —— 它跟网关是同一台机器上的兄弟服务，
+    监听地址跟着全局 host 走即可，单独配置只会出现两处不一致。
+    """
+    host = "127.0.0.1"
+    if agent is not None:
+        cfg = getattr(agent, "config", None) or {}
+        host = cfg.get("host", host) or host
+    return str(host)
+
+
+def _resolve_mcp_port(agent) -> int:
+    """MCP 监听端口：aicp.yaml mcp.port，缺省 9100。"""
+    port = 9100
+    if agent is not None:
+        cfg = getattr(agent, "config", None) or {}
+        mcp_cfg = cfg.get("mcp") or {}
+        port = mcp_cfg.get("port", port)
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = 9100
+    return port if 0 < port < 65536 else 9100
+
+
 def _resolve_max_body_size(agent) -> int:
     """读取 JSON 请求体上限：aicp.yaml max_body_size，缺省 10MB。
     与网关 os/_gateway.py 的 _resolve_max_body_size 读同一个配置键。"""
@@ -264,10 +291,10 @@ data/uploads/   用于应用上传功能。 `data/uploads/`（`{本机基址}/da
 
     call_plugin(receiver="builtins/tools/file_utils_api", action="<action>", params={...})
 
-14 个 action：
+12 个 action：
   read_file / read_file_lines   读文件（read_file_lines 可按行范围读）
   write_file / append_file      写文件（append 追加）
-  edit_file /replace_lines/ apply_patch       改文件（edit_file 按 find→replace 精确替换/replace_lines 按行号替换 使用前必须读文件确认行号)
+  edit_file      改文件（edit_file 按 find→replace 精确替换
   file_exists / list_dir / mkdir / delete_file / file_stat
   code_structure                大文件结构地图
   search                        搜文件
@@ -854,14 +881,14 @@ async def execute(envelop, agent):
         # ★ 优雅重启：释放端口 + 用新代码重新起（改了提示词不必重启引擎）
         ok = await _sr().restart_service_and_watch(
             agent, "os/_mcp_server",
-            port=getattr(agent, "_mcp_port", 9100),
-            host=getattr(agent, "_mcp_host", "127.0.0.1"),
+            port=_resolve_mcp_port(agent),
+            host=_resolve_mcp_host(agent),
             start_payload={"action": "START",
-                           "host": getattr(agent, "_mcp_host", "127.0.0.1"),
-                           "port": getattr(agent, "_mcp_port", 9100)},
+                           "host": _resolve_mcp_host(agent),
+                           "port": _resolve_mcp_port(agent)},
         )
         envelop.payload = {"ok": ok, "status": "restarted" if ok else "restart_failed",
-                           "port": getattr(agent, "_mcp_port", 9100)}
+                           "port": _resolve_mcp_port(agent)}
         return envelop
     elif action == "sessions":
         store = getattr(agent, "_mcp_sessions", None)
@@ -886,8 +913,8 @@ async def execute(envelop, agent):
 
 
 async def _start(envelop, agent):
-    host = envelop.payload.get("host", "127.0.0.1")
-    port = envelop.payload.get("port", 9100)
+    host = envelop.payload.get("host") or _resolve_mcp_host(agent)
+    port = envelop.payload.get("port") or _resolve_mcp_port(agent)
 
     if not hasattr(agent, "_mcp_sessions"):
         agent._mcp_sessions = SessionStore()
@@ -971,21 +998,43 @@ async def _start(envelop, agent):
         except Exception:
             pass
 
-    # ---------- 认证（走 os/_auth，source=mcp）----------
+    # ---------- 认证（优先走 os/_token_manager，统一 token 体系）----------
     async def _verify_token(token, request=None):
         if not token:
             return None
+        meta = {
+            "token": token,
+            "source": "mcp",
+            # ★ 来源信息：供 os/_auth 的 local / hybrid 护栏判断
+            "remote": (request.remote if request else "") or "",
+            "forwarded_for": (request.headers.get("X-Forwarded-For", "") if request else ""),
+        }
+
+        # 1) 首选 token_manager：静态 token / HMAC / 动态 token 一套校验，吊销即时生效
+        try:
+            tm_env = core.Envelop(
+                sender="os/_mcp_server",
+                receiver="os/_token_manager",
+                payload={"action": "check", "token": token},
+                meta=meta,
+            )
+            result = await agent.system.call(tm_env)
+            if result and result.payload.get("ok"):
+                return {
+                    "user_id": result.payload.get("user_id", "local"),
+                    "permissions": result.payload.get("permissions", {"*": True}),
+                    "source": result.payload.get("source", ""),
+                    "expires_at": result.payload.get("expires_at"),
+                }
+        except Exception as e:
+            await _log("warning", "token_manager_check_error", error=str(e))
+
+        # 2) 回落 os/_auth（兼容本地 token 列表等旧路径）
         auth_env = core.Envelop(
             sender="os/_mcp_server",
             receiver="os/_auth",
             payload={"action": "verify", "token": token},
-            meta={
-                "token": token,
-                "source": "mcp",
-                # ★ 来源信息：供 os/_auth 的 local / hybrid 护栏判断
-                "remote": (request.remote if request else "") or "",
-                "forwarded_for": (request.headers.get("X-Forwarded-For", "") if request else ""),
-            },
+            meta=meta,
         )
         try:
             result = await agent.system.call(auth_env)

@@ -672,6 +672,7 @@ function logoutHome() {
   localStorage.removeItem('aicp_token');
   localStorage.removeItem('aicp_user');
   document.cookie = 'aicp_token=; Path=/; Max-Age=0; SameSite=Lax';
+  updateNavAuth();
   location.href = '/';
 }
 

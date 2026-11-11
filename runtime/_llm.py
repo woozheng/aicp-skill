@@ -14,6 +14,13 @@ Review Fix Checklist：
 ✅ P2  _model_configs / _model_to_client 用直接赋值，不用 setdefault
 ✅ P3  多 tool_calls 时打日志（只取第一个）
 ✅ 保留：脱敏、usage 上报、健康检查、close 资源释放、重试退避、深拷贝 stats
+
+v4.1-debug
+✅ _iter_stream_with_timeout 用 shield + cancel，防 SDK 不响应 cancel
+✅ stream.close() 超时 10s → 3s
+✅ keepalive_expiry 15s → 5s
+✅ 新增 _debug_pool_state：连接池快照
+✅ chat_tool_stream 每 attempt / 超时 / 异常时打 debug 日志
 """
 
 from __future__ import annotations
@@ -135,7 +142,7 @@ DEFAULT_INTER_TOKEN_TIMEOUT: float = 45.0       # 流内 token 间隔。原 90s 
 # ---- 总预算 ----
 DEFAULT_REQUEST_TIMEOUT: float = 180.0     # 单次请求总超时。需覆盖 header(45)+首token(120)+生成，原 90s 对 42k+递归偏紧
 DEFAULT_STREAM_TIMEOUT: float = 300.0      # 保留兼容；流式整体上限，建议 >= REQUEST_TIMEOUT
-DEFAULT_STREAM_CLOSE_TIMEOUT: float = 10.0 # 流关闭握手，保持
+DEFAULT_STREAM_CLOSE_TIMEOUT: float = 3.0  # ★ 流关闭握手，10s → 3s
 
 # ---- HTTP 底层 ----
 DEFAULT_HTTP_READ_TIMEOUT: float = 150.0   # 必须 >= FIRST_TOKEN_TIMEOUT(120) 且留余量，否则底层先断。原 120 与 90 首token 勉强，调大后需同步提到 150
@@ -158,6 +165,9 @@ HTTP_TIMEOUT_CONFIG = {
     "write": DEFAULT_HTTP_READ_TIMEOUT,
     "pool": DEFAULT_CONNECT_TIMEOUT,
 }
+
+# ★ keepalive_expiry：15s → 5s（半死连接 5 秒后回收）
+KEEPALIVE_EXPIRY: float = 5.0
 
 ERROR_PREFIXES = (
     "[LLM stream error:",
@@ -361,6 +371,9 @@ class LLM:
 
         self._session_stats: Dict[str, Dict[str, int]] = {}
         self._usage_callback = None
+        # ★ 最近一次 usage 的 stats 快照（session_id -> dict）
+        #   用于 think.py 的 push_stats 直接读，避免 get_session_stats 深拷贝
+        self.last_stats: Dict[str, Dict[str, Any]] = {}
 
         self.high_quality_model: Optional[str] = None
 
@@ -386,6 +399,55 @@ class LLM:
                 _log(f"close openai client failed: {type(e).__name__}: {e}")
         self._clients.clear()
         _info("[LLM] All provider clients closed")
+
+    # ======================================================================
+    # debug: 连接池快照
+    # ======================================================================
+
+    def _debug_pool_state(self, reason: str = "") -> dict:
+        """连接池快照（debug 用）。返回 dict，同时打日志。"""
+        result = {"reason": reason, "clients": {}}
+        for name, client in self._clients.items():
+            try:
+                http_client = getattr(client, "_client", None)
+                if http_client is None:
+                    result["clients"][name] = {"error": "no _client attr"}
+                    continue
+                pool = getattr(getattr(http_client, "_transport", None), "_pool", None)
+                if pool is None:
+                    result["clients"][name] = {"error": "no _pool attr"}
+                    continue
+                conns = list(getattr(pool, "connections", []) or [])
+                idle = 0
+                active = 0
+                for c in conns:
+                    try:
+                        if c.is_idle():
+                            idle += 1
+                        else:
+                            active += 1
+                    except Exception:
+                        active += 1
+                result["clients"][name] = {
+                    "connections": len(conns),
+                    "idle": idle,
+                    "active": active,
+                    "max_connections": 10,
+                    "max_keepalive": 5,
+                    "keepalive_expiry": KEEPALIVE_EXPIRY,
+                }
+            except Exception as e:
+                result["clients"][name] = {"error": f"{type(e).__name__}: {e}"}
+        try:
+            tasks = [t for t in asyncio.all_tasks() if not t.done()]
+            result["pending_tasks"] = len(tasks)
+            result["pending_sample"] = [
+                str(t.get_coro())[:120] for t in tasks[:5]
+            ]
+        except Exception as e:
+            result["tasks_error"] = str(e)
+        _info(f"[LLM][debug_pool] {json.dumps(result, ensure_ascii=False)[:600]}")
+        return result
 
     # ======================================================================
     # usage
@@ -472,6 +534,18 @@ class LLM:
             s["cache_read_tokens"] += usage.get("cache_read_tokens", 0)
             s["cache_creation_tokens"] += usage.get("cache_creation_tokens", 0)
             s["last_cache_read_tokens"] = usage.get("cache_read_tokens", 0)
+
+            # ★ 更新 last_stats 快照（供 think.py 的 push_stats 直接读）
+            self.last_stats[sid] = {
+                "last_prompt_tokens": s["last_prompt_tokens"],
+                "last_total_tokens": s["last_total_tokens"],
+                "last_cache_read_tokens": s["last_cache_read_tokens"],
+                "round_total_tokens": s["round_total_tokens"],
+                "round_calls": s["round_calls"],
+                "total_tokens": s["total_tokens"],
+                "calls": s["calls"],
+                "cache_read_tokens": s["cache_read_tokens"],
+            }
 
             extra = extra or {}
             tool = extra.get("tool", "")
@@ -603,7 +677,7 @@ class LLM:
             limits = httpx.Limits(
                 max_keepalive_connections=5,
                 max_connections=10,
-                keepalive_expiry=15.0,
+                keepalive_expiry=KEEPALIVE_EXPIRY,   # ★ 15s → 5s
             )
 
             client = AsyncOpenAI(
@@ -827,7 +901,13 @@ class LLM:
         _log(f"💬 chat: {resolved_model}" + (f" (role={role})" if role else ""))
 
         try:
-            async with self._semaphore:
+            # ★ 30s 超时防「semaphore 泄漏时无限等」
+            try:
+                await asyncio.wait_for(self._semaphore.acquire(), timeout=30.0)
+            except asyncio.TimeoutError:
+                _warn("[LLM] chat semaphore acquire 30s 超时，可能泄漏")
+                return FALLBACK_MESSAGES["timeout"]
+            try:
                 result = await self._chat_impl(
                     messages, resolved_model, role=role, session_id=session_id, **kwargs
                 )
@@ -838,6 +918,8 @@ class LLM:
                 if not result.strip():
                     return FALLBACK_MESSAGES["empty"]
                 return result
+            finally:
+                self._semaphore.release()
         except Exception as exc:
             _log(f"❌ chat 异常: {type(exc).__name__}: {_sanitize_for_log(str(exc))[:100]}")
             return f"[系统错误: {_sanitize_for_log(str(exc), max_len=100)}]"
@@ -1046,12 +1128,21 @@ class LLM:
         else:
             resolved_model = self.default_model
 
-        async with self._semaphore:
+        # ★ 30s 超时 + finally 释放，防「async generator 被丢弃时泄漏」
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=30.0)
+        except asyncio.TimeoutError:
+            _warn("[LLM] chat_stream semaphore acquire 30s 超时，可能泄漏")
+            yield FALLBACK_MESSAGES["timeout"]
+            return
+        try:
             async for token in self._chat_stream_impl(
                 messages, resolved_model, role=role, session_id=session_id, **kwargs
             ):
                 if token:
                     yield token
+        finally:
+            self._semaphore.release()
 
     # ======================================================================
     # chat_json
@@ -1337,6 +1428,9 @@ class LLM:
             f" messages={len(messages)} tools={len(tools)}"
         )
 
+        # ★ debug：记录总开始时间
+        _ctts_total_start = time.monotonic()
+
         for attempt in range(self.max_retries):
             stream = None
             text_buf = ""
@@ -1582,16 +1676,21 @@ class LLM:
                             reason = "被截断" if finish_reason == "length" else "不完整/非法"
                             skipped.append(f"idx={idx} bad_args({reason}) name={tool_name}")
                             continue
-
+                        # 解析成功，构造 ToolCall 并加入有效列表
+                        valid_tool_calls.append(
+                            ToolCall(
+                                name=tool_name,
+                                arguments=args,
+                                id=tool_id,
+                            )
+                        )
                         if finish_reason == "length":
                             _info(
                                 f"⚠️ tool_call[{idx}] finish_reason=length 但 JSON 解析成功，"
                                 f"按完整处理 name={tool_name} args_len={len(tool_args_buf)}"
                             )
 
-                        valid_tool_calls.append(
-                            ToolCall(name=tool_name, arguments=args, id=tool_id)
-                        )
+
 
                 for tc in valid_tool_calls:
                     yield {"type": ET_TOOL_CALL, "tool_call": tc}
@@ -1632,11 +1731,20 @@ class LLM:
                 return
 
             except asyncio.TimeoutError:
+                elapsed_s = time.monotonic() - attempt_start
+                total_s = time.monotonic() - _ctts_total_start
                 _info(
                     f"⏱️ chat_tool_stream 超时 stage={stage} attempt={attempt + 1} "
-                    f"elapsed={time.monotonic() - attempt_start:.1f}s "
+                    f"elapsed={elapsed_s:.1f}s total={total_s:.1f}s "
                     f"yielded_text={yielded_text} yielded_any={yielded_any}"
                 )
+                # ★ debug：超时时打连接池快照
+                try:
+                    self._debug_pool_state(
+                        reason=f"chat_tool_stream_timeout:stage={stage}:attempt={attempt+1}"
+                    )
+                except Exception:
+                    pass
                 # ★ 已输出任何内容（thinking / text / tool_call）就不能整轮重放，
                 #   否则前端会收到重复的 thinking。只用 yielded_text 判断会漏掉 thinking。
                 if yielded_any:
@@ -1667,10 +1775,20 @@ class LLM:
             except Exception as exc:
                 kind = _classify_stream_error(exc)
                 msg = _sanitize_for_log(str(exc))
+                elapsed_s = time.monotonic() - attempt_start
+                total_s = time.monotonic() - _ctts_total_start
                 _info(
                     f"❌ chat_tool_stream 错误 attempt={attempt+1} kind={kind} "
-                    f"type={type(exc).__name__} msg={msg[:150]}"
+                    f"type={type(exc).__name__} msg={msg[:150]} "
+                    f"elapsed={elapsed_s:.1f}s total={total_s:.1f}s"
                 )
+                # ★ debug：异常时也打连接池快照
+                try:
+                    self._debug_pool_state(
+                        reason=f"chat_tool_stream_error:{kind}:attempt={attempt+1}"
+                    )
+                except Exception:
+                    pass
                 if yielded_any:
                     yield {
                         "type": ET_ERROR,
@@ -1704,7 +1822,7 @@ class LLM:
                     "stage": stage,
                 }
             finally:
-                # ★ FIX 3: stream.close() 加超时
+                # ★ FIX 3: stream.close() 加超时 3s
                 if stream is not None:
                     try:
                         await asyncio.wait_for(
@@ -1728,7 +1846,10 @@ class LLM:
         inter_token_timeout: float,
         total_deadline: Optional[float] = None,
     ) -> AsyncIterator[Any]:
-        """流式迭代 + 首包超时 + 包间超时 + 单次流总预算。"""
+        """流式迭代 + 首包超时 + 包间超时 + 单次流总预算。
+
+        ★ v4.1 修复：用 create_task + shield + cancel，防 SDK 不响应 cancel 时 wait_for 卡住。
+        """
         first = True
         while True:
             timeout = first_token_timeout if first else inter_token_timeout
@@ -1738,15 +1859,34 @@ class LLM:
                     _info("⏱️ stream 总预算耗尽")
                     raise asyncio.TimeoutError("stream total timeout")
                 timeout = min(timeout, remaining)
+
+            # ★ create_task + shield，让 wait_for 超时后能显式 cancel
+            task = asyncio.create_task(stream.__anext__())
             try:
-                chunk = await asyncio.wait_for(
-                    stream.__anext__(), timeout=timeout
-                )
+                chunk = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
             except StopAsyncIteration:
                 return
             except asyncio.TimeoutError:
                 stage = "首包" if first else "包间"
-                _info(f"⏱️ stream {stage}超时 budget={timeout:.1f}s")
+                _info(f"⏱️ stream {stage}超时 budget={timeout:.1f}s，cancel __anext__")
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                except Exception:
+                    pass
+                raise
+            except Exception:
+                # 非超时异常（含 SDK 内部异常），也确保 task 被 cancel
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await asyncio.wait_for(task, timeout=2.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
+                    except Exception:
+                        pass
                 raise
             first = False
             yield chunk

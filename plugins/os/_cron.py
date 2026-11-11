@@ -15,9 +15,45 @@ import core
 DATA_DIR = Path("data/os_cron")
 TASKS_FILE = DATA_DIR / "tasks.json"
 
+# 引擎入口路由（新架构：统一由 engine 按 agent_id 分发到具体 agent）
+ENGINE_RECEIVER = "builtins/agents/engine"
+# agent_id 兜底值（调用方 meta 未带 agent_id 时）
+DEFAULT_AGENT_ID = "main_v2"
+
 _tasks: Dict[str, asyncio.Task] = {}
 _persisted_tasks: Dict[str, dict] = {}
 _stop_events: Dict[str, asyncio.Event] = {}
+_history: list = []  # 已执行任务历史，最多保留 HISTORY_LIMIT 条
+HISTORY_LIMIT = 20
+
+
+def _build_meta(config: dict, target_payload: dict) -> dict:
+    """构造唤醒时的 meta：透传 agent_id / session_id / user_id，保留 callback_receiver。"""
+    meta = {"callback_receiver": ""}
+    agent_id = target_payload.get("agent_id") or config.get("agent_id") or ""
+    if agent_id:
+        meta["agent_id"] = agent_id
+    session_id = target_payload.get("session_id") or config.get("token") or ""
+    if session_id:
+        meta["session_id"] = session_id
+    user_id = config.get("user_id") or ""
+    if user_id:
+        meta["user_id"] = user_id
+    return meta
+
+
+def _record_run(task_id: str, config: dict, status: str, error: str = ""):
+    """记录一次执行结果到历史（仅内存，最多 HISTORY_LIMIT 条）。"""
+    _history.append({
+        "task_id": task_id,
+        "last_run": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_status": status,
+        "error": error,
+        "target_receiver": config.get("target_receiver", ""),
+        "agent_id": config.get("agent_id", ""),
+    })
+    if len(_history) > HISTORY_LIMIT:
+        del _history[:len(_history) - HISTORY_LIMIT]
 
 
 def load_persisted_tasks():
@@ -123,10 +159,12 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
                     sender="os/_cron",
                     receiver=target_receiver,
                     payload=target_payload,
-                    meta={"callback_receiver": ""}
+                    meta=_build_meta(config, target_payload)
                 ))
+                _record_run(task_id, config, "ok")
             except Exception as e:
                 agent.log.error(f"Cron {task_id} immediate exec error: {e}")
+                _record_run(task_id, config, "error", str(e))
             # 一次性任务：immediate 已消耗唯一一次执行，执行完即注销
             if schedule_mode == "once":
                 _cleanup_once_task(task_id)
@@ -189,10 +227,12 @@ async def _start_cron_loop(task_id: str, config: dict, agent):
                     sender="os/_cron",
                     receiver=target_receiver,
                     payload=payload_copy,
-                    meta={"callback_receiver": ""}
+                    meta=_build_meta(config, payload_copy)
                 ))
+                _record_run(task_id, config, "ok")
             except Exception as e:
                 agent.log.error(f"Cron {task_id}: {e}")
+                _record_run(task_id, config, "error", str(e))
 
             # 一次性任务：执行完毕即注销
             if schedule_mode == "once":
@@ -243,8 +283,7 @@ async def execute(envelop, agent):
             return envelop
 
         if not target_receiver:
-            envelop.payload = {"ok": False, "error": "target_receiver is required"}
-            return envelop
+            target_receiver = ENGINE_RECEIVER
 
         if interval is None and at_time is None:
             envelop.payload = {"ok": False, "error": "must provide interval (seconds) or at_time (HH:MM)"}
@@ -302,6 +341,15 @@ async def execute(envelop, agent):
         if "session_id" not in target_payload:
             target_payload["session_id"] = token
 
+        # agent_id 兜底：优先取调用方 meta，其次取 target_payload
+        caller_agent_id = envelop.meta.get("agent_id", "")
+        if not caller_agent_id:
+            caller_agent_id = target_payload.get("agent_id", "")
+        if not caller_agent_id and target_receiver == ENGINE_RECEIVER:
+            caller_agent_id = DEFAULT_AGENT_ID
+        if caller_agent_id:
+            target_payload.setdefault("agent_id", caller_agent_id)
+
         if immediate and "content" in target_payload:
             target_payload["content"] = _format_heartbeat_content(target_payload["content"])
 
@@ -324,6 +372,8 @@ async def execute(envelop, agent):
             "immediate": immediate,
             "once": once,
             "once_at": once_at,
+            "agent_id": caller_agent_id,
+            "user_id": envelop.meta.get("user_id", ""),
         }
 
         if persisted:
@@ -492,7 +542,10 @@ async def execute(envelop, agent):
 
     elif action == "list":
         tasks_info = {}
-        for tid, task in _tasks.items():
+        # 合并来源：内存运行任务 / 持久化但未运行的任务 / 已执行历史
+        all_ids = set(_tasks.keys()) | set(_persisted_tasks.keys())
+        for tid in all_ids:
+            task = _tasks.get(tid)
             config = _persisted_tasks.get(tid, {})
             target_payload = config.get("target_payload", {})
 
@@ -514,8 +567,9 @@ async def execute(envelop, agent):
             else:
                 schedule_mode = "daily" if at_time_val else "interval"
 
+            running = (task is not None) and not task.done()
             tasks_info[tid] = {
-                "running": not task.done(),
+                "running": running,
                 "schedule_mode": schedule_mode,
                 "interval": config.get("interval"),
                 "at_time": at_time_val,
@@ -526,7 +580,33 @@ async def execute(envelop, agent):
                 "persisted": tid in _persisted_tasks,
                 "payload": payload_preview,
                 "task_id": tid,
+                "source": "memory" if task is not None else "persisted",
             }
+
+        # 历史执行记录（含已注销的一次性任务）
+        last_run_map = {}
+        for h in _history:
+            last_run_map[h["task_id"]] = h
+        for tid, h in last_run_map.items():
+            if tid in tasks_info:
+                tasks_info[tid]["last_run"] = h["last_run"]
+                tasks_info[tid]["last_status"] = h["last_status"]
+                if h.get("error"):
+                    tasks_info[tid]["last_error"] = h["error"]
+            else:
+                tasks_info[tid] = {
+                    "running": False,
+                    "executed": True,
+                    "schedule_mode": "unknown",
+                    "target_receiver": h.get("target_receiver", "?"),
+                    "agent_id": h.get("agent_id", ""),
+                    "persisted": False,
+                    "payload": {},
+                    "task_id": tid,
+                    "source": "history",
+                    "last_run": h["last_run"],
+                    "last_status": h["last_status"],
+                }
 
         sorted_tasks = dict(sorted(tasks_info.items()))
         total = len(sorted_tasks)
@@ -539,6 +619,8 @@ async def execute(envelop, agent):
                 "total": total,
                 "running": running_count,
                 "stopped": total - running_count,
+                "history": list(reversed(_history)),
+                "history_limit": HISTORY_LIMIT,
             }
         }
         return envelop

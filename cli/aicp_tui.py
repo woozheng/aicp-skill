@@ -6,6 +6,9 @@ Features:
   - Fixed input area (never scrolled away by output)
   - Command palette (Ctrl+K)
   - Multi-session with unread marker on inactive sessions
+  - Multi-agent: /agent <id> switches default agent and opens a new session
+    (same semantics as console-muti's switchAgent)
+  - Boot splash with loading indicator while agents/sessions load
   - Auto-reconnect (exponential backoff)
   - Theme switching (Ctrl+T)
   - Linux / tmux / Windows Terminal compatible
@@ -16,7 +19,7 @@ Keybindings:
   Ctrl+L    Clear output
   Ctrl+T    Toggle theme
   Ctrl+C    Interrupt current turn / double-press to quit
-  Ctrl+Q    Quit
+  Ctrl+D    Quit
 """
 from __future__ import annotations
 
@@ -36,12 +39,14 @@ except ImportError:
     sys.exit(1)
 
 try:
+    from textual import events
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical, VerticalScroll
     from textual.screen import ModalScreen
     from textual.widgets import (
         Footer, Header, Input, Label, ListItem, ListView, RichLog, Static,
+        LoadingIndicator,
     )
     from rich.text import Text
     from rich.markdown import Markdown
@@ -57,11 +62,11 @@ except ImportError:
 # ============================================================
 DEFAULT_URL = os.environ.get("AICP_WS_URL", "ws://127.0.0.1:9001/ws")
 DEFAULT_TOKEN = os.environ.get("AICP_TOKEN", "")
+DEFAULT_AGENT = os.environ.get("AICP_AGENT", "")
 
-# 发消息等 envelop_result 的超时：main_agent.execute 里的 baseline LLM 判定
-# 最多要 10s，再加上推送/其他开销，10s 会撞车。给足 60s。
+ENGINE_ROUTE = "builtins/agents/engine"
+
 SEND_TIMEOUT = 60.0
-# 普通查询（get_session / list_conversations）的超时
 QUERY_TIMEOUT = 30.0
 
 THEMES = ["textual-dark", "textual-light", "nord", "gruvbox"]
@@ -73,6 +78,7 @@ THEMES = ["textual-dark", "textual-light", "nord", "gruvbox"]
 @dataclass
 class SessionState:
     sid: str
+    agent_id: str = ""
     title: str = ""
     running: bool = False
     stream_buf: str = ""
@@ -95,10 +101,15 @@ class WsClient:
         self.ws = None
         self.user_id = "local"
         self._closing = False
-        self.on_event = None          # async callback(data)
-        self.on_state = None          # sync callback(connected: bool)
+        self.on_event = None
+        self.on_state = None
         self._listen_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        # 全局 pending 表：future 不再挂在 SessionState 上。
+        # 原因：client.call() 可能用还没注册进 self.sessions 的临时 session
+        # （如 action_new_session 的 seed），若 future 存在 session.pending 里，
+        # 服务端回来的 envelop_result 就找不到对应的 future → 30s 超时。
+        self.pending: Dict[str, asyncio.Future] = {}
 
     async def connect(self) -> bool:
         qs = ["channel=pa_local"]
@@ -115,11 +126,15 @@ class WsClient:
             if self.on_state:
                 self.on_state(False)
             return False
-        raw = await self.ws.recv()
-        msg = json.loads(raw)
-        data = msg.get("data") or msg
-        if data.get("type") == "connected":
-            self.user_id = data.get("user_id") or "local"
+        try:
+            # 加超时：服务端不回 connected 帧时不能无限期挂住启动流程
+            raw = await asyncio.wait_for(self.ws.recv(), timeout=3.0)
+            msg = json.loads(raw)
+            data = msg.get("data") or msg
+            if data.get("type") == "connected":
+                self.user_id = data.get("user_id") or "local"
+        except Exception:
+            pass
         await self._send({"type": "subscribe", "channel": f"pa_{self.user_id}"})
         if self.on_state:
             self.on_state(True)
@@ -146,7 +161,6 @@ class WsClient:
                     try:
                         await self.on_event(data)
                     except Exception:
-                        # 单个事件渲染失败不能拖垮监听循环，否则后续 envelop_result 收不到
                         pass
         except websockets.ConnectionClosed:
             pass
@@ -181,24 +195,79 @@ class WsClient:
             except Exception:
                 pass
 
-    async def call(self, ss: SessionState, receiver: str, payload: dict,
+    async def call(self, ss: SessionState, payload: dict,
                    timeout: float = QUERY_TIMEOUT) -> dict:
+        """统一走 engine；agent_id 双写 payload + meta。"""
         if not self.ws:
             return {"ok": False, "error": "ws not connected"}
         tid = uuid.uuid4().hex[:12]
         fut = asyncio.get_event_loop().create_future()
-        ss.pending[tid] = fut
+        self.pending[tid] = fut
+        meta = {"trace_id": tid, "session_id": ss.sid}
+        body = dict(payload)
+        if ss.agent_id:
+            meta["agent_id"] = ss.agent_id
+            if "agent_id" not in body:
+                body["agent_id"] = ss.agent_id
+        body["meta"] = meta
         await self._send({
             "type": "envelop",
-            "receiver": receiver,
-            # os/_websocket 从 data.payload.meta 取 trace_id，必须把 meta 塞进 payload
-            "payload": {**payload, "meta": {"trace_id": tid, "session_id": ss.sid}},
+            "receiver": ENGINE_ROUTE,
+            "payload": body,
         })
         try:
             return await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
-            ss.pending.pop(tid, None)
+            self.pending.pop(tid, None)
             return {"ok": False, "error": f"timeout ({timeout}s)"}
+
+
+# ============================================================
+# Result extraction helpers
+# ============================================================
+def result_payload(r) -> dict:
+    """从 envelop_result 里尽量稳定地取到业务 payload dict。"""
+    if not isinstance(r, dict):
+        return {}
+    d = r.get("data")
+    if isinstance(d, dict):
+        p = d.get("payload")
+        if isinstance(p, dict):
+            return p
+        return d
+    p = r.get("payload")
+    if isinstance(p, dict):
+        return p
+    return r
+
+
+# ============================================================
+# Boot splash
+# ============================================================
+class BootSplash(Vertical):
+    """启动占位：标题 + 加载动画 + 状态行。
+
+    必须是 Vertical：Static 只渲染一段文本，compose() 里的子控件不会被挂载，
+    set_message() 找不到 #splash-msg 就静默失败 —— 表现为启动时一片黑。
+    """
+
+    def __init__(self, id: Optional[str] = None):
+        super().__init__(id=id)
+        self._msg = "Starting…"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="splash-box"):
+            yield Static("AICP", id="splash-title")
+            yield Static("TUI", id="splash-sub")
+            yield LoadingIndicator(id="splash-spin")
+            yield Static(self._msg, id="splash-msg")
+
+    def set_message(self, msg: str):
+        self._msg = msg
+        try:
+            self.query_one("#splash-msg", Static).update(Text(msg, style="dim"))
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -228,9 +297,17 @@ class CommandPalette(ModalScreen[Optional[str]]):
     }
     """
 
+    BINDINGS = [
+        Binding("escape", "close_palette", "Close", show=False, priority=True),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("enter", "select_item", "Select", show=False),
+    ]
+
     COMMANDS = [
         ("New session", "new"),
         ("List conversations", "list"),
+        ("List agents", "agents"),
         ("Reload history", "history"),
         ("Interrupt current turn", "stop"),
         ("Clear output", "clear"),
@@ -242,7 +319,7 @@ class CommandPalette(ModalScreen[Optional[str]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="palette"):
             yield Input(
-                placeholder="Filter commands · Enter select · Esc close",
+                placeholder="Type to filter · Enter runs · Esc closes",
                 id="palette-input",
             )
             yield ListView(id="palette-list")
@@ -253,6 +330,17 @@ class CommandPalette(ModalScreen[Optional[str]]):
             lv.append(ListItem(Label(f"{label}  ({cmd})"), id=f"cmd-{cmd}"))
         self.query_one("#palette-input", Input).focus()
 
+    def _visible_commands(self):
+        """返回当前可见命令 [(label, cmd)]，与列表显示顺序一致。"""
+        out = []
+        for item in self.query_one("#palette-list", ListView).children:
+            if not item.id or not item.display:
+                continue
+            cmd = item.id[4:]
+            label = next((l for l, c in self.COMMANDS if c == cmd), cmd)
+            out.append((label, cmd))
+        return out
+
     async def on_input_changed(self, event: Input.Changed):
         q = (event.value or "").lower().strip()
         lv = self.query_one("#palette-list", ListView)
@@ -261,17 +349,28 @@ class CommandPalette(ModalScreen[Optional[str]]):
                 continue
             cmd = item.id[4:]
             label = next((l for l, c in self.COMMANDS if c == cmd), cmd)
-            # 隐藏不匹配的，显示匹配的
             item.display = bool(not q or q in label.lower() or q in cmd)
+        # 过滤后把高亮移到第一条可见项
+        vis = self._visible_commands()
+        if vis:
+            lv.index = 0
 
     def on_input_submitted(self, event: Input.Submitted):
+        # Enter：优先用高亮项；没有高亮时取第一条可见项
         lv = self.query_one("#palette-list", ListView)
-        if lv.index is not None and 0 <= lv.index < len(lv.children):
-            item = lv.children[lv.index]
-            if item.id:
-                self.dismiss(item.id[4:])
-                return
-        self.dismiss(None)
+        cmd = ""
+        if lv.index is not None:
+            try:
+                item = lv.children[lv.index]
+                if item.display and item.id:
+                    cmd = item.id[4:]
+            except IndexError:
+                cmd = ""
+        if not cmd:
+            vis = self._visible_commands()
+            if vis:
+                cmd = vis[0][1]
+        self.dismiss(cmd or None)
 
     def on_list_view_selected(self, event: ListView.Selected):
         if event.item.id:
@@ -279,23 +378,106 @@ class CommandPalette(ModalScreen[Optional[str]]):
         else:
             self.dismiss(None)
 
-    def key_escape(self):
+    def action_close_palette(self):
         self.dismiss(None)
+
+    def action_cursor_down(self):
+        lv = self.query_one("#palette-list", ListView)
+        self._move_cursor(lv, +1)
+
+    def action_cursor_up(self):
+        lv = self.query_one("#palette-list", ListView)
+        self._move_cursor(lv, -1)
+
+    def action_select_item(self):
+        lv = self.query_one("#palette-list", ListView)
+        if lv.index is not None:
+            try:
+                item = lv.children[lv.index]
+                if item.id:
+                    self.dismiss(item.id[4:])
+                    return
+            except IndexError:
+                pass
+        vis = self._visible_commands()
+        if vis:
+            self.dismiss(vis[0][1])
+        else:
+            self.dismiss(None)
+
+    @staticmethod
+    def _move_cursor(lv: ListView, delta: int):
+        vis = [i for i in lv.children if i.display and i.id]
+        if not vis:
+            lv.index = None
+            return
+        cur = lv.index
+        if cur is None or cur < 0 or cur >= len(lv.children):
+            lv.index = lv.children.index(vis[0])
+            return
+        try:
+            cur_pos = vis.index(lv.children[cur])
+        except ValueError:
+            cur_pos = 0
+        new_pos = max(0, min(len(vis) - 1, cur_pos + delta))
+        lv.index = lv.children.index(vis[new_pos])
 
 
 # ============================================================
 # Main App
 # ============================================================
 class AICPApp(App):
-    TITLE = "AICP BIO-1"
+    TITLE = "AICP"
     SUB_TITLE = "TUI"
 
-    # 关闭 Textual 内置命令面板（Ctrl+P）；本应用用自定义 CommandPalette（Ctrl+K）
     ENABLE_COMMAND_PALETTE = False
+
+    # Textual 8.2.8: 鼠标拖选在容器解析为 None 时抛 AttributeError
+    # ('NoneType' object has no attribute 'region')，整个 App 直接崩。
+    # TUI 不需要拖选复制，复制走终端自身快捷键。
+    ALLOW_SELECT = False
 
     CSS = """
     Screen {
         background: $background;
+    }
+
+    /* ---- Boot splash ---- */
+    #splash {
+        align: center middle;
+        width: 1fr;
+        height: 1fr;
+        background: $background;
+    }
+    #splash-box {
+        width: 46;
+        height: auto;
+        align: center middle;
+        padding: 1 2;
+        border: round $accent 40%;
+        background: $surface;
+    }
+    #splash-title {
+        text-align: center;
+        color: $accent;
+        text-style: bold;
+        width: 1fr;
+    }
+    #splash-sub {
+        text-align: center;
+        color: $text-muted;
+        width: 1fr;
+        margin-bottom: 1;
+    }
+    #splash-spin {
+        width: 1fr;
+        height: 1;
+        margin: 1 0;
+    }
+    #splash-msg {
+        text-align: center;
+        color: $text-muted;
+        width: 1fr;
     }
 
     #layout {
@@ -355,6 +537,35 @@ class AICPApp(App):
     #msg-input {
         border: tall $accent;
     }
+    #hint {
+        height: 1;
+        color: $text-muted;
+        background: $surface;
+    }
+    #hint.-error {
+        color: $warning;
+    }
+    #hint.-ok {
+        color: $success;
+    }
+    #suggest {
+        height: auto;
+        max-height: 8;
+        background: $surface;
+        border-left: thick $accent;
+        padding: 0 1;
+    }
+    #suggest-list {
+        height: auto;
+        max-height: 8;
+        background: $surface;
+    }
+    #suggest-list ListItem {
+        padding: 0 1;
+    }
+    #suggest-list ListItem.--highlight {
+        background: $accent 30%;
+    }
 
     #status {
         height: 1;
@@ -369,21 +580,21 @@ class AICPApp(App):
     """
 
     BINDINGS = [
-        # priority=True：焦点在 Input 里时也优先触发 App 级快捷键，
-        # 否则 Input 自己的 emacs 键位会吞掉 Ctrl+K / Ctrl+T 等
         Binding("ctrl+k", "palette", "Cmd", show=True, priority=True),
         Binding("ctrl+n", "new_session", "New", show=True, priority=True),
         Binding("ctrl+l", "clear_output", "Clear", show=False, priority=True),
         Binding("ctrl+t", "toggle_theme", "Theme", show=False, priority=True),
         Binding("ctrl+c", "interrupt_or_quit", "Int/Quit", show=True, priority=True),
-        # Ctrl+Q 在终端里是 XON/XOFF 流控，被终端吞掉 → 换 Ctrl+D
         Binding("ctrl+d", "quit_app", "Quit", show=True, priority=True),
+        Binding("tab", "cycle_suggest_forward", "Next", show=False, priority=True),
+        Binding("shift+tab", "cycle_suggest_back", "Prev", show=False, priority=True),
     ]
 
-    def __init__(self, url: str, token: str, initial_sid: str = ""):
+    def __init__(self, url: str, token: str, agent_id: str = "", initial_sid: str = ""):
         super().__init__()
         self.url = url
         self.token = token
+        self.default_agent_id = agent_id
         self.initial_sid = initial_sid or f"s_{uuid.uuid4().hex[:12]}"
         self.client = WsClient(url, token)
         self.client.on_event = self._on_ws_event
@@ -393,37 +604,39 @@ class AICPApp(App):
         self._connected = False
         self._theme_idx = 0
         self._ctrl_c_count = 0
+        self._agents = []
+        self._booted = False
 
-    async def _load_all_sessions(self):
-        """从服务端拉全部会话，补进 self.sessions（不切换当前）。"""
-        ss = self.sessions.get(self.current_sid)
-        if not ss:
-            return
+    # ------------------------------------------------------------
+    # Agent discovery
+    # ------------------------------------------------------------
+    async def _load_agents(self) -> str:
+        probe = SessionState(sid=self.initial_sid)
         try:
             r = await self.client.call(
-                ss, "builtins/agents/main_agent",
-                {"action": "list_conversations", "include_archived": True},
-                timeout=QUERY_TIMEOUT,
+                probe, {"action": "list_agents"}, timeout=QUERY_TIMEOUT,
             )
-            p = r.get("payload") or r.get("data") or r
-            convs = p.get("conversations") or []
-            for c in convs:
-                sid = c.get("id") or ""
-                if not sid:
-                    continue
-                if sid not in self.sessions:
-                    self.sessions[sid] = SessionState(sid=sid)
-                # 标题从列表里补（get_session 的 title 可能为空）
-                if not self.sessions[sid].title:
-                    self.sessions[sid].title = c.get("title") or ""
-            await self._refresh_conv_list()
+            p = result_payload(r)
+            agents = p.get("agents") or []
+            default = p.get("default") or ""
+            self._agents = agents
+            ids = [a.get("id") for a in agents if isinstance(a, dict) and a.get("id")]
+            if self.default_agent_id and self.default_agent_id in ids:
+                return self.default_agent_id
+            if default and default in ids:
+                return default
+            if ids:
+                return ids[0]
         except Exception as e:
-            self._log_error(f"Failed to list conversations: {e}")
+            self._log_error(f"Failed to list agents: {e}")
+        return self.default_agent_id
+
     # ------------------------------------------------------------
     # Compose
     # ------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield BootSplash(id="splash")
         with Horizontal(id="layout"):
             with Vertical(id="sidebar"):
                 yield Label("*  Sessions", id="sidebar-title")
@@ -437,53 +650,122 @@ class AICPApp(App):
                         placeholder="Type a message, Enter to send, Ctrl+K for commands…",
                         id="msg-input",
                     )
+                    with Vertical(id="suggest"):
+                        yield ListView(id="suggest-list")
+        yield Static("", id="hint")
         yield Static("", id="status")
         yield Footer()
 
     async def on_mount(self):
+        # 立刻显示主布局 —— 不再让 splash 阻塞整个启动流程。
+        # 数据加载放到后台任务，界面先可交互。
+        try:
+            self.query_one("#layout").display = True
+            self.query_one("#status").display = True
+            self.query_one("#splash").display = False
+        except Exception:
+            pass
+
+        self._booted = True
         self._update_status()
         self._refresh_chat_header()
+        try:
+            self.query_one("#msg-input", Input).focus()
+        except Exception:
+            pass
+
+        # 后台启动加载流程
+        self.run_worker(self._boot_sequence(), exclusive=False)
+
+    async def _boot_sequence(self):
+        """连接 + 加载数据。全部在后台跑，UI 保持可交互。"""
+        splash = None
+        try:
+            splash = self.query_one("#splash", BootSplash)
+        except Exception:
+            pass
+
         ok = await self.client.connect()
         if not ok:
-            self._log_error("Cannot connect WebSocket, retrying…")
-        await self._open_session(self.initial_sid)
-        # 拉全部会话补进左侧列表（不切换当前）
-        await self._load_all_sessions()
+            self._log_error("Cannot connect WebSocket, retrying in background…")
+            self._update_status()
+            return
+
+        self._update_status()
+
+        # 加载期间的进度提示 —— 免得用户对着空白输出区干等
+        self._log_info("loading agents and sessions…")
+
+        # agents 与 sessions 并发拉取，省一个往返。
+        # _load_all_sessions 用 probe session，不依赖 current_sid，并发安全。
+        resolved, _ = await asyncio.gather(
+            self._load_agents(),
+            self._load_all_sessions(),
+        )
+        if resolved:
+            self.default_agent_id = resolved
+
+        # 先列出所有会话（一次请求），顺带补齐标题，避免二次 list_conversations
+        await self._open_session(self.initial_sid, load_history=True)
+        self._update_status()
 
     # ------------------------------------------------------------
     # Sessions
     # ------------------------------------------------------------
-    async def _open_session(self, sid: str):
+    async def _load_all_sessions(self):
+        # 用 probe session 而不是 current_sid —— 启动时 current_sid 还是空的，
+        # 直接 return 会导致会话列表永远加载不出来。
+        ss = self.sessions.get(self.current_sid) or SessionState(
+            sid=self.initial_sid, agent_id=self.default_agent_id
+        )
+        try:
+            r = await self.client.call(
+                ss,
+                {"action": "list_conversations", "include_archived": True},
+                timeout=QUERY_TIMEOUT,
+            )
+            p = result_payload(r)
+            for c in (p.get("conversations") or []):
+                sid = c.get("id") or ""
+                if not sid:
+                    continue
+                agent_id = c.get("agent_id") or self.default_agent_id
+                if sid not in self.sessions:
+                    self.sessions[sid] = SessionState(sid=sid, agent_id=agent_id)
+                elif agent_id and not self.sessions[sid].agent_id:
+                    self.sessions[sid].agent_id = agent_id
+                if not self.sessions[sid].title:
+                    self.sessions[sid].title = c.get("title") or ""
+            await self._refresh_conv_list()
+        except Exception as e:
+            self._log_error(f"Failed to list conversations: {e}")
+
+    async def _open_session(self, sid: str, load_history: bool = True):
         if sid not in self.sessions:
-            self.sessions[sid] = SessionState(sid=sid)
+            self.sessions[sid] = SessionState(sid=sid, agent_id=self.default_agent_id)
         self.current_sid = sid
         ss = self.sessions[sid]
         ss.has_update = False
         await self._refresh_conv_list()
         self._refresh_chat_header()
         self._clear_output()
+        if not load_history:
+            self._refresh_chat_header()
+            try:
+                self.query_one("#msg-input", Input).focus()
+            except Exception:
+                pass
+            return
         try:
             r = await self.client.call(
-                ss, "builtins/agents/main_agent",
+                ss,
                 {"action": "get_session", "session_id": sid, "limit": 20},
                 timeout=QUERY_TIMEOUT,
             )
-            p = r.get("payload") or r.get("data") or r
+            p = result_payload(r)
+            if p.get("agent_id"):
+                ss.agent_id = p["agent_id"]
             ss.title = p.get("title") or ""
-            # get_session 可能不给标题（新建会话），从会话列表补
-            if not ss.title:
-                try:
-                    lr = await self.client.call(
-                        ss, "builtins/agents/main_agent",
-                        {"action": "list_conversations"}, timeout=QUERY_TIMEOUT,
-                    )
-                    lp = lr.get("payload") or lr.get("data") or lr
-                    for c in (lp.get("conversations") or []):
-                        if c.get("id") == sid and c.get("title"):
-                            ss.title = c["title"]
-                            break
-                except Exception:
-                    pass
             flow = p.get("flow") or []
             ss.oldest_ts = p.get("oldest_ts") or ""
             ss.has_more = bool(p.get("has_more"))
@@ -498,26 +780,16 @@ class AICPApp(App):
             pass
 
     async def _refresh_conv_list(self):
-        """重建左侧会话列表。
-
-        防御点：
-        - clear() 是异步，必须 await，否则旧 ListItem 还在 → DuplicateIds
-        - 单个 item append 失败不能拖垮整个列表，内部 catch
-        - 标题为空时用 sid 前 12 位兜底
-        - 按 has_update > running > updated_at 排序，当前会话置顶
-        """
         try:
             lv = self.query_one("#conv-list", ListView)
         except Exception:
-            return  # 面板还没 mount，下次再刷新
-
+            return
         try:
             await lv.clear()
         except Exception as e:
             self._log_error(f"conv list clear failed: {type(e).__name__}: {e}")
             return
 
-        # 排序：当前会话 > 有更新 > 运行中 > 其他
         def _sort_key(item):
             sid, ss = item
             return (
@@ -528,58 +800,60 @@ class AICPApp(App):
             )
 
         ordered = sorted(self.sessions.items(), key=_sort_key)
-
         for sid, ss in ordered:
             try:
                 is_cur = (sid == self.current_sid)
                 mark = "*" if is_cur else "-"
                 title = (ss.title or sid[:12]).strip() or sid[:12]
-                title = title[:24]
+                title = title[:20]
+                agent_tag = f" @{ss.agent_id}" if ss.agent_id else ""
                 run = " (run)" if ss.running else ""
                 dot = " [red]*[/]" if ss.has_update and not is_cur else ""
-                item = ListItem(Label(f"{mark} {title}{run}{dot}"), id=f"conv-{sid}")
+                label = f"{mark} {title}{agent_tag}{run}{dot}"
+                item = ListItem(Label(label), id=f"conv-{sid}")
                 if ss.has_update and not is_cur:
                     item.add_class("has-update")
                 lv.append(item)
             except Exception as e:
-                # 单个 item 失败（重复 id / 渲染异常）不拖垮整个列表
                 self._log_error(f"conv item '{sid[:12]}' failed: {type(e).__name__}: {e}")
                 continue
 
     def _refresh_chat_header(self):
         ss = self.sessions.get(self.current_sid)
         title = ss.title if ss and ss.title else "(untitled)"
+        agent = (ss.agent_id if ss and ss.agent_id else self.default_agent_id) or "-"
         sid_short = self.current_sid[:12] if self.current_sid else "-"
-        self.query_one("#chat-header", Static).update(
-            Text.assemble(
-                ("* ", "cyan"),
-                (title, "bold cyan"),
-                ("   ", ""),
-                (f"[{sid_short}]", "dim"),
+        try:
+            self.query_one("#chat-header", Static).update(
+                Text.assemble(
+                    ("* ", "cyan"),
+                    (title, "bold cyan"),
+                    ("  @", "dim"),
+                    (agent, "magenta"),
+                    ("   ", ""),
+                    (f"[{sid_short}]", "dim"),
+                )
             )
-        )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # Output helpers
     # ------------------------------------------------------------
     def _log(self, text, style: str = ""):
-        log = self.query_one("#richlog", RichLog)
+        try:
+            log = self.query_one("#richlog", RichLog)
+        except Exception:
+            return
         if isinstance(text, str):
             text = Text(text, style=style)
         log.write(text)
 
     def _log_error(self, msg: str):
-        try:
-            self._log(Text(f"x {msg}", style="bold red"))
-        except Exception:
-            # 面板都没 mount，无处可写，放弃
-            pass
+        self._log(Text(f"x {msg}", style="bold red"))
 
     def _log_info(self, msg: str):
-        try:
-            self._log(Text(f". {msg}", style="dim"))
-        except Exception:
-            pass
+        self._log(Text(f". {msg}", style="dim"))
 
     def _clear_output(self):
         try:
@@ -611,23 +885,22 @@ class AICPApp(App):
     # ------------------------------------------------------------
     def _on_ws_state(self, connected: bool):
         self._connected = connected
-        # WS 与 Textual 跑在同一线程/事件循环，直接调用即可，不能用 call_from_thread
         try:
             self._update_status()
+            self._update_hint()
         except Exception:
             pass
 
     async def _on_ws_event(self, data: dict):
         t = data.get("type")
         sid = data.get("session_id") or ""
+        agent_id = data.get("agent_id") or ""
 
         if t == "envelop_result":
             tid = data.get("trace_id") or ""
-            for ss in self.sessions.values():
-                fut = ss.pending.pop(tid, None)
-                if fut and not fut.done():
-                    fut.set_result(data)
-                    return
+            fut = self.client.pending.pop(tid, None)
+            if fut and not fut.done():
+                fut.set_result(data)
             return
 
         if not sid:
@@ -635,6 +908,9 @@ class AICPApp(App):
         ss = self.sessions.get(sid)
         if not ss:
             return
+        # 服务端 Push 带 agent_id 是权威来源
+        if agent_id:
+            ss.agent_id = agent_id
         is_cur = (sid == self.current_sid)
 
         if t == "summary_stream":
@@ -654,7 +930,6 @@ class AICPApp(App):
                     ss.has_update = True
                     await self._refresh_conv_list()
             except Exception as e:
-                # 内层自己 catch，用户能看到错误，不是静默被 _listen_loop 吞
                 self._log_error(f"render chat failed: {type(e).__name__}: {e}")
             return
 
@@ -663,12 +938,14 @@ class AICPApp(App):
             status = data.get("status") or ""
             try:
                 if step == "thinking":
+                    ss.running = True
                     if is_cur:
                         self._show_thinking()
                 elif status == "start":
                     tgt = data.get("target", "")
                     act = data.get("action", "")
                     ss.last_tool = tgt
+                    ss.running = True
                     if is_cur:
                         self._show_tool_start(tgt, act)
                 elif status == "ok":
@@ -684,6 +961,10 @@ class AICPApp(App):
                     ss.running = False
                     if is_cur:
                         self._show_warn("interrupted")
+                elif status == "reply":
+                    ss.running = False
+                    if is_cur:
+                        self._update_status()
             except Exception as e:
                 self._log_error(f"render progress failed: {type(e).__name__}: {e}")
             return
@@ -707,7 +988,7 @@ class AICPApp(App):
             return
 
     # ------------------------------------------------------------
-    # UI updates (main thread)
+    # UI updates
     # ------------------------------------------------------------
     def _show_thinking(self):
         self._log(Text("thinking…", style="dim italic"))
@@ -724,7 +1005,6 @@ class AICPApp(App):
         self._log(Text(f"  > {tgt} [{act}]", style="yellow"))
 
     def _show_tool_ok(self, tgt: str, duration_ms):
-        # duration_ms 可能是 None / int / str，统一转 int，转换失败就不显示时长
         try:
             d = f" ({int(duration_ms)/1000:.1f}s)" if duration_ms not in (None, "") else ""
         except (TypeError, ValueError):
@@ -746,14 +1026,16 @@ class AICPApp(App):
     def _update_status(self):
         ss = self.sessions.get(self.current_sid)
         ws_dot = Text("*", style="green") if self._connected else Text("*", style="red")
-        # Rich 只认自己的样式名，且 Text.append() 不收 (str, style) 元组。
-        # 全部用 Text.assemble(*parts) 一次拼完。
+        agent = (ss.agent_id if ss and ss.agent_id else self.default_agent_id) or "-"
         parts = [
             ("AICP ", "bold cyan"),
             ("| ", "dim"),
             ws_dot,
             (" ", ""),
             ("ws" if self._connected else "offline", "dim"),
+            (" | ", "dim"),
+            ("agent ", "dim"),
+            (agent, "magenta"),
             (" | ", "dim"),
         ]
         if ss:
@@ -772,7 +1054,10 @@ class AICPApp(App):
                     (" | ", "dim"),
                     ("running", "bold yellow"),
                 ])
-        self.query_one("#status", Static).update(Text.assemble(*parts))
+        try:
+            self.query_one("#status", Static).update(Text.assemble(*parts))
+        except Exception:
+            pass
 
     @staticmethod
     def _fmt_tok(n: int) -> str:
@@ -787,6 +1072,241 @@ class AICPApp(App):
     # ------------------------------------------------------------
     # Input
     # ------------------------------------------------------------
+    async def on_input_changed(self, event: Input.Changed):
+        if event.input.id != "msg-input":
+            return
+        self._update_suggestions(event.value or "")
+        self._update_hint()
+
+    # ------------------------------------------------------------
+    # Key handling for completion navigation
+    # ------------------------------------------------------------
+    async def on_key(self, event: events.Key) -> None:
+        """↑/↓ 在候选间移动高亮（不填入输入框）。
+
+        Tab / Shift+Tab 走 BINDINGS（priority=True），优先级高于此处。
+        """
+        if not self._suggest_values():
+            return
+        key = event.key
+        if key == "down":
+            if self._move_suggest(1):
+                event.prevent_default()
+                event.stop()
+        elif key == "up":
+            if self._move_suggest(-1):
+                event.prevent_default()
+                event.stop()
+
+    # ------------------------------------------------------------
+    # Completion / hints
+    # ------------------------------------------------------------
+    SLASH_COMMANDS = [
+        ("/new", "new session"),
+        ("/stop", "interrupt current turn"),
+        ("/clear", "clear output"),
+        ("/history", "reload history"),
+        ("/resume <sid>", "open a session by id"),
+        ("/agents", "list agents"),
+        ("/agent <id>", "switch default agent (opens new session)"),
+        ("/help", "show commands"),
+        ("/quit", "quit"),
+    ]
+
+    def _update_hint(self):
+        """常驻提示行：当前 agent + 连接状态前置，再给命令和快捷键。"""
+        try:
+            hint = self.query_one("#hint", Static)
+        except Exception:
+            return
+        try:
+            inp = self.query_one("#msg-input", Input)
+            cur = inp.value or ""
+        except Exception:
+            cur = ""
+
+        # 前置状态：当前 agent / 连接状态 —— 放在提示行最显眼的位置
+        ss = self.sessions.get(self.current_sid)
+        agent = (ss.agent_id if ss and ss.agent_id else self.default_agent_id) or "-"
+        conn_txt = "connected" if self._connected else "offline"
+        conn_style = "green" if self._connected else "red"
+        head = Text.assemble(
+            ("agent ", "dim"), (agent, "bold magenta"), ("  |  ", "dim"),
+            ("ws ", "dim"), (conn_txt, conn_style), ("  |  ", "dim"),
+        )
+
+        if cur.startswith("/"):
+            head.append("commands: " + "  ".join(c for c, _ in self.SLASH_COMMANDS),
+                        style="bold cyan")
+        else:
+            head.append(
+                "Ctrl+K commands · /agents list · /agent <id> switch · "
+                "Ctrl+N new · Ctrl+C interrupt/quit · Ctrl+D quit",
+                style="dim")
+        hint.update(head)
+        hint.remove_class("-error")
+        hint.remove_class("-ok")
+
+    def _update_suggestions(self, text: str):
+        """根据当前输入给出补全候选（命令 + agent id）。
+
+        注意：ListView.remove 是 await 的，而 Input.Changed 处理器必须同步返回，
+        所以这里不真正 remove item —— 改为整体清空后重建（mount 前的 remove_children
+        是同步的）。见 _clear_suggestions。
+        """
+        try:
+            lv = self.query_one("#suggest-list", ListView)
+        except Exception:
+            return
+        self._clear_suggestions(lv)
+        cands = []
+        stripped = text.strip()
+        if stripped.startswith("/"):
+            parts = stripped.split(maxsplit=1)
+            cmd = parts[0]
+            arg = parts[1] if len(parts) > 1 else ""
+            if not arg:
+                for c, desc in self.SLASH_COMMANDS:
+                    if c.startswith(cmd) or cmd.startswith("/"):
+                        cands.append((c, desc, c))
+            else:
+                # /agent <prefix> → 补 agent id
+                if cmd in ("/agent", "/resume"):
+                    prefix = arg.lower()
+                    pool = self._agent_ids() if cmd == "/agent" else self._session_ids()
+                    for i in pool:
+                        if not prefix or i.lower().startswith(prefix):
+                            cands.append((f"{cmd} {i}", "", i))
+        if not cands:
+            try:
+                self.query_one("#suggest", Vertical).display = False
+            except Exception:
+                pass
+            return
+        try:
+            self.query_one("#suggest", Vertical).display = True
+        except Exception:
+            pass
+        self._sug_values = []
+        for label, desc, value in cands[:10]:
+            text_label = f"{label}  {desc}".rstrip() if desc else label
+            self._sug_values.append(value)
+            try:
+                lv.append(ListItem(Label(text_label), id=f"sug-{value}"))
+            except Exception:
+                pass
+        try:
+            lv.index = 0
+        except Exception:
+            pass
+
+    def _clear_suggestions(self, lv: ListView):
+        """同步清空候选列表。
+
+        ListView.remove() 是 coroutine，但 Input.Changed 处理器必须是同步的
+        （Textual 对非 async handler 返回 None 视为 OK，但对 async 之外的
+        场景不保证）。这里改用 remove_children()，它在已 mount 的容器上
+        是同步生效的；未 mount 时回退到 display=False。
+        """
+        try:
+            lv.remove_children()
+            return
+        except Exception:
+            pass
+        try:
+            lv.display = False
+        except Exception:
+            pass
+
+    def _agent_ids(self):
+        out = []
+        for a in self._agents or []:
+            if isinstance(a, dict) and a.get("id"):
+                out.append(a["id"])
+            elif isinstance(a, str):
+                out.append(a)
+        return out
+
+    def _session_ids(self):
+        return list(self.sessions.keys())
+
+    def _suggest_values(self):
+        """当前候选值列表（供 Tab / ↑↓ 导航）。"""
+        return list(getattr(self, "_sug_values", []) or [])
+
+    def _move_suggest(self, delta: int) -> bool:
+        """在候选列表中移动高亮。返回是否移动成功。"""
+        vals = self._suggest_values()
+        if not vals:
+            return False
+        try:
+            lv = self.query_one("#suggest-list", ListView)
+        except Exception:
+            return False
+        try:
+            cur = lv.index
+        except Exception:
+            cur = None
+        if cur is None or cur < 0:
+            nxt = 0 if delta > 0 else len(vals) - 1
+        else:
+            nxt = (cur + delta) % len(vals)
+        try:
+            lv.index = nxt
+        except Exception:
+            return False
+        return True
+
+    def _cycle_suggest(self, delta: int) -> bool:
+        """Tab / Shift+Tab 在候选间循环。"""
+        vals = self._suggest_values()
+        if not vals:
+            return False
+        try:
+            lv = self.query_one("#suggest-list", ListView)
+        except Exception:
+            return False
+        try:
+            cur = lv.index
+        except Exception:
+            cur = None
+        if cur is None or cur < 0:
+            nxt = 0 if delta > 0 else len(vals) - 1
+        else:
+            nxt = (cur + delta) % len(vals)
+        try:
+            lv.index = nxt
+            self._accept_suggestion(vals[nxt])
+        except Exception:
+            return False
+        return True
+
+    def action_cycle_suggest_forward(self) -> None:
+        """Tab：在候选间循环并填入输入框。"""
+        self._cycle_suggest(1)
+
+    def action_cycle_suggest_back(self) -> None:
+        """Shift+Tab：反向循环候选。"""
+        self._cycle_suggest(-1)
+
+    def _accept_suggestion(self, value: str):
+        try:
+            inp = self.query_one("#msg-input", Input)
+        except Exception:
+            return
+        inp.value = value
+        inp.cursor_position = len(value)
+        self._update_suggestions(value)
+
+    async def on_list_view_selected(self, event: ListView.Selected):
+        if event.item.id and event.item.id.startswith("sug-"):
+            self._accept_suggestion(event.item.id[4:])
+            return
+        if event.item.id and event.item.id.startswith("conv-"):
+            sid = event.item.id[5:]
+            if sid != self.current_sid:
+                await self._open_session(sid)
+
     async def on_input_submitted(self, event: Input.Submitted):
         if event.input.id != "msg-input":
             return
@@ -794,6 +1314,8 @@ class AICPApp(App):
         if not text:
             return
         event.input.value = ""
+        self._update_suggestions("")
+        self._update_hint()
         if text.startswith("/"):
             await self._handle_slash(text)
             return
@@ -810,16 +1332,21 @@ class AICPApp(App):
         self._log(Text(""))
         ss.running = True
         self._update_status()
-        # 60s：main_agent.execute 里的 baseline LLM 判定最多 10s，再加其他开销
         r = await self.client.call(
-            ss, "builtins/agents/main_agent",
-            {"content": text, "session_id": ss.sid}, timeout=SEND_TIMEOUT,
+            ss,
+            {"content": text, "session_id": ss.sid},
+            timeout=SEND_TIMEOUT,
         )
-        p = r.get("payload") or r.get("data") or r
+        p = result_payload(r)
         if r.get("error") or (isinstance(p, dict) and p.get("ok") is False):
             err = r.get("error") or (p.get("error") if isinstance(p, dict) else None) or "unknown"
             self._show_error(f"Send failed: {err}")
             ss.running = False
+            self._update_status()
+            return
+        if isinstance(p, dict) and p.get("agent_id"):
+            ss.agent_id = p["agent_id"]
+            self._refresh_chat_header()
             self._update_status()
 
     async def _handle_slash(self, text: str):
@@ -836,8 +1363,15 @@ class AICPApp(App):
             self._clear_output()
         elif cmd == "/history":
             await self._open_session(self.current_sid)
+        elif cmd == "/agents":
+            await self._action_list_agents()
+        elif cmd == "/agent":
+            if not arg:
+                self._show_warn("Usage: /agent <id>  (see /agents)")
+            else:
+                await self._switch_agent(arg)
         elif cmd == "/help":
-            self._show_info("Commands: /new /stop /clear /history /resume <sid> /quit")
+            self._show_info("Commands: /new /stop /clear /history /resume <sid> /agents /agent <id> /quit")
         elif cmd == "/resume" and arg:
             await self._open_session(arg)
         else:
@@ -847,12 +1381,9 @@ class AICPApp(App):
     # Actions
     # ------------------------------------------------------------
     async def action_palette(self):
-        # Textual 8: push_screen_wait(wait_for_dismiss=True) 只能在 worker 里调用，
-        # 普通 action 用 push_screen + callback（wait_for_dismiss=False）
         await self.push_screen(CommandPalette(), callback=self._on_palette_result)
 
     def _on_palette_result(self, result):
-        # dismiss 回调（同步）；异步分支交给 call_after_refresh 调度
         if not result:
             return
         self.call_after_refresh(self._dispatch_palette, result)
@@ -862,6 +1393,8 @@ class AICPApp(App):
             await self.action_new_session()
         elif result == "list":
             await self._action_list_convs()
+        elif result == "agents":
+            await self._action_list_agents()
         elif result == "history":
             await self._open_session(self.current_sid)
         elif result == "stop":
@@ -877,17 +1410,19 @@ class AICPApp(App):
 
     async def action_new_session(self):
         sid = f"s_{uuid.uuid4().hex[:12]}"
+        agent_id = self.default_agent_id
+        seed = SessionState(sid=sid, agent_id=agent_id)
         try:
-            seed = self.sessions.get(self.current_sid) or SessionState(sid=self.current_sid)
             r = await self.client.call(
-                seed, "builtins/agents/main_agent",
-                {"action": "new_conversation"}, timeout=QUERY_TIMEOUT,
+                seed, {"action": "new_conversation"}, timeout=QUERY_TIMEOUT,
             )
-            p = r.get("payload") or r.get("data") or r
+            p = result_payload(r)
             if p.get("ok"):
                 sid = p.get("conversation_id") or sid
+                agent_id = p.get("agent_id") or agent_id
         except Exception:
             pass
+        self.sessions[sid] = SessionState(sid=sid, agent_id=agent_id)
         await self._open_session(sid)
 
     async def _action_list_convs(self):
@@ -895,24 +1430,78 @@ class AICPApp(App):
         if not ss:
             return
         r = await self.client.call(
-            ss, "builtins/agents/main_agent",
-            {"action": "list_conversations"}, timeout=QUERY_TIMEOUT,
+            ss,
+            {"action": "list_conversations", "include_archived": True},
+            timeout=QUERY_TIMEOUT,
         )
-        p = r.get("payload") or r.get("data") or r
+        p = result_payload(r)
         convs = p.get("conversations") or []
         self._log(Text(""))
         self._log(Text("Conversations", style="bold cyan"))
         table = Table(show_header=True, header_style="bold cyan")
         table.add_column("ID", style="dim")
+        table.add_column("Agent", style="magenta")
         table.add_column("Title")
         table.add_column("Msgs", justify="right")
         for c in convs[:30]:
             table.add_row(
                 str(c.get("id", ""))[:12],
+                str(c.get("agent_id", "") or "-"),
                 str(c.get("title") or "")[:40],
                 str(c.get("message_count", 0)),
             )
         self._log(table)
+
+    async def _action_list_agents(self):
+        ss = self.sessions.get(self.current_sid) or SessionState(sid=self.initial_sid)
+        r = await self.client.call(ss, {"action": "list_agents"}, timeout=QUERY_TIMEOUT)
+        p = result_payload(r)
+        agents = p.get("agents") or []
+        default = p.get("default") or ""
+        self._agents = agents
+        self._log(Text(""))
+        self._log(Text("Agents", style="bold cyan"))
+        if not agents:
+            self._show_warn("No agents registered (check data/agents/*.md)")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="magenta")
+        table.add_column("Name")
+        table.add_column("Default", justify="center")
+        table.add_column("Description")
+        for a in agents:
+            if not isinstance(a, dict):
+                continue
+            aid = a.get("id") or ""
+            is_def = "yes" if aid and aid == default else ""
+            table.add_row(
+                aid,
+                str(a.get("name") or ""),
+                is_def,
+                str(a.get("description") or "")[:50],
+            )
+        self._log(table)
+
+    async def _switch_agent(self, agent_id: str):
+        """切 agent = 切默认 agent + 新建会话（对齐 console-muti 的 switchAgent）。
+
+        原因：Engine 的存储是 users/<uid>/<agent_id>/sessions/<sid>/，
+        agent_id 是路径一部分；同一 sid 中途换 agent 会导致 flow 文件不连续。
+        切 agent 时开新会话是唯一无歧义的语义。
+        """
+        agent_id = (agent_id or "").strip()
+        if not agent_id:
+            self._show_warn("Usage: /agent <id>  (see /agents)")
+            return
+        if not self._agents:
+            await self._action_list_agents()
+        ids = [a.get("id") for a in self._agents if isinstance(a, dict) and a.get("id")]
+        if ids and agent_id not in ids:
+            self._show_warn(f"Unknown agent: {agent_id}  (see /agents)")
+            return
+        self.default_agent_id = agent_id
+        self._show_info(f"Default agent → {agent_id}; opening new session")
+        await self.action_new_session()
 
     async def action_interrupt(self):
         ss = self.sessions.get(self.current_sid)
@@ -920,11 +1509,11 @@ class AICPApp(App):
             self._show_warn("No running turn")
             return
         r = await self.client.call(
-            ss, "builtins/agents/main_agent",
+            ss,
             {"action": "interrupt", "session_id": ss.sid, "content": ""},
             timeout=QUERY_TIMEOUT,
         )
-        p = r.get("payload") or r.get("data") or r
+        p = result_payload(r)
         if p.get("ok"):
             self._show_info("Interrupt requested")
         else:
@@ -944,7 +1533,6 @@ class AICPApp(App):
     def action_interrupt_or_quit(self):
         ss = self.sessions.get(self.current_sid)
         if ss and ss.running:
-            # Textual 官方异步提交方式，异常会被 Textual exception handler 接住
             self.run_worker(self.action_interrupt(), exclusive=False)
             self._ctrl_c_count = 0
             return
@@ -978,10 +1566,11 @@ def main():
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--session", default="")
     ap.add_argument("--token", default=DEFAULT_TOKEN)
+    ap.add_argument("--agent", default=DEFAULT_AGENT)
     ap.add_argument("--theme", default="textual-dark")
     args = ap.parse_args()
 
-    app = AICPApp(args.url, args.token, args.session)
+    app = AICPApp(args.url, args.token, args.agent, args.session)
     if args.theme in THEMES:
         app._theme_idx = THEMES.index(args.theme)
         try:
@@ -993,7 +1582,6 @@ def main():
     except KeyboardInterrupt:
         print("\n[cli] exit")
     except Exception as e:
-        # 崩溃时给一行友好提示，不吐整页 traceback
         print(f"\n[cli] fatal: {type(e).__name__}: {e}")
         print("[cli] if this is a bug, report with the traceback above")
         sys.exit(1)

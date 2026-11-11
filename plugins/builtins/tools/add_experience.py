@@ -1,87 +1,45 @@
-"""add_experience — 沉淀经验到背包（结构化 + 内置 LLM 归并）
+"""add_experience — 共享经验背包的薄转发层。
 
-路径：data/memories/main_agent/users/{user_id}/backpack.json
-备份：data/memories/main_agent/experiences/history/{user_id}_{ts}.json
+存储：data/experiences/backpack.json（全局共享，所有 user/agent/session 可见）
+备份：data/experiences/history/{ts}.json
 
-backpack.json 结构：
-{
-  "items": [
-    {"id": "exp_001", "title": "...", "summary": "...", "tags": [...],
-     "body": "...", "updated_at": "..."}
-  ]
-}
+所有读写一律转发到 agent.engine.backpack（runtime/engine/backpack.py），
+与引擎侧失败记录、前端读取使用同一份文件、同一把文件锁、同一套路径。
+本文件不再自行维护读写/加锁/路径逻辑。
+
+action:
+  - list：列出全部经验（前端「弹出经验」用）
+  - append（默认）：追加一条；超阈值自动升级为 LLM 归并
+  - replace：强制 LLM 归并
+  - delete：删除单条
+  - clear：清空
 """
 
 import json
 import re
-import uuid
 from datetime import datetime
-from pathlib import Path
 
 
 # ============================================================
-# 路径
+# 引擎背包句柄
 # ============================================================
 
-MEMORY_DIR = Path("data/memories/main_agent")
-USER_ROOT = MEMORY_DIR / "users"
-HISTORY_DIR = MEMORY_DIR / "experiences" / "history"
-
-# 超过该阈值时 append 自动升级为 LLM 归并（条数或总字符）
-MERGE_MAX_ITEMS = 20
-MERGE_MAX_CHARS = 5000
-
-
-def _resolve_user_id(envelop) -> str:
-    meta = envelop.meta or {}
-    uid = (
-        meta.get("user_id")
-        or meta.get("auth_result", {}).get("user_id")
-        or "local"
-    )
-    return str(uid).strip() or "local"
+def _backpack(agent):
+    """取得引擎的 backpack 模块；不可用时返回 None。"""
+    engine = getattr(agent, "engine", None)
+    bp = getattr(engine, "backpack", None)
+    if bp is not None and hasattr(bp, "save_backpack"):
+        return bp
+    return None
 
 
-def _user_dir(user_id: str) -> Path:
-    p = USER_ROOT / user_id
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def _backpack_file(user_id: str) -> Path:
-    return _user_dir(user_id) / "backpack.json"
-
-
-def _load_backpack(user_id: str) -> dict:
-    f = _backpack_file(user_id)
-    if not f.exists():
-        return {"items": []}
-    try:
-        d = json.loads(f.read_text(encoding="utf-8"))
-        if isinstance(d, dict) and isinstance(d.get("items"), list):
-            return d
-    except Exception:
-        pass
-    return {"items": []}
-
-
-def _save_backpack(user_id: str, data: dict) -> None:
-    f = _backpack_file(user_id)
-    tmp = f.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(f)
-
-
-def _backup_backpack(user_id: str, data: dict) -> str:
-    if not data.get("items"):
-        return ""
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    revision = f"{user_id}_{ts}"
-    (HISTORY_DIR / f"{revision}.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return revision
+def _require_backpack(agent):
+    bp = _backpack(agent)
+    if bp is None:
+        raise RuntimeError(
+            "引擎背包未就绪（agent.engine.backpack 缺失），请重启服务后再试"
+        )
+    return bp
 
 
 # ============================================================
@@ -93,7 +51,7 @@ def _normalize_experience(params: dict) -> dict:
 
     兼容两种：
     - 旧：{"experience": "纯文本"}
-    - 新：{"title": "...", "summary": "...", "tags": [...], "body": "..."}
+    - 新：{"title": ..., "summary": ..., "tags": [...], "body": ...}
     """
     body = str(params.get("experience", "") or "").strip()
     title = str(params.get("title", "") or "").strip()
@@ -114,7 +72,6 @@ def _normalize_experience(params: dict) -> dict:
         return {}
 
     if title or explicit_body:
-        # 结构化
         return {
             "title": title or (body[:30] if body else ""),
             "summary": summary or (body[:100] if body else ""),
@@ -122,7 +79,6 @@ def _normalize_experience(params: dict) -> dict:
             "body": body or explicit_body,
         }
 
-    # 纯文本：自动截取 title/summary
     first_line = ""
     for ln in body.split("\n"):
         ln = ln.strip()
@@ -137,22 +93,15 @@ def _normalize_experience(params: dict) -> dict:
     }
 
 
-def _next_id(items: list) -> str:
-    max_n = 0
-    for it in items:
-        m = re.match(r"exp_(\d+)", str(it.get("id", "")))
-        if m:
-            try:
-                max_n = max(max_n, int(m.group(1)))
-            except Exception:
-                pass
-    return f"exp_{max_n + 1:03d}"
-
-
 def _should_merge(items: list, new_item: dict) -> bool:
     total_chars = sum(len(str(it.get("body", "") or "")) for it in items)
     total_chars += len(str(new_item.get("body", "") or ""))
     return len(items) >= MERGE_MAX_ITEMS or total_chars >= MERGE_MAX_CHARS
+
+
+# 超过该阈值时 append 自动升级为 LLM 归并（条数或总字符）
+MERGE_MAX_ITEMS = 20
+MERGE_MAX_CHARS = 5000
 
 
 # ============================================================
@@ -217,11 +166,13 @@ async def _merge_items_with_llm(current_items: list, new_item: dict, agent) -> l
 # ============================================================
 
 async def execute(envelop, agent):
-    """沉淀经验到经验背包
+    """共享经验背包的薄转发层（读写全部委托给 agent.engine.backpack）。
 
     action:
+      - list（新增）：列出全部经验
       - append（默认）：追加；超阈值自动升级为 LLM 归并
       - replace：强制 LLM 归并
+      - delete：删除单条
       - clear：清空
     """
     params = envelop.payload.get("params", {})
@@ -231,85 +182,83 @@ async def execute(envelop, agent):
             if k not in ("action", "target", "think", "retain")
         }
 
-    user_id = _resolve_user_id(envelop)
-
     action = str(envelop.payload.get("action", "") or params.get("action", "") or "append").lower()
-    if action not in ("append", "replace", "clear", "delete"):
+    if action not in ("list", "append", "replace", "clear", "delete"):
         action = "append"
 
-    # delete（删除单条）
+    try:
+        bp = _require_backpack(agent)
+    except Exception as e:
+        envelop.payload = {"ok": False, "error": str(e)}
+        return envelop
+
+    # ---- list：列出全部经验 ----
+    if action == "list":
+        items = bp.list_experiences()
+        envelop.payload = {
+            "ok": True,
+            "action": "list",
+            "count": len(items),
+            "items": items,
+        }
+        return envelop
+
+    # ---- delete：删除单条 ----
     if action == "delete":
         target_id = str(params.get("id", "") or "").strip()
         if not target_id:
             envelop.payload = {"ok": False, "error": "缺少 id 参数"}
             return envelop
-        data = _load_backpack(user_id)
-        items = data.get("items", [])
-        kept = [it for it in items if str(it.get("id", "")) != target_id]
-        if len(kept) == len(items):
-            envelop.payload = {
-                "ok": False,
-                "error": f"未找到经验 {target_id}",
-                "count": len(items),
-            }
-            return envelop
-        revision = _backup_backpack(user_id, data)
-        data["items"] = kept
-        _save_backpack(user_id, data)
+        res = bp.delete_experience(target_id)
         envelop.payload = {
-            "ok": True,
-            "message": f"✅ 已删除经验 {target_id}，剩余 {len(kept)} 条",
+            "ok": bool(res.get("ok")),
+            "message": ("✅ " if res.get("ok") else "❌ ") + str(res.get("message", "")),
             "action": "delete",
-            "user_id": user_id,
             "id": target_id,
-            "count": len(kept),
-            "revision": revision,
+            "count": res.get("count", 0),
+            "revision": res.get("revision", ""),
         }
+        if not res.get("ok"):
+            envelop.payload["error"] = res.get("message", "删除失败")
         return envelop
 
-    # clear
+    # ---- clear：清空 ----
     if action == "clear":
-        data = _load_backpack(user_id)
-        revision = _backup_backpack(user_id, data) if data.get("items") else ""
-        _save_backpack(user_id, {"items": []})
+        res = bp.clear_experiences()
         envelop.payload = {
             "ok": True,
-            "message": "✅ 经验背包已清空",
+            "message": f"✅ 经验背包已清空（原 {res.get('cleared', 0)} 条）",
             "action": "clear",
-            "user_id": user_id,
             "count": 0,
-            "revision": revision,
+            "cleared": res.get("cleared", 0),
+            "revision": res.get("revision", ""),
         }
         return envelop
 
-    # append / replace
+    # ---- append / replace ----
     norm = _normalize_experience(params)
     if not norm:
         envelop.payload = {"ok": False, "error": "缺少 experience / title / body 参数"}
         return envelop
 
     try:
-        data = _load_backpack(user_id)
-        items = data["items"]
+        items = bp.list_experiences()
 
-        # 分配 id（如果是全新条目）；replace 时若传了 id 则用传的
+        # 分配 id（replace 时若传了 id 则用传入的）
         if action == "replace" and params.get("id"):
             norm["id"] = str(params["id"]).strip()
         else:
-            norm["id"] = _next_id(items)
+            norm["id"] = ""
         norm["updated_at"] = datetime.now().isoformat()
 
-        revision = ""
         merged = False
         diff_summary = ""
 
         if action == "replace" and items:
-            revision = _backup_backpack(user_id, data)
             new_items = await _merge_items_with_llm(items, norm, agent)
             merged = True
             diff_summary = "已 LLM 归并（replace）"
         elif action == "append" and items and _should_merge(items, norm):
-            revision = _backup_backpack(user_id, data)
             new_items = await _merge_items_with_llm(items, norm, agent)
             merged = True
             diff_summary = (
@@ -317,20 +266,30 @@ async def execute(envelop, agent):
                 f"{sum(len(str(it.get('body',''))) for it in items)} 字），已 LLM 归并"
             )
         else:
+            # 直接追加：交给引擎分配 id（append_experience 内部带 _next_exp_id）
+            res = bp.append_experience(norm)
             new_items = items + [norm]
             diff_summary = "直接追加"
+            new_id = res.get("id", "")
+            envelop.payload = {
+                "ok": True,
+                "message": f"✅ 经验已追加，当前 {len(new_items)} 条",
+                "action": action,
+                "count": len(new_items),
+                "id": new_id,
+                "diff": diff_summary,
+            }
+            return envelop
 
-        data["items"] = new_items
-        _save_backpack(user_id, data)
+        bp.save_backpack({"items": new_items})
+        new_id = norm.get("id") or ""
 
         envelop.payload = {
             "ok": True,
             "message": f"✅ 经验已{'归并' if merged else '追加'}，当前 {len(new_items)} 条",
             "action": action,
-            "user_id": user_id,
             "count": len(new_items),
-            "id": norm["id"],
-            "revision": revision,
+            "id": new_id,
             "diff": diff_summary,
         }
         return envelop
@@ -344,25 +303,25 @@ def help():
     return {
         "route": "builtins/tools/add_experience",
         "description": (
-            f"沉淀经验到经验背包（users/{{user_id}}/backpack.json；"
-            f"append 追加、条数≥{MERGE_MAX_ITEMS} 或字符≥{MERGE_MAX_CHARS} 自动 LLM 归并 / "
-            f"replace 强制归并 / clear 清空）"
+            "共享经验背包的薄转发层（读写委托给 agent.engine.backpack）；"
+            f"list 列全部 / append 追加（条数≥{MERGE_MAX_ITEMS} 或字符≥{MERGE_MAX_CHARS} 自动 LLM 归并）/ "
+            "replace 强制归并 / delete 删单条 / clear 清空"
         ),
         "input": {
-            "action": "append（默认）/ replace / clear / delete",
+            "action": "list / append（默认）/ replace / clear / delete",
             "experience": "纯文本经验（旧调用兼容）",
             "title": "结构化：标题",
             "summary": "结构化：一句话摘要",
             "tags": "结构化：标签列表",
             "body": "结构化：全文",
-            "id": "replace 时可指定要替换的条目 id",
+            "id": "delete 时指定条目 id；replace 时指定要替换的条目 id",
         },
         "output": {
             "ok": "是否成功",
             "message": "结果消息",
             "action": "使用的操作",
-            "user_id": "身份目录",
             "count": "当前条目数",
+            "items": "list 时返回的全部条目",
             "id": "新写入/更新的条目 id",
             "revision": "备份文件名",
             "diff": "归并说明",
